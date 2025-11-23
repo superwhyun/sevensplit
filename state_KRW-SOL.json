@@ -1,0 +1,87 @@
+{
+    "config": {
+        "investment_per_split": 100000.0,
+        "min_price": 50000000.0,
+        "max_price": 100000000.0,
+        "grid_interval": 1000000.0,
+        "sell_target_rate": 0.03,
+        "fee_rate": 0.0005
+    },
+    "is_running": true,
+    "splits": [
+        {
+            "id": 1,
+            "status": "BOUGHT",
+            "buy_price": 100000000.0,
+            "buy_amount": 100000.0,
+            "buy_volume": 0.001,
+            "target_price": 0.0
+        },
+        {
+            "id": 2,
+            "status": "BOUGHT",
+            "buy_price": 196200.0,
+            "buy_amount": 100000.0,
+            "buy_volume": 0.509683995922528,
+            "target_price": 0.0
+        },
+        {
+            "id": 3,
+            "status": "EMPTY",
+            "buy_price": 0.0,
+            "buy_amount": 0.0,
+            "buy_volume": 0.0,
+            "target_price": 0.0
+        },
+        {
+            "id": 4,
+            "status": "EMPTY",
+            "buy_price": 0.0,
+            "buy_amount": 0.0,
+            "buy_volume": 0.0,
+            "target_price": 0.0
+        },
+        {
+            "id": 5,
+            "status": "EMPTY",
+            "buy_price": 0.0,
+            "buy_amount": 0.0,
+            "buy_volume": 0.0,
+            "target_price": 0.0
+        },
+        {
+            "id": 6,
+            "status": "EMPTY",
+            "buy_price": 0.0,
+            "buy_amount": 0.0,
+            "buy_volume": 0.0,
+            "target_price": 0.0
+        },
+        {
+            "id": 7,
+            "status": "EMPTY",
+            "buy_price": 0.0,
+            "buy_amount": 0.0,
+            "buy_volume": 0.0,
+            "target_price": 0.0
+        }
+    ],
+    "trade_history": [
+        {
+            "split_id": 1,
+            "buy_price": 195300.0,
+            "sell_price": 100000000,
+            "profit_amount": 51103277.00972862,
+            "profit_rate": 51103.27700972862,
+            "timestamp": "2025-11-23T18:23:29.584477"
+        },
+        {
+            "split_id": 1,
+            "buy_price": 195300.0,
+            "sell_price": 100000000,
+            "profit_amount": 0.0,
+            "profit_rate": 0.0,
+            "timestamp": "2025-11-23T17:14:24.287170"
+        }
+    ]
+}

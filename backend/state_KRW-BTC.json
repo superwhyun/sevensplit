@@ -1,0 +1,91 @@
+{
+    "config": {
+        "investment_per_split": 100000.0,
+        "min_price": 105382400.0,
+        "max_price": 158073600.0,
+        "buy_rate": 0.005,
+        "sell_rate": 0.005,
+        "fee_rate": 0.0005
+    },
+    "is_running": true,
+    "splits": [],
+    "trade_history": [
+        {
+            "split_id": 5,
+            "buy_price": 129114113.56783062,
+            "buy_amount": 100000.0,
+            "sell_price": 129759684.13566977,
+            "sell_amount": 100500.0,
+            "volume": 0.0007745086670750723,
+            "buy_fee": 50.0,
+            "sell_fee": 50.25,
+            "total_fee": 100.25,
+            "gross_profit": 500.0,
+            "net_profit": 399.75,
+            "profit_rate": 0.39975,
+            "timestamp": "2025-11-24T02:01:19.219670"
+        },
+        {
+            "split_id": 4,
+            "buy_price": 129762928.208875,
+            "buy_amount": 100000.0,
+            "sell_price": 130411742.84991936,
+            "sell_amount": 100499.99999999999,
+            "volume": 0.0007706361237396969,
+            "buy_fee": 50.0,
+            "sell_fee": 50.24999999999999,
+            "total_fee": 100.25,
+            "gross_profit": 499.99999999998545,
+            "net_profit": 399.74999999998545,
+            "profit_rate": 0.39974999999998545,
+            "timestamp": "2025-11-24T01:58:08.023568"
+        },
+        {
+            "split_id": 2,
+            "buy_price": 131070355.0,
+            "buy_amount": 100000.0,
+            "sell_price": 131725706.77499999,
+            "sell_amount": 100500.0,
+            "volume": 0.0007629490284053935,
+            "buy_fee": 50.0,
+            "sell_fee": 50.25,
+            "total_fee": 100.25,
+            "gross_profit": 500.0,
+            "net_profit": 399.75,
+            "profit_rate": 0.39975,
+            "timestamp": "2025-11-24T01:56:45.299216"
+        },
+        {
+            "split_id": 1,
+            "buy_price": 131729000.0,
+            "buy_amount": 100000.0,
+            "sell_price": 132387644.99999999,
+            "sell_amount": 100500.0,
+            "volume": 0.0007591342832633665,
+            "buy_fee": 50.0,
+            "sell_fee": 50.25,
+            "total_fee": 100.25,
+            "gross_profit": 500.0,
+            "net_profit": 399.75,
+            "profit_rate": 0.39975,
+            "timestamp": "2025-11-24T01:56:45.298032"
+        },
+        {
+            "split_id": 3,
+            "buy_price": 130415003.225,
+            "buy_amount": 100000.0,
+            "sell_price": 131067078.24112497,
+            "sell_amount": 100499.99999999999,
+            "volume": 0.0007667829431209984,
+            "buy_fee": 50.0,
+            "sell_fee": 50.24999999999999,
+            "total_fee": 100.25,
+            "gross_profit": 499.99999999998545,
+            "net_profit": 399.74999999998545,
+            "profit_rate": 0.39974999999998545,
+            "timestamp": "2025-11-24T01:56:41.857666"
+        }
+    ],
+    "next_split_id": 6,
+    "last_buy_price": 129114113.56783062
+}

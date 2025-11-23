@@ -1,0 +1,62 @@
+{
+    "config": {
+        "investment_per_split": 100000.0,
+        "buy_drop_rate": 0.03,
+        "sell_target_rate": 0.03,
+        "fee_rate": 0.0005
+    },
+    "is_running": true,
+    "base_price": 0.0,
+    "splits": [
+        {
+            "id": 1,
+            "status": "BOUGHT",
+            "buy_price": 4230000.0,
+            "buy_amount": 100000.0,
+            "buy_volume": 0.02363507445048452
+        },
+        {
+            "id": 2,
+            "status": "EMPTY",
+            "buy_price": 0.0,
+            "buy_amount": 0.0,
+            "buy_volume": 0.0
+        },
+        {
+            "id": 3,
+            "status": "EMPTY",
+            "buy_price": 0.0,
+            "buy_amount": 0.0,
+            "buy_volume": 0.0
+        },
+        {
+            "id": 4,
+            "status": "EMPTY",
+            "buy_price": 0.0,
+            "buy_amount": 0.0,
+            "buy_volume": 0.0
+        },
+        {
+            "id": 5,
+            "status": "EMPTY",
+            "buy_price": 0.0,
+            "buy_amount": 0.0,
+            "buy_volume": 0.0
+        },
+        {
+            "id": 6,
+            "status": "EMPTY",
+            "buy_price": 0.0,
+            "buy_amount": 0.0,
+            "buy_volume": 0.0
+        },
+        {
+            "id": 7,
+            "status": "EMPTY",
+            "buy_price": 0.0,
+            "buy_amount": 0.0,
+            "buy_volume": 0.0
+        }
+    ],
+    "trade_history": []
+}
