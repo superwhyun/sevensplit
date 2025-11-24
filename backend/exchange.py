@@ -78,12 +78,23 @@ class MockExchange(Exchange):
         return self.price_held.get(ticker, False)
 
     def get_balance(self, ticker="KRW"):
+        """Get balance including locked amounts in pending orders"""
         if ticker == "KRW":
             return self.balance["KRW"]
-        
+
         # Handle "KRW-BTC" -> "BTC"
         currency = ticker.split("-")[1] if "-" in ticker else ticker
-        return self.balance.get(currency, 0)
+        available = self.balance.get(currency, 0)
+
+        # Add locked amounts from pending sell orders
+        locked = 0.0
+        for order in self.orders.values():
+            if order["state"] == "wait" and order["side"] == "ask":
+                order_currency = order["market"].split("-")[1]
+                if order_currency == currency:
+                    locked += float(order["locked"])
+
+        return available + locked
 
     def get_avg_buy_price(self, ticker):
         # Mock implementation: simplified, just return current price or 0
