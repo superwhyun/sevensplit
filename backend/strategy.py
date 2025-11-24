@@ -11,6 +11,7 @@ class StrategyConfig(BaseModel):
     buy_rate: float = 0.005 # 0.5% - price drop rate to trigger next buy
     sell_rate: float = 0.005 # 0.5% - profit rate for sell order
     fee_rate: float = 0.0005 # 0.05% fee
+    rebuy_strategy: str = "reset_on_clear" # Options: "last_buy_price", "last_sell_price", "reset_on_clear"
 
 class SplitState(BaseModel):
     id: int
@@ -35,6 +36,7 @@ class SevenSplitStrategy:
         self.trade_history = []
         self.next_split_id = 1
         self.last_buy_price = None # Track the last buy price for creating next split
+        self.last_sell_price = None # Track the last sell price for rebuy strategy
 
         # Load state first to see if we have existing config
         state_loaded = self.load_state()
@@ -55,7 +57,8 @@ class SevenSplitStrategy:
             "splits": [s.dict() for s in self.splits],
             "trade_history": self.trade_history,
             "next_split_id": self.next_split_id,
-            "last_buy_price": self.last_buy_price
+            "last_buy_price": self.last_buy_price,
+            "last_sell_price": self.last_sell_price
         }
         try:
             with open(f"state_{self.ticker}.json", "w") as f:
@@ -73,6 +76,7 @@ class SevenSplitStrategy:
                 self.trade_history = state.get("trade_history", [])
                 self.next_split_id = state.get("next_split_id", 1)
                 self.last_buy_price = state.get("last_buy_price")
+                self.last_sell_price = state.get("last_sell_price")
 
                 splits_data = state.get("splits", [])
                 if splits_data:
@@ -274,14 +278,47 @@ class SevenSplitStrategy:
                     self.trade_history.pop()
 
                 split.status = "SELL_FILLED"
+                self.last_sell_price = actual_sell_price
                 logging.info(f"Sell order filled for split {split.id} at {actual_sell_price}. Net Profit: {net_profit} KRW ({profit_rate:.2f}%) after fees: {total_fee} KRW")
                 self.save_state()
         except Exception as e:
             logging.error(f"Error checking sell order {split.sell_order_uuid}: {e}")
 
     def _check_create_new_buy_split(self, current_price: float):
-        """Check if we should create a new buy split based on price drop."""
-        # Calculate what the next buy price should be
+        """Check if we should create a new buy split based on price drop and rebuy strategy."""
+
+        # Check if all positions are cleared
+        has_active_positions = any(
+            s.status in ["PENDING_BUY", "BUY_FILLED", "PENDING_SELL"]
+            for s in self.splits
+        )
+
+        # Handle different rebuy strategies when all positions are cleared
+        if not has_active_positions:
+            if self.config.rebuy_strategy == "reset_on_clear":
+                # Strategy 1: Reset and start at current price
+                logging.info(f"All positions cleared. Resetting and starting at current price: {current_price}")
+                self.last_buy_price = None
+                self._create_buy_split(current_price)
+                return
+            elif self.config.rebuy_strategy == "last_sell_price":
+                # Strategy 2: Use last sell price as reference
+                if self.last_sell_price is not None:
+                    reference_price = self.last_sell_price
+                    logging.info(f"All positions cleared. Using last sell price {reference_price} as reference")
+                else:
+                    # Fallback to current price if no sell price
+                    reference_price = current_price
+                    logging.info(f"No last sell price, using current price: {current_price}")
+
+                next_buy_price = reference_price * (1 - self.config.buy_rate)
+                if current_price <= next_buy_price:
+                    logging.info(f"Price dropped to {current_price}, creating new buy split at {next_buy_price}")
+                    self._create_buy_split(next_buy_price)
+                return
+            # Strategy 3: "last_buy_price" - continue with existing logic below
+
+        # Standard logic for ongoing positions or "last_buy_price" strategy
         if self.last_buy_price is None:
             # No previous buy, create one at current price
             logging.info(f"No previous buy, creating first split at current price: {current_price}")
@@ -312,6 +349,7 @@ class SevenSplitStrategy:
         # Calculate aggregated profit for active positions
         total_invested = 0.0
         total_valuation = 0.0
+        total_coin_volume = 0.0
 
         for split in self.splits:
             # Count splits with buy filled or pending sell as active positions
@@ -320,6 +358,7 @@ class SevenSplitStrategy:
                 valuation = split.buy_volume * current_price if current_price else 0
                 total_invested += invested
                 total_valuation += valuation
+                total_coin_volume += split.buy_volume
 
         total_profit_amount = total_valuation - total_invested
         total_profit_rate = (total_profit_amount / total_invested * 100) if total_invested > 0 else 0.0
@@ -341,6 +380,8 @@ class SevenSplitStrategy:
             "total_profit_amount": total_profit_amount,
             "total_profit_rate": total_profit_rate,
             "total_invested": total_invested,
+            "total_coin_volume": total_coin_volume,
+            "total_valuation": total_valuation,
             "status_counts": status_counts,
             "trade_history": self.trade_history[:10] # Return last 10 trades
         }

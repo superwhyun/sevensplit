@@ -156,6 +156,38 @@ const Config = ({ config, onUpdate, selectedTicker }) => {
                     </small>
                 </div>
 
+                <div className="input-group">
+                    <label>Rebuy Strategy (when all positions cleared)</label>
+                    <select
+                        name="rebuy_strategy"
+                        value={formData.rebuy_strategy || 'reset_on_clear'}
+                        onChange={(e) => {
+                            setIsEditing(true);
+                            setFormData(prev => ({
+                                ...prev,
+                                rebuy_strategy: e.target.value
+                            }));
+                        }}
+                        style={{
+                            padding: '0.5rem',
+                            borderRadius: '0.375rem',
+                            border: '1px solid #334155',
+                            backgroundColor: '#1e293b',
+                            color: '#e2e8f0',
+                            fontSize: '0.875rem'
+                        }}
+                    >
+                        <option value="reset_on_clear">Reset & Start at Current Price</option>
+                        <option value="last_sell_price">Continue from Last Sell Price</option>
+                        <option value="last_buy_price">Continue from Last Buy Price (Lowest)</option>
+                    </select>
+                    <small style={{ color: '#94a3b8', fontSize: '0.75rem', marginTop: '0.25rem', display: 'block' }}>
+                        {formData.rebuy_strategy === 'reset_on_clear' && '✓ Catches rising trends - buys at current price'}
+                        {formData.rebuy_strategy === 'last_sell_price' && '✓ Balanced - waits for drop from last sell price'}
+                        {formData.rebuy_strategy === 'last_buy_price' && '⚠ Conservative - only buys below previous lowest'}
+                    </small>
+                </div>
+
                 <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>
                     Save Configuration
                 </button>

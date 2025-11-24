@@ -314,6 +314,85 @@ const Dashboard = () => {
                 ))}
             </div>
 
+            {/* Ticker-specific Stats */}
+            <div style={{
+                padding: '1.5rem',
+                backgroundColor: 'rgba(15, 23, 42, 0.7)',
+                borderBottom: '1px solid #334155'
+            }}>
+                <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(4, 1fr)',
+                    gap: '1rem'
+                }}>
+                    <div style={{
+                        padding: '1rem',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        borderRadius: '0.5rem',
+                        border: '1px solid rgba(59, 130, 246, 0.3)'
+                    }}>
+                        <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>Current Price</div>
+                        <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#3b82f6' }}>
+                            ₩{status.current_price?.toLocaleString()}
+                        </div>
+                    </div>
+                    <div style={{
+                        padding: '1rem',
+                        backgroundColor: 'rgba(139, 92, 246, 0.1)',
+                        borderRadius: '0.5rem',
+                        border: '1px solid rgba(139, 92, 246, 0.3)'
+                    }}>
+                        <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>Coin Holdings</div>
+                        <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#a78bfa' }}>
+                            {(status.total_coin_volume || 0).toFixed(8)}
+                        </div>
+                        <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '0.25rem' }}>
+                            {status.ticker?.split('-')[1] || 'Coin'}
+                        </div>
+                    </div>
+                    <div style={{
+                        padding: '1rem',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        borderRadius: '0.5rem',
+                        border: '1px solid rgba(16, 185, 129, 0.3)'
+                    }}>
+                        <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>Current Valuation</div>
+                        <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#10b981' }}>
+                            ₩{Math.round(status.total_valuation || 0).toLocaleString()}
+                        </div>
+                        <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '0.25rem' }}>
+                            Invested: ₩{Math.round(status.total_invested || 0).toLocaleString()}
+                        </div>
+                    </div>
+                    <div style={{
+                        padding: '1rem',
+                        backgroundColor: (status.total_profit_amount || 0) >= 0
+                            ? 'rgba(16, 185, 129, 0.1)'
+                            : 'rgba(239, 68, 68, 0.1)',
+                        borderRadius: '0.5rem',
+                        border: (status.total_profit_amount || 0) >= 0
+                            ? '1px solid rgba(16, 185, 129, 0.3)'
+                            : '1px solid rgba(239, 68, 68, 0.3)'
+                    }}>
+                        <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>Unrealized P/L</div>
+                        <div style={{
+                            fontSize: '1.25rem',
+                            fontWeight: 'bold',
+                            color: (status.total_profit_amount || 0) >= 0 ? '#10b981' : '#ef4444'
+                        }}>
+                            {(status.total_profit_amount || 0) >= 0 ? '+' : ''}₩{Math.round(status.total_profit_amount || 0).toLocaleString()}
+                        </div>
+                        <div style={{
+                            fontSize: '0.875rem',
+                            color: (status.total_profit_rate || 0) >= 0 ? '#10b981' : '#ef4444',
+                            marginTop: '0.25rem'
+                        }}>
+                            ({(status.total_profit_rate || 0) >= 0 ? '+' : ''}{(status.total_profit_rate || 0).toFixed(2)}%)
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             {/* Ticker-specific Control Panel */}
             <div style={{
                 padding: '1.5rem',
