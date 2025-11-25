@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mock Exchange Control Panel</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 2rem;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            padding: 2rem;
+            border-radius: 1rem;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+        }
+
+        .header h1 {
+            font-size: 2rem;
+            color: #667eea;
+            margin-bottom: 0.5rem;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 0.95rem;
+        }
+
+        .ticker-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .ticker-card {
+            background: white;
+            border-radius: 1rem;
+            padding: 1.5rem;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            transition: transform 0.2s;
+        }
+
+        .ticker-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .ticker-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #f0f0f0;
+        }
+
+        .ticker-name {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .status-badge {
+            padding: 0.5rem 1rem;
+            border-radius: 2rem;
+            font-size: 0.85rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .status-badge.live {
+            background: #10b981;
+            color: white;
+        }
+
+        .status-badge.held {
+            background: #ef4444;
+            color: white;
+        }
+
+        .price-display {
+            margin-bottom: 1.5rem;
+        }
+
+        .price-label {
+            font-size: 0.85rem;
+            color: #666;
+            margin-bottom: 0.5rem;
+        }
+
+        .price-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #667eea;
+            font-family: 'Courier New', monospace;
+        }
+
+        .control-group {
+            margin-bottom: 1rem;
+        }
+
+        .control-label {
+            font-size: 0.85rem;
+            color: #666;
+            margin-bottom: 0.5rem;
+            display: block;
+        }
+
+        .control-row {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 0.95rem;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-success {
+            background: #10b981;
+            color: white;
+        }
+
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+
+        .btn-small {
+            padding: 0.5rem 1rem;
+            font-size: 0.85rem;
+        }
+
+        input[type="number"] {
+            flex: 1;
+            padding: 0.75rem;
+            border: 2px solid #e0e0e0;
+            border-radius: 0.5rem;
+            font-size: 1rem;
+            font-family: 'Courier New', monospace;
+            transition: border-color 0.2s;
+        }
+
+        input[type="number"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .adjustment-buttons {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+        }
+
+        .accounts-section {
+            background: white;
+            border-radius: 1rem;
+            padding: 1.5rem;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+        }
+
+        .accounts-title {
+            font-size: 1.25rem;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 1rem;
+        }
+
+        .balance-setter {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .balance-setter input {
+            padding: 0.6rem 0.8rem;
+            border: 1px solid #d1d5db;
+            border-radius: 0.5rem;
+            font-size: 0.95rem;
+            flex: 1;
+        }
+
+        .accounts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+
+        .account-card {
+            padding: 1rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 0.75rem;
+            color: white;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+        }
+
+        .account-currency {
+            font-size: 0.85rem;
+            opacity: 0.9;
+            margin-bottom: 0.25rem;
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+
+        .account-ticker {
+            background: rgba(255, 255, 255, 0.15);
+            padding: 0.15rem 0.45rem;
+            border-radius: 0.45rem;
+            font-size: 0.75rem;
+        }
+
+        .account-value {
+            font-size: 1.25rem;
+            font-weight: 700;
+            font-family: 'Courier New', monospace;
+            margin-bottom: 0.15rem;
+        }
+
+        .account-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85rem;
+            opacity: 0.9;
+        }
+
+        .account-meta {
+            margin-top: 0.35rem;
+            font-size: 0.8rem;
+            opacity: 0.85;
+        }
+
+        .account-balance {
+            font-size: 1.5rem;
+            font-weight: bold;
+            font-family: 'Courier New', monospace;
+        }
+
+        .account-locked {
+            font-size: 0.8rem;
+            opacity: 0.8;
+            margin-top: 0.25rem;
+        }
+
+        .orders-section {
+            background: white;
+            border-radius: 1rem;
+            padding: 1.5rem;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            margin-top: 1.5rem;
+        }
+
+        .orders-title {
+            font-size: 1.25rem;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 0.5rem;
+        }
+
+        .orders-table-wrapper {
+            overflow-x: auto;
+        }
+
+        .orders-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .orders-table th,
+        .orders-table td {
+            padding: 0.75rem 0.5rem;
+            border-bottom: 1px solid #f1f5f9;
+            text-align: left;
+            font-size: 0.9rem;
+        }
+
+        .orders-table th {
+            color: #64748b;
+            font-weight: 700;
+            font-size: 0.85rem;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.3rem 0.6rem;
+            border-radius: 999px;
+            font-size: 0.8rem;
+            font-weight: 700;
+            color: white;
+            gap: 0.35rem;
+        }
+
+        .badge-buy {
+            background: #10b981;
+        }
+
+        .badge-sell {
+            background: #ef4444;
+        }
+
+        .empty-state {
+            padding: 1rem;
+            text-align: center;
+            color: #94a3b8;
+            background: #f8fafc;
+            border: 1px dashed #e2e8f0;
+            border-radius: 0.75rem;
+            font-size: 0.95rem;
+        }
+
+        .live-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #10b981;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.3;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🏦 Mock Exchange Control Panel</h1>
+            <p>Control market prices and monitor exchange state</p>
+        </div>
+
+        <div class="ticker-cards" id="tickerCards"></div>
+
+            <div class="accounts-section">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h2 class="accounts-title" style="margin-bottom: 0;">Exchange Accounts</h2>
+                    <button class="btn btn-danger btn-small" onclick="resetAllBalances()">🔄 Reset All</button>
+                </div>
+            <div class="balance-setter">
+                <input type="number" id="krw-balance-input" placeholder="Set KRW balance" />
+                <button class="btn btn-primary btn-small" onclick="setKrwBalance()">Update KRW</button>
+            </div>
+            <div class="accounts-grid" id="accountsGrid"></div>
+        </div>
+
+        <div class="orders-section">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                <h2 class="orders-title" style="margin-bottom: 0;">Open Orders (Mock)</h2>
+                <span style="color: #94a3b8; font-size: 0.85rem;">현재 거래소에 접수된 주문</span>
+            </div>
+            <div id="openOrders"></div>
+        </div>
+    </div>
+
+    <script>
+        const TICKERS = ['KRW-BTC', 'KRW-ETH', 'KRW-SOL'];
+        const API_BASE = 'http://127.0.0.1:5001';
+        const BOT_API_BASE = 'http://127.0.0.1:8000';
+
+        let tickerStates = {};
+        let lastKrwValue = 0;
+
+        async function fetchAccounts() {
+            try {
+                // Fetch from mock exchange server (5001) - now used by main bot
+                const response = await fetch(`${API_BASE}/v1/accounts`);
+                const accounts = await response.json();
+                renderAccounts(accounts);
+            } catch (error) {
+                console.error('Failed to fetch accounts:', error);
+            }
+        }
+
+        async function fetchOpenOrders() {
+            try {
+                const resp = await fetch(`${API_BASE}/v1/orders?state=wait`);
+                const orders = await resp.json();
+                renderOpenOrders(orders);
+            } catch (error) {
+                console.error('Failed to fetch open orders:', error);
+            }
+        }
+
+        async function setKrwBalance() {
+            const input = document.getElementById('krw-balance-input');
+            const value = parseFloat(input.value);
+            if (isNaN(value) || value < 0) {
+                alert('올바른 KRW 금액을 입력하세요');
+                return;
+            }
+
+            try {
+                const resp = await fetch(`${API_BASE}/mock/balance`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ currency: 'KRW', balance: value })
+                });
+                const data = await resp.json();
+                // If server returns fresh accounts, re-render without waiting for poll
+                if (data.accounts) {
+                    renderAccounts(data.accounts);
+                } else {
+                    fetchAccounts();
+                }
+            } catch (error) {
+                console.error('Failed to set KRW balance:', error);
+                alert('KRW 잔액 업데이트 실패');
+            }
+        }
+
+        async function resetAllBalances() {
+            if (!confirm('모든 보유량과 전략을 초기화하시겠습니까?\n\n초기화 내용:\n- 모든 코인 잔액: 0\n- KRW: 10,000,000원\n- 모든 거래 전략 리셋\n- 거래 내역 삭제')) {
+                return;
+            }
+
+            try {
+                // Call the main bot's reset-all endpoint
+                const resp = await fetch(`${BOT_API_BASE}/reset-all`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await resp.json();
+                
+                if (data.status === 'mock reset') {
+                    // Wait a bit for the system to stabilize
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    
+                    // Refresh accounts display
+                    await fetchAccounts();
+                    
+                    alert('✅ 모든 잔액과 전략이 초기화되었습니다!');
+                } else {
+                    alert('⚠️ 현재 REAL 모드에서는 초기화할 수 없습니다.');
+                }
+            } catch (error) {
+                console.error('Failed to reset balances:', error);
+                alert('❌ 잔액 초기화 실패: ' + error.message);
+            }
+        }
+
+        function renderAccounts(accounts) {
+            const grid = document.getElementById('accountsGrid');
+            grid.innerHTML = accounts.map(acc => {
+                const balance = parseFloat(acc.balance || 0);
+                const locked = parseFloat(acc.locked || 0);
+                const total = acc.total_balance !== undefined ? parseFloat(acc.total_balance) : balance + locked;
+                const isKrw = acc.currency === 'KRW';
+                const price = isKrw ? 1 : parseFloat(acc.current_price || 0);
+                const value = acc.balance_value !== undefined
+                    ? parseFloat(acc.balance_value)
+                    : (isKrw ? total : total * price);
+                const avgBuyPrice = parseFloat(acc.avg_buy_price || 0);
+
+                if (acc.currency === 'KRW') {
+                    lastKrwValue = total;
+                    const krwInput = document.getElementById('krw-balance-input');
+                    if (krwInput && !krwInput.matches(':focus')) {
+                        krwInput.value = Math.round(total);
+                    }
+                }
+
+                return `
+                    <div class="account-card">
+                        <div class="account-currency">
+                            ${acc.currency}
+                            ${acc.ticker ? `<span class="account-ticker">${acc.ticker}</span>` : ''}
+                        </div>
+                        <div class="account-value">₩${Math.round(value).toLocaleString()}</div>
+                        <div class="account-row">
+                            <span>Total</span>
+                            <span>${total.toLocaleString()} ${acc.currency}</span>
+                        </div>
+                        ${locked > 0 ? `<div class="account-row"><span>Locked</span><span>${locked.toLocaleString()} ${acc.currency}</span></div>` : ''}
+                        ${acc.currency !== 'KRW' ? `<div class="account-row"><span>Current</span><span>₩${price.toLocaleString()}</span></div>` : ''}
+                        ${avgBuyPrice > 0 ? `<div class="account-meta">Avg Buy: ₩${avgBuyPrice.toLocaleString()}</div>` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderOpenOrders(orders) {
+            const container = document.getElementById('openOrders');
+            if (!container) return;
+
+            if (!orders || orders.length === 0) {
+                container.innerHTML = '<div class="empty-state">진행중인 주문이 없습니다.</div>';
+                return;
+            }
+
+            const rows = orders.map(order => {
+                const createdAt = order.created_at ? new Date(order.created_at).toLocaleString() : '-';
+                const priceValue = order.price ? Number(order.price) : 0;
+                const priceDisplay = order.ord_type === 'price'
+                    ? `Market Buy (₩${Math.round(priceValue).toLocaleString()})`
+                    : order.ord_type === 'market'
+                        ? 'Market'
+                        : `₩${priceValue.toLocaleString()}`;
+                const volume = order.volume ? Number(order.volume) : 0;
+                const remaining = order.remaining_volume ? Number(order.remaining_volume) : 0;
+                const locked = order.locked ? Number(order.locked) : 0;
+
+                return `
+                    <tr>
+                        <td>${order.market}</td>
+                        <td>
+                            <span class="badge ${order.side === 'bid' ? 'badge-buy' : 'badge-sell'}">
+                                ${order.side === 'bid' ? '매수' : '매도'}
+                            </span>
+                        </td>
+                        <td>${order.ord_type?.toUpperCase() || '-'}</td>
+                        <td>${priceDisplay}</td>
+                        <td>${volume.toLocaleString()}</td>
+                        <td>${remaining.toLocaleString()}</td>
+                        <td>₩${Math.round(locked).toLocaleString()}</td>
+                        <td style="white-space: nowrap;">${createdAt}</td>
+                    </tr>
+                `;
+            }).join('');
+
+            container.innerHTML = `
+                <div class="orders-table-wrapper">
+                    <table class="orders-table">
+                        <thead>
+                            <tr>
+                                <th>Market</th>
+                                <th>Side</th>
+                                <th>Type</th>
+                                <th>Price</th>
+                                <th>Volume</th>
+                                <th>Remaining</th>
+                                <th>Locked</th>
+                                <th>Created</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rows}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        async function fetchTickerPrice(ticker) {
+            try {
+                const response = await fetch(`${API_BASE}/v1/ticker?markets=${ticker}`);
+                const data = await response.json();
+                return data[0]?.trade_price || 0;
+            } catch (error) {
+                console.error(`Failed to fetch price for ${ticker}:`, error);
+                return 0;
+            }
+        }
+
+        async function fetchHoldStatus(ticker) {
+            try {
+                const response = await fetch(`${API_BASE}/mock/hold?ticker=${ticker}`);
+                const data = await response.json();
+                return data.held || false;
+            } catch (error) {
+                console.error(`Failed to fetch hold status for ${ticker}:`, error);
+                return false;
+            }
+        }
+
+        async function toggleHold(ticker) {
+            const currentState = tickerStates[ticker]?.held || false;
+            try {
+                const response = await fetch(`${API_BASE}/mock/hold`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ticker, hold: !currentState })
+                });
+                const data = await response.json();
+                tickerStates[ticker].held = data.held;
+                updateTickerCard(ticker);
+            } catch (error) {
+                console.error(`Failed to toggle hold for ${ticker}:`, error);
+            }
+        }
+
+        async function setPrice(ticker) {
+            const input = document.getElementById(`price-input-${ticker}`);
+            const price = parseFloat(input.value);
+
+            if (isNaN(price) || price <= 0) {
+                alert('Please enter a valid price');
+                return;
+            }
+
+            try {
+                await fetch(`${API_BASE}/mock/price`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ticker, price })
+                });
+
+                tickerStates[ticker].price = price;
+                updateTickerCard(ticker);
+                fetchAccounts();
+            } catch (error) {
+                console.error(`Failed to set price for ${ticker}:`, error);
+            }
+        }
+
+        function adjustPrice(ticker, percentage) {
+            const input = document.getElementById(`price-input-${ticker}`);
+            const currentPrice = parseFloat(input.value) || tickerStates[ticker]?.price || 0;
+            const newPrice = Math.round(currentPrice * (1 + percentage));
+            input.value = newPrice;
+        }
+
+        function updateTickerCard(ticker) {
+            const state = tickerStates[ticker];
+            const coin = ticker.split('-')[1];
+            const card = document.getElementById(`card-${ticker}`);
+
+            if (!card) return;
+
+            const isHeld = state.held;
+            card.innerHTML = `
+                <div class="ticker-header">
+                    <div class="ticker-name">${coin}</div>
+                    <div class="status-badge ${isHeld ? 'held' : 'live'}">
+                        ${isHeld ? '🔒 HELD' : '<span class="live-indicator"></span> LIVE'}
+                    </div>
+                </div>
+
+                <div class="price-display">
+                    <div class="price-label">Current Price</div>
+                    <div class="price-value">₩${state.price.toLocaleString()}</div>
+                </div>
+
+                <div class="control-group">
+                    <label class="control-label">Price Control</label>
+                    <div class="control-row">
+                        <button class="btn ${isHeld ? 'btn-success' : 'btn-danger'} btn-small"
+                                onclick="toggleHold('${ticker}')">
+                            ${isHeld ? '▶️ Resume Live' : '⏸️ Hold Price'}
+                        </button>
+                    </div>
+                </div>
+
+                ${isHeld ? `
+                    <div class="control-group">
+                        <label class="control-label">Set New Price</label>
+                        <div class="control-row">
+                            <input type="number"
+                                   id="price-input-${ticker}"
+                                   value="${state.price}"
+                                   placeholder="Enter price">
+                            <button class="btn btn-primary btn-small" onclick="setPrice('${ticker}')">
+                                Set
+                            </button>
+                        </div>
+                        <div class="adjustment-buttons">
+                            <button class="btn btn-danger btn-small" onclick="adjustPrice('${ticker}', -0.05)">
+                                -5%
+                            </button>
+                            <button class="btn btn-danger btn-small" onclick="adjustPrice('${ticker}', -0.01)">
+                                -1%
+                            </button>
+                            <button class="btn btn-success btn-small" onclick="adjustPrice('${ticker}', 0.01)">
+                                +1%
+                            </button>
+                            <button class="btn btn-success btn-small" onclick="adjustPrice('${ticker}', 0.05)">
+                                +5%
+                            </button>
+                        </div>
+                    </div>
+                ` : ''}
+            `;
+        }
+
+        async function initializeTickers() {
+            const container = document.getElementById('tickerCards');
+
+            for (const ticker of TICKERS) {
+                const price = await fetchTickerPrice(ticker);
+                const held = await fetchHoldStatus(ticker);
+
+                tickerStates[ticker] = { price, held };
+
+                const card = document.createElement('div');
+                card.className = 'ticker-card';
+                card.id = `card-${ticker}`;
+                container.appendChild(card);
+
+                updateTickerCard(ticker);
+            }
+        }
+
+        async function updatePrices() {
+            for (const ticker of TICKERS) {
+                if (!tickerStates[ticker]?.held) {
+                    const price = await fetchTickerPrice(ticker);
+                    tickerStates[ticker].price = price;
+                    updateTickerCard(ticker);
+                }
+            }
+            fetchAccounts();
+        }
+
+        // Initialize
+        initializeTickers();
+        fetchAccounts();
+        fetchOpenOrders();
+
+        // Update every second
+        setInterval(() => {
+            updatePrices();
+            fetchOpenOrders();
+        }, 1000);
+    </script>
+</body>
+</html>

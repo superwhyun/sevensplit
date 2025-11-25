@@ -1,15 +1,17 @@
 {
     "config": {
         "investment_per_split": 100000.0,
-        "min_price": 160400.0,
-        "max_price": 240600.0,
+        "min_price": 104356800.0,
+        "max_price": 156535200.0,
         "buy_rate": 0.005,
         "sell_rate": 0.005,
-        "fee_rate": 0.0005
+        "fee_rate": 0.0005,
+        "rebuy_strategy": "reset_on_clear"
     },
     "is_running": false,
     "splits": [],
     "trade_history": [],
     "next_split_id": 1,
-    "last_buy_price": null
+    "last_buy_price": null,
+    "last_sell_price": null
 }

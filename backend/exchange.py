@@ -1,9 +1,14 @@
 import pyupbit
 import logging
 from datetime import datetime
+from database import get_db
 
 class Exchange:
     def get_balance(self, ticker):
+        raise NotImplementedError
+
+    def get_accounts(self):
+        """Return account information including balances and any locked amounts."""
         raise NotImplementedError
 
     def get_current_price(self, ticker):
@@ -28,258 +33,223 @@ class Exchange:
         raise NotImplementedError
 
 class UpbitExchange(Exchange):
-    def __init__(self, access_key, secret_key):
-        self.upbit = pyupbit.Upbit(access_key, secret_key)
+    def __init__(self, access_key, secret_key, server_url="https://api.upbit.com"):
+        self.access_key = access_key
+        self.secret_key = secret_key
+        self.server_url = server_url.rstrip('/')
+        import jwt
+        import hashlib
+        import urllib.parse
+        import requests
+        import uuid
+        self.jwt = jwt
+        self.hashlib = hashlib
+        self.urlencode = urllib.parse.urlencode
+        self.requests = requests
+        self.uuid = uuid
+
+    def _request(self, method, endpoint, params=None, data=None, auth=True):
+        url = f"{self.server_url}{endpoint}"
+        headers = {}
+        
+        if auth:
+            payload = {
+                'access_key': self.access_key,
+                'nonce': str(self.uuid.uuid4()),
+            }
+
+            query_params = params or {}
+            if data:
+                query_params.update(data)
+
+            if query_params:
+                query_string = self.urlencode(query_params)
+                m = self.hashlib.sha512()
+                m.update(query_string.encode())
+                query_hash = m.hexdigest()
+                payload['query_hash'] = query_hash
+                payload['query_hash_alg'] = 'SHA512'
+            
+            token = self.jwt.encode(payload, self.secret_key, algorithm='HS256')
+            headers = {'Authorization': f'Bearer {token}'}
+        
+        try:
+            if method == 'GET':
+                resp = self.requests.get(url, params=params, headers=headers)
+            elif method == 'POST':
+                resp = self.requests.post(url, json=data, headers=headers)
+            elif method == 'DELETE':
+                resp = self.requests.delete(url, params=params, headers=headers)
+            
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            logging.error(f"Request failed: {e}")
+            raise
 
     def get_balance(self, ticker="KRW"):
-        return self.upbit.get_balance(ticker)
+        try:
+            accounts = self._request('GET', '/v1/accounts')
+            for account in accounts:
+                if account['currency'] == ticker:
+                    return float(account['balance'])
+                if "-" in ticker:
+                    coin = ticker.split("-")[1]
+                    if account['currency'] == coin:
+                        return float(account['balance'])
+            return 0.0
+        except Exception as e:
+            logging.error(f"get_balance failed: {e}")
+            return 0.0
+
+    def get_accounts(self):
+        """Fetch detailed account info and enrich with current price/value."""
+        try:
+            accounts = self._request('GET', '/v1/accounts')
+
+            # Collect tickers to batch-fetch prices
+            tickers = []
+            for account in accounts:
+                if account.get('currency') and account['currency'] != 'KRW':
+                    tickers.append(f"KRW-{account['currency']}")
+
+            prices = self.get_current_prices(tickers) if tickers else {}
+
+            enriched = []
+            for account in accounts:
+                currency = account.get('currency')
+                balance = float(account.get('balance', 0))
+                locked = float(account.get('locked', 0))
+                ticker = f"KRW-{currency}" if currency and currency != 'KRW' else None
+                current_price = 1.0 if currency == 'KRW' else prices.get(ticker, 0.0)
+                total_balance = balance + locked
+                value = total_balance * current_price if current_price else 0.0
+
+                enriched.append({
+                    **account,
+                    "ticker": ticker,
+                    "current_price": current_price,
+                    "balance_value": value,
+                    "total_balance": total_balance
+                })
+
+            return enriched
+        except Exception as e:
+            logging.error(f"get_accounts failed: {e}")
+            return []
 
     def get_avg_buy_price(self, ticker):
-        # ticker e.g., "KRW-BTC" -> "BTC"
         currency = ticker.split("-")[1] if "-" in ticker else ticker
-        return self.upbit.get_avg_buy_price(currency)
+        try:
+            accounts = self._request('GET', '/v1/accounts')
+            for account in accounts:
+                if account['currency'] == currency:
+                    return float(account['avg_buy_price'])
+            return 0.0
+        except Exception as e:
+            return 0.0
 
     def get_current_price(self, ticker="KRW-BTC"):
-        return pyupbit.get_current_price(ticker)
+        try:
+            resp = self._request('GET', '/v1/ticker', params={'markets': ticker}, auth=False)
+            if resp and isinstance(resp, list):
+                return float(resp[0]['trade_price'])
+            return 0.0
+        except Exception as e:
+            logging.error(f"get_current_price failed: {e}")
+            return 0.0
+
+    def get_current_prices(self, tickers):
+        """Fetch prices for multiple tickers"""
+        try:
+            markets = ",".join(tickers)
+            resp = self._request('GET', '/v1/ticker', params={'markets': markets}, auth=False)
+            prices = {}
+            if resp and isinstance(resp, list):
+                for item in resp:
+                    prices[item['market']] = float(item['trade_price'])
+            return prices
+        except Exception as e:
+            logging.error(f"get_current_prices failed: {e}")
+            return {}
 
     def buy_market_order(self, ticker, amount):
-        return self.upbit.buy_market_order(ticker, amount)
+        data = {
+            'market': ticker,
+            'side': 'bid',
+            'volume': None,
+            'price': str(amount),
+            'ord_type': 'price'
+        }
+        return self._request('POST', '/v1/orders', data=data)
 
     def sell_market_order(self, ticker, volume):
-        return self.upbit.sell_market_order(ticker, volume)
+        data = {
+            'market': ticker,
+            'side': 'ask',
+            'volume': str(volume),
+            'price': None,
+            'ord_type': 'market'
+        }
+        return self._request('POST', '/v1/orders', data=data)
 
     def buy_limit_order(self, ticker, price, volume):
-        return self.upbit.buy_limit_order(ticker, price, volume)
+        data = {
+            'market': ticker,
+            'side': 'bid',
+            'volume': str(volume),
+            'price': str(price),
+            'ord_type': 'limit'
+        }
+        return self._request('POST', '/v1/orders', data=data)
 
     def sell_limit_order(self, ticker, price, volume):
-        return self.upbit.sell_limit_order(ticker, price, volume)
+        data = {
+            'market': ticker,
+            'side': 'ask',
+            'volume': str(volume),
+            'price': str(price),
+            'ord_type': 'limit'
+        }
+        return self._request('POST', '/v1/orders', data=data)
 
     def get_order(self, uuid):
-        return self.upbit.get_order(uuid)
+        return self._request('GET', '/v1/order', params={'uuid': uuid})
 
     def cancel_order(self, uuid):
-        return self.upbit.cancel_order(uuid)
-
-class MockExchange(Exchange):
-    def __init__(self, initial_balance=10000000):
-        self.balance = {"KRW": initial_balance, "BTC": 0, "ETH": 0, "SOL": 0}
-        self.price = {} # ticker -> manual price override
-        self.price_held = {} # ticker -> is price held
-        self.orders = {} # uuid -> order info
-        self.order_counter = 1
+        return self._request('DELETE', '/v1/order', params={'uuid': uuid})
 
     def set_mock_price(self, ticker, price):
-        self.price[ticker] = price
+        if "api.upbit.com" in self.server_url:
+            logging.warning("set_mock_price called on real Upbit exchange")
+            return
+        try:
+            self.requests.post(f"{self.server_url}/mock/price", json={"ticker": ticker, "price": price})
+        except Exception as e:
+            logging.error(f"set_mock_price failed: {e}")
 
     def hold_price(self, ticker, hold=True):
-        self.price_held[ticker] = hold
+        if "api.upbit.com" in self.server_url:
+            logging.warning("hold_price called on real Upbit exchange")
+            return
+        try:
+            self.requests.post(f"{self.server_url}/mock/hold", json={"ticker": ticker, "hold": hold})
+        except Exception as e:
+            logging.error(f"hold_price failed: {e}")
 
     def is_price_held(self, ticker):
-        return self.price_held.get(ticker, False)
-
-    def get_balance(self, ticker="KRW"):
-        """Get balance including locked amounts in pending orders"""
-        if ticker == "KRW":
-            return self.balance["KRW"]
-
-        # Handle "KRW-BTC" -> "BTC"
-        currency = ticker.split("-")[1] if "-" in ticker else ticker
-        available = self.balance.get(currency, 0)
-
-        # Add locked amounts from pending sell orders
-        locked = 0.0
-        for order in self.orders.values():
-            if order["state"] == "wait" and order["side"] == "ask":
-                order_currency = order["market"].split("-")[1]
-                if order_currency == currency:
-                    locked += float(order["locked"])
-
-        return available + locked
-
-    def get_avg_buy_price(self, ticker):
-        # Mock implementation: simplified, just return current price or 0
-        # In a real mock, we should track weighted average. 
-        # For now, let's return 0 to avoid complexity or implement simple tracking if needed.
-        # Let's return 0 for now as Seven Split tracks its own buy prices per split.
-        return 0
-
-    def get_current_price(self, ticker="KRW-BTC"):
-        # If price is held and a manual price is set, use it
-        if self.is_price_held(ticker) and ticker in self.price:
-            return self.price[ticker]
-
-        # If not held but manual price exists, update from live
-        if not self.is_price_held(ticker):
-            try:
-                live_price = pyupbit.get_current_price(ticker)
-                self.price[ticker] = live_price
-                return live_price
-            except Exception as e:
-                logging.error(f"Failed to fetch real price: {e}")
-                return self.price.get(ticker, 100000000) # Fallback to stored or default
-
-        # Otherwise, fetch real price from Upbit (no API key needed for public data)
+        if "api.upbit.com" in self.server_url:
+            return False
         try:
-            return pyupbit.get_current_price(ticker)
+            resp = self.requests.get(f"{self.server_url}/mock/hold", params={"ticker": ticker})
+            if resp.status_code == 200:
+                return resp.json().get("held", False)
+            return False
         except Exception as e:
-            logging.error(f"Failed to fetch real price: {e}")
-            return 100000000 # Fallback
+            logging.error(f"is_price_held failed: {e}")
+            return False
 
-    def buy_market_order(self, ticker, amount):
-        current_price = self.get_current_price(ticker)
-        if self.balance["KRW"] < amount:
-            return None
-        
-        currency = ticker.split("-")[1]
-        volume = amount / current_price
-        fee = amount * 0.0005 # 0.05% fee
-        self.balance["KRW"] -= (amount + fee)
-        self.balance[currency] = self.balance.get(currency, 0) + volume
-        return {"uuid": "mock_buy_uuid", "volume": volume, "price": current_price}
-
-    def sell_market_order(self, ticker, volume):
-        current_price = self.get_current_price(ticker)
-        currency = ticker.split("-")[1]
-
-        if self.balance.get(currency, 0) < volume:
-            return None
-
-        amount = volume * current_price
-        fee = amount * 0.0005
-        self.balance[currency] -= volume
-        self.balance["KRW"] += (amount - fee)
-        return {"uuid": "mock_sell_uuid", "volume": volume, "price": current_price}
-
-    def buy_limit_order(self, ticker, price, volume):
-        """Place a limit buy order"""
-        currency = ticker.split("-")[1]
-        amount = price * volume
-        fee = amount * 0.0005
-        total_cost = amount + fee
-
-        if self.balance["KRW"] < total_cost:
-            return None
-
-        uuid = f"mock_buy_limit_{self.order_counter}"
-        self.order_counter += 1
-
-        self.orders[uuid] = {
-            "uuid": uuid,
-            "side": "bid",
-            "ord_type": "limit",
-            "price": str(price),
-            "state": "wait",
-            "market": ticker,
-            "created_at": datetime.now().isoformat(),
-            "volume": str(volume),
-            "remaining_volume": str(volume),
-            "reserved_fee": str(fee),
-            "remaining_fee": str(fee),
-            "paid_fee": "0",
-            "locked": str(total_cost),
-            "executed_volume": "0",
-            "trades_count": 0
-        }
-
-        # Reserve the KRW
-        self.balance["KRW"] -= total_cost
-
-        return self.orders[uuid]
-
-    def sell_limit_order(self, ticker, price, volume):
-        """Place a limit sell order"""
-        currency = ticker.split("-")[1]
-
-        if self.balance.get(currency, 0) < volume:
-            return None
-
-        uuid = f"mock_sell_limit_{self.order_counter}"
-        self.order_counter += 1
-
-        self.orders[uuid] = {
-            "uuid": uuid,
-            "side": "ask",
-            "ord_type": "limit",
-            "price": str(price),
-            "state": "wait",
-            "market": ticker,
-            "created_at": datetime.now().isoformat(),
-            "volume": str(volume),
-            "remaining_volume": str(volume),
-            "reserved_fee": "0",
-            "remaining_fee": "0",
-            "paid_fee": "0",
-            "locked": str(volume),
-            "executed_volume": "0",
-            "trades_count": 0
-        }
-
-        # Lock the currency
-        self.balance[currency] -= volume
-
-        return self.orders[uuid]
-
-    def get_order(self, uuid):
-        """Get order status. In mock, we auto-fill orders based on current price"""
-        if uuid not in self.orders:
-            return None
-
-        order = self.orders[uuid]
-
-        # Auto-fill logic for mock: check if price condition is met
-        if order["state"] == "wait":
-            current_price = self.get_current_price(order["market"])
-            order_price = float(order["price"])
-
-            filled = False
-            if order["side"] == "bid" and current_price <= order_price:
-                # Buy order filled
-                filled = True
-            elif order["side"] == "ask" and current_price >= order_price:
-                # Sell order filled
-                filled = True
-
-            if filled:
-                currency = order["market"].split("-")[1]
-                volume = float(order["volume"])
-                amount = order_price * volume
-                fee = amount * 0.0005
-
-                if order["side"] == "bid":
-                    # Buy filled: add currency
-                    self.balance[currency] = self.balance.get(currency, 0) + volume
-                else:
-                    # Sell filled: add KRW (already deducted currency when order placed)
-                    self.balance["KRW"] += (amount - fee)
-
-                order["state"] = "done"
-                order["remaining_volume"] = "0"
-                order["executed_volume"] = order["volume"]
-                order["paid_fee"] = str(fee)
-                order["trades_count"] = 1
-
-        return order
-
-    def cancel_order(self, uuid):
-        """Cancel an order and return reserved funds"""
-        if uuid not in self.orders:
-            return None
-
-        order = self.orders[uuid]
-
-        if order["state"] != "wait":
-            return None
-
-        currency = order["market"].split("-")[1]
-
-        if order["side"] == "bid":
-            # Return reserved KRW
-            locked = float(order["locked"])
-            self.balance["KRW"] += locked
-        else:
-            # Return locked currency
-            volume = float(order["volume"])
-            self.balance[currency] = self.balance.get(currency, 0) + volume
-
-        order["state"] = "cancel"
-        return order
+class MockExchange(Exchange):
+    """Removed internal mock exchange. Use external mock API server instead."""
+    def __init__(self, *args, **kwargs):
+        raise RuntimeError("MockExchange is removed. Use the mock API server via UpbitExchange pointing to its URL.")

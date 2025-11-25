@@ -3,6 +3,7 @@ from typing import List, Optional
 import logging
 import json
 from datetime import datetime
+from database import get_db
 
 class StrategyConfig(BaseModel):
     investment_per_split: float = 100000.0 # KRW per split
@@ -11,6 +12,7 @@ class StrategyConfig(BaseModel):
     buy_rate: float = 0.005 # 0.5% - price drop rate to trigger next buy
     sell_rate: float = 0.005 # 0.5% - profit rate for sell order
     fee_rate: float = 0.0005 # 0.05% fee
+    tick_interval: float = 1.0 # seconds - how often to check prices
     rebuy_strategy: str = "reset_on_clear" # Options: "last_buy_price", "last_sell_price", "reset_on_clear"
 
 class SplitState(BaseModel):
@@ -30,6 +32,7 @@ class SevenSplitStrategy:
     def __init__(self, exchange, ticker="KRW-BTC"):
         self.exchange = exchange
         self.ticker = ticker
+        self.db = get_db()
         self.config = StrategyConfig()
         self.splits: List[SplitState] = []
         self.is_running = False
@@ -45,47 +48,127 @@ class SevenSplitStrategy:
         if not state_loaded:
             current_price = self.exchange.get_current_price(self.ticker)
             if current_price:
-                self.config.min_price = current_price * 0.8  # 20% below current price
-                self.config.max_price = current_price * 1.2  # 20% above current price
+                # Default grid range: -15% ~ +15% around the current price
+                self.config.min_price = current_price * 0.85
+                self.config.max_price = current_price * 1.15
                 logging.info(f"Initialized default config for {ticker}: min_price={self.config.min_price}, max_price={self.config.max_price}")
                 self.save_state()
 
     def save_state(self):
-        state = {
-            "config": self.config.dict(),
-            "is_running": self.is_running,
-            "splits": [s.dict() for s in self.splits],
-            "trade_history": self.trade_history,
-            "next_split_id": self.next_split_id,
-            "last_buy_price": self.last_buy_price,
-            "last_sell_price": self.last_sell_price
-        }
+        """Save state to database"""
         try:
-            with open(f"state_{self.ticker}.json", "w") as f:
-                json.dump(state, f, indent=4)
+            # Update strategy state
+            config_dict = self.config.dict()
+            self.db.update_strategy_state(
+                self.ticker,
+                investment_per_split=config_dict['investment_per_split'],
+                min_price=config_dict['min_price'],
+                max_price=config_dict['max_price'],
+                buy_rate=config_dict['buy_rate'],
+                sell_rate=config_dict['sell_rate'],
+                fee_rate=config_dict['fee_rate'],
+                tick_interval=config_dict['tick_interval'],
+                rebuy_strategy=config_dict['rebuy_strategy'],
+                is_running=self.is_running,
+                next_split_id=self.next_split_id,
+                last_buy_price=self.last_buy_price,
+                last_sell_price=self.last_sell_price
+            )
+
+            # Sync splits to database
+            db_splits = self.db.get_splits(self.ticker)
+            db_split_ids = {s.split_id for s in db_splits}
+            mem_split_ids = {s.id for s in self.splits}
+
+            # Delete splits that are in DB but not in memory
+            for split_id in db_split_ids - mem_split_ids:
+                self.db.delete_split(self.ticker, split_id)
+
+            # Update or add splits from memory to DB
+            for split in self.splits:
+                split_data = {
+                    'split_id': split.id,
+                    'status': split.status,
+                    'buy_price': split.buy_price,
+                    'target_sell_price': split.target_sell_price,
+                    'investment_amount': split.buy_amount,
+                    'coin_volume': split.buy_volume,
+                    'buy_order_id': split.buy_order_uuid,
+                    'sell_order_id': split.sell_order_uuid
+                }
+
+                if split.id in db_split_ids:
+                    # For update, remove split_id from kwargs as it's already passed as argument
+                    update_data = {k: v for k, v in split_data.items() if k != 'split_id'}
+                    self.db.update_split(self.ticker, split.id, **update_data)
+                else:
+                    self.db.add_split(self.ticker, split_data)
+
         except Exception as e:
-            logging.error(f"Failed to save state: {e}")
+            logging.error(f"Failed to save state to database: {e}")
 
     def load_state(self):
-        """Load state from file. Returns True if state was loaded, False otherwise."""
+        """Load state from database. Returns True if state was loaded, False otherwise."""
         try:
-            with open(f"state_{self.ticker}.json", "r") as f:
-                state = json.load(f)
-                self.config = StrategyConfig(**state.get("config", {}))
-                self.is_running = state.get("is_running", False)
-                self.trade_history = state.get("trade_history", [])
-                self.next_split_id = state.get("next_split_id", 1)
-                self.last_buy_price = state.get("last_buy_price")
-                self.last_sell_price = state.get("last_sell_price")
+            # Load strategy state
+            state = self.db.get_strategy_state(self.ticker)
 
-                splits_data = state.get("splits", [])
-                if splits_data:
-                    self.splits = [SplitState(**s) for s in splits_data]
-                return True
-        except FileNotFoundError:
-            return False
+            # Update config
+            self.config = StrategyConfig(
+                investment_per_split=state.investment_per_split,
+                min_price=state.min_price,
+                max_price=state.max_price,
+                buy_rate=state.buy_rate,
+                sell_rate=state.sell_rate,
+                fee_rate=state.fee_rate,
+                tick_interval=state.tick_interval,
+                rebuy_strategy=state.rebuy_strategy
+            )
+
+            self.is_running = state.is_running
+            self.next_split_id = state.next_split_id
+            self.last_buy_price = state.last_buy_price
+            self.last_sell_price = state.last_sell_price
+
+            # Load splits
+            db_splits = self.db.get_splits(self.ticker)
+            self.splits = []
+            for db_split in db_splits:
+                split = SplitState(
+                    id=db_split.split_id,
+                    status=db_split.status,
+                    buy_order_uuid=db_split.buy_order_id,
+                    sell_order_uuid=db_split.sell_order_id,
+                    buy_price=db_split.buy_price,
+                    actual_buy_price=db_split.buy_price,  # Assuming they're the same
+                    buy_amount=db_split.investment_amount,
+                    buy_volume=db_split.coin_volume or 0.0,
+                    target_sell_price=db_split.target_sell_price,
+                    created_at=db_split.created_at.isoformat() if db_split.created_at else None,
+                    bought_at=db_split.buy_filled_at.isoformat() if db_split.buy_filled_at else None
+                )
+                self.splits.append(split)
+
+            # Load trade history
+            db_trades = self.db.get_trades(self.ticker, limit=100)
+            self.trade_history = []
+            for trade in db_trades:
+                self.trade_history.append({
+                    'split_id': trade.split_id,
+                    'buy_price': trade.buy_price,
+                    'sell_price': trade.sell_price,
+                    'buy_amount': trade.buy_amount,
+                    'sell_amount': trade.sell_amount,
+                    'gross_profit': trade.gross_profit,
+                    'total_fee': trade.total_fee,
+                    'net_profit': trade.net_profit,
+                    'profit_rate': trade.profit_rate,
+                    'timestamp': trade.timestamp.isoformat()
+                })
+
+            return True
         except Exception as e:
-            logging.error(f"Failed to load state: {e}")
+            logging.error(f"Failed to load state from database: {e}")
             return False
 
     def start(self):
@@ -217,7 +300,15 @@ class SevenSplitStrategy:
                 logging.info(f"Buy order filled for split {split.id} at {split.actual_buy_price}")
                 self.save_state()
         except Exception as e:
-            logging.error(f"Error checking buy order {split.buy_order_uuid}: {e}")
+            # Handle 404 or "Order not found"
+            error_msg = str(e)
+            if "404" in error_msg or "Order not found" in error_msg:
+                logging.warning(f"Buy order {split.buy_order_uuid} not found (likely mock restart). Resetting split {split.id}.")
+                split.buy_order_uuid = None
+                split.status = "PENDING_BUY"
+                self.save_state()
+            else:
+                logging.error(f"Error checking buy order {split.buy_order_uuid}: {e}")
 
     def _create_sell_order(self, split: SplitState):
         """Create sell order after buy is filled."""
@@ -258,6 +349,24 @@ class SevenSplitStrategy:
                 net_profit = sell_total - buy_total - total_fee
                 profit_rate = (net_profit / buy_total) * 100
 
+                # Save to database
+                trade_data = {
+                    "split_id": split.id,
+                    "buy_price": split.actual_buy_price,
+                    "sell_price": actual_sell_price,
+                    "coin_volume": split.buy_volume,
+                    "buy_amount": buy_total,
+                    "sell_amount": sell_total,
+                    "gross_profit": sell_total - buy_total,
+                    "total_fee": total_fee,
+                    "net_profit": net_profit,
+                    "profit_rate": profit_rate,
+                    "buy_order_id": split.buy_order_uuid,
+                    "sell_order_id": split.sell_order_uuid
+                }
+                self.db.add_trade(self.ticker, trade_data)
+
+                # Also keep in memory for quick access (limit to 50)
                 self.trade_history.insert(0, {
                     "split_id": split.id,
                     "buy_price": split.actual_buy_price,
@@ -282,7 +391,17 @@ class SevenSplitStrategy:
                 logging.info(f"Sell order filled for split {split.id} at {actual_sell_price}. Net Profit: {net_profit} KRW ({profit_rate:.2f}%) after fees: {total_fee} KRW")
                 self.save_state()
         except Exception as e:
-            logging.error(f"Error checking sell order {split.sell_order_uuid}: {e}")
+            # Handle 404 or "Order not found"
+            error_msg = str(e)
+            if "404" in error_msg or "Order not found" in error_msg:
+                logging.warning(f"Sell order {split.sell_order_uuid} not found (likely mock restart). Resetting split {split.id} to PENDING_BUY.")
+                split.sell_order_uuid = None
+                split.status = "PENDING_BUY"
+                # Also reset buy info since we are restarting the cycle
+                split.buy_order_uuid = None
+                self.save_state()
+            else:
+                logging.error(f"Error checking sell order {split.sell_order_uuid}: {e}")
 
     def _check_create_new_buy_split(self, current_price: float):
         """Check if we should create a new buy split based on price drop and rebuy strategy."""
@@ -313,8 +432,9 @@ class SevenSplitStrategy:
 
                 next_buy_price = reference_price * (1 - self.config.buy_rate)
                 if current_price <= next_buy_price:
-                    logging.info(f"Price dropped to {current_price}, creating new buy split at {next_buy_price}")
-                    self._create_buy_split(next_buy_price)
+                    # Buy at current price (not at next_buy_price)
+                    logging.info(f"Price dropped to {current_price} (trigger: {next_buy_price}), creating buy split at current price")
+                    self._create_buy_split(current_price)
                 return
             # Strategy 3: "last_buy_price" - continue with existing logic below
 
@@ -325,23 +445,48 @@ class SevenSplitStrategy:
             self._create_buy_split(current_price)
             return
 
-        # Calculate the next buy trigger price
-        next_buy_price = self.last_buy_price * (1 - self.config.buy_rate)
-        logging.debug(f"Current price: {current_price}, Last buy: {self.last_buy_price}, Next buy trigger: {next_buy_price}")
-
-        # Check if current price has dropped enough and we don't already have a pending buy at this level
-        if current_price <= next_buy_price:
-            # Check if there's already a pending buy near this price
+        # Calculate how many buy levels we've crossed
+        # Count the number of levels crossed, then buy that many splits at current price
+        reference_price = self.last_buy_price
+        levels_crossed = 0
+        temp_price = reference_price
+        
+        while True:
+            next_level = temp_price * (1 - self.config.buy_rate)
+            
+            # If current price is still above the next level, we're done
+            if current_price > next_level:
+                break
+            
+            levels_crossed += 1
+            temp_price = next_level
+            
+            # Safety limit: don't create too many splits at once
+            if levels_crossed >= 10:
+                logging.warning(f"Price drop too severe. Limiting to 10 buy splits.")
+                break
+        
+        # Create multiple buy orders at current price
+        if levels_crossed > 0:
+            # Check if we already have a pending buy at current price
             has_pending_buy = any(
-                s.status == "PENDING_BUY" and abs(s.buy_price - next_buy_price) / next_buy_price < 0.001
+                s.status == "PENDING_BUY" and abs(s.buy_price - current_price) / current_price < 0.001
                 for s in self.splits
             )
-
-            if not has_pending_buy:
-                logging.info(f"Price dropped to {current_price}, creating new buy split at {next_buy_price}")
-                self._create_buy_split(next_buy_price)
-            else:
-                logging.debug(f"Already have pending buy near {next_buy_price}, skipping")
+            
+            if has_pending_buy:
+                logging.debug(f"Already have pending buy near {current_price}, skipping")
+                return
+            
+            logging.info(f"Price dropped from {reference_price} to {current_price}, crossed {levels_crossed} levels. Creating {levels_crossed} buy splits at {current_price}")
+            
+            for i in range(levels_crossed):
+                split = self._create_buy_split(current_price)
+                if not split:
+                    # Failed to create split (e.g., insufficient balance), stop creating more
+                    logging.warning(f"Failed to create buy split {i+1}/{levels_crossed} at {current_price}, stopping")
+                    break
+                logging.info(f"Created buy split {i+1}/{levels_crossed} at {current_price}")
 
     def get_state(self):
         current_price = self.exchange.get_current_price(self.ticker)

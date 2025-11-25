@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import axios from 'axios';
 import SplitCard from './SplitCard';
 import Config from './Config';
@@ -8,15 +8,21 @@ const Dashboard = () => {
     const [portfolio, setPortfolio] = useState(null);
     const [loading, setLoading] = useState(true);
     const [selectedTicker, setSelectedTicker] = useState("KRW-BTC");
-    const [isPriceHeld, setIsPriceHeld] = useState(false);
-    const [manualPrice, setManualPrice] = useState("");
     const [showApiModal, setShowApiModal] = useState(false);
     const [apiKeys, setApiKeys] = useState({ accessKey: '', secretKey: '' });
     const tickers = ["KRW-BTC", "KRW-ETH", "KRW-SOL"];
 
+    const selectedTickerRef = useRef(selectedTicker);
+
+    // Keep ref in sync with state
+    useEffect(() => {
+        selectedTickerRef.current = selectedTicker;
+    }, [selectedTicker]);
+
     const fetchStatus = async () => {
         try {
-            const response = await axios.get(`http://127.0.0.1:8000/status?ticker=${selectedTicker}`);
+            const currentTicker = selectedTickerRef.current;
+            const response = await axios.get(`http://127.0.0.1:8000/status?ticker=${currentTicker}`);
             setStatus(response.data);
             setLoading(false);
         } catch (error) {
@@ -34,28 +40,99 @@ const Dashboard = () => {
         }
     };
 
+    const wsRef = useRef(null);
+
     useEffect(() => {
-        // Initial fetch
+        // Initial fetch as fallback
         fetchStatus();
         fetchPortfolio();
 
-        // Check hold status on mount and ticker change
-        const checkHoldStatus = async () => {
-            try {
-                const response = await axios.get(`http://127.0.0.1:8000/price-hold-status?ticker=${selectedTicker}`);
-                setIsPriceHeld(response.data.is_held);
-            } catch (error) {
-                console.error('Error checking price hold status:', error);
+        // Set up websocket connection for live updates
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+        const wsHost = `${window.location.hostname}:8000`;
+        let retryTimer;
+        let fallbackTimer;
+
+        const startFallback = () => {
+            if (fallbackTimer) return;
+            fallbackTimer = setInterval(() => {
+                fetchStatus();
+                fetchPortfolio();
+            }, 2000);
+        };
+
+        const stopFallback = () => {
+            if (fallbackTimer) {
+                clearInterval(fallbackTimer);
+                fallbackTimer = null;
             }
         };
-        checkHoldStatus();
 
-        const interval = setInterval(() => {
-            fetchStatus();
-            fetchPortfolio();
-        }, 1000);
-        return () => clearInterval(interval);
-    }, [selectedTicker]); // Re-fetch when ticker changes
+        const connect = () => {
+            try {
+                const ws = new WebSocket(`${wsProtocol}://${wsHost}/ws`);
+                wsRef.current = ws;
+
+                ws.onopen = () => {
+                    console.log('WS connected');
+                    stopFallback();
+                    if (retryTimer) {
+                        clearTimeout(retryTimer);
+                    }
+                };
+
+                ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        if (data?.tickers) {
+                            // Use ref to get the current selected ticker
+                            const currentTicker = selectedTickerRef.current;
+                            if (data.tickers[currentTicker]) {
+                                setStatus(data.tickers[currentTicker]);
+                                setLoading(false);
+                            }
+                        }
+                        if (data?.portfolio) {
+                            setPortfolio(data.portfolio);
+                        }
+                    } catch (err) {
+                        console.error('WS parse error', err);
+                    }
+                };
+
+                ws.onclose = () => {
+                    console.log('WS disconnected, retrying...');
+                    startFallback();
+                    retryTimer = setTimeout(connect, 2000);
+                };
+
+                ws.onerror = () => {
+                    startFallback();
+                };
+            } catch (err) {
+                console.error('WS init error', err);
+                startFallback();
+                retryTimer = setTimeout(connect, 2000);
+            }
+        };
+
+        connect();
+
+        return () => {
+            if (wsRef.current) {
+                wsRef.current.close();
+            }
+            stopFallback();
+            if (retryTimer) {
+                clearTimeout(retryTimer);
+            }
+        };
+    }, []);
+
+    // When ticker changes, fetch the new ticker's status
+    useEffect(() => {
+        fetchStatus();
+    }, [selectedTicker]);
 
     const handleStart = async () => {
         try {
@@ -76,48 +153,15 @@ const Dashboard = () => {
     };
 
     const handleReset = async () => {
-        if (!window.confirm('Are you sure you want to reset? This will delete all splits and restart.')) {
+        if (!window.confirm(`Are you sure you want to reset ${selectedTicker}? This will cancel all orders and delete all splits for this ticker.`)) {
             return;
         }
         try {
-            await axios.post('http://127.0.0.1:8000/reset');
-            setIsPriceHeld(false);
-            setManualPrice("");
+            await axios.post('http://127.0.0.1:8000/reset', { ticker: selectedTicker });
             fetchStatus();
+            fetchPortfolio();
         } catch (error) {
             console.error('Error resetting bot:', error);
-        }
-    };
-
-    const handlePriceOverride = async () => {
-        if (!manualPrice || isNaN(parseFloat(manualPrice))) {
-            alert('Please enter a valid price');
-            return;
-        }
-        try {
-            await axios.post('http://127.0.0.1:8000/override-price', {
-                ticker: selectedTicker,
-                price: parseFloat(manualPrice.replace(/,/g, ''))
-            });
-            fetchStatus();
-        } catch (error) {
-            console.error('Error overriding price:', error);
-        }
-    };
-
-    const togglePriceHold = async () => {
-        try {
-            const newHoldState = !isPriceHeld;
-            await axios.post('http://127.0.0.1:8000/toggle-price-hold', {
-                ticker: selectedTicker,
-                hold: newHoldState
-            });
-            setIsPriceHeld(newHoldState);
-            if (newHoldState && status?.current_price) {
-                setManualPrice(status.current_price.toString());
-            }
-        } catch (error) {
-            console.error('Error toggling price hold:', error);
         }
     };
 
@@ -171,35 +215,47 @@ const Dashboard = () => {
     if (!status || !portfolio) return <div>Error loading status</div>;
 
     return (
-        <div className="dashboard-container">
+        <div className="dashboard-container" style={{ position: 'relative' }}>
+            {/* Mode Toggle - Fixed Top Right */}
+            <button
+                onClick={handleModeToggle}
+                style={{
+                    position: 'fixed',
+                    top: '1rem',
+                    right: '1rem',
+                    zIndex: 9999,
+                    backgroundColor: portfolio.mode === "MOCK" ? '#f59e0b' : '#10b981',
+                    color: portfolio.mode === "MOCK" ? '#000' : '#fff',
+                    padding: '0.75rem 1.5rem',
+                    borderRadius: '0.5rem',
+                    fontSize: '0.875rem',
+                    fontWeight: 'bold',
+                    letterSpacing: '0.05em',
+                    border: 'none',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.4)'
+                }}
+                onMouseEnter={(e) => {
+                    e.target.style.opacity = '0.85';
+                    e.target.style.transform = 'translateY(-2px)';
+                }}
+                onMouseLeave={(e) => {
+                    e.target.style.opacity = '1';
+                    e.target.style.transform = 'translateY(0)';
+                }}
+            >
+                {portfolio.mode === "MOCK" ? '🧪 MOCK MODE' : '🔴 REAL MODE'}
+            </button>
+
             {/* Global Portfolio Header */}
             <header className="header" style={{
                 padding: '1.5rem',
                 backgroundColor: 'rgba(15, 23, 42, 0.9)',
                 borderBottom: '2px solid #334155'
             }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                <div style={{ marginBottom: '1rem' }}>
                     <h1 className="logo" style={{ margin: 0, fontSize: '1.75rem' }}>Seven Split Bot</h1>
-                    <button
-                        onClick={handleModeToggle}
-                        style={{
-                            backgroundColor: portfolio.mode === "MOCK" ? '#f59e0b' : '#10b981',
-                            color: portfolio.mode === "MOCK" ? '#000' : '#fff',
-                            padding: '0.5rem 1.25rem',
-                            borderRadius: '0.5rem',
-                            fontSize: '0.875rem',
-                            fontWeight: 'bold',
-                            letterSpacing: '0.05em',
-                            border: 'none',
-                            cursor: 'pointer',
-                            transition: 'all 0.2s',
-                            boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
-                        }}
-                        onMouseEnter={(e) => e.target.style.opacity = '0.85'}
-                        onMouseLeave={(e) => e.target.style.opacity = '1'}
-                    >
-                        {portfolio.mode === "MOCK" ? '🧪 MOCK MODE' : '🔴 REAL MODE'}
-                    </button>
                 </div>
 
                 {/* Overall Portfolio Stats */}
@@ -279,6 +335,7 @@ const Dashboard = () => {
                         </div>
                     </div>
                 </div>
+
             </header>
 
             {/* Ticker Tabs */}
@@ -448,104 +505,39 @@ const Dashboard = () => {
                         </div>
                     </div>
 
-                    {/* Right: Mock Price Control */}
+                    {/* Right: Exchange Link */}
                     {portfolio.mode === "MOCK" && (
                         <div style={{
                             display: 'flex',
                             alignItems: 'center',
                             gap: '0.75rem',
                             padding: '0.85rem 1.25rem',
-                            backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                            backgroundColor: 'rgba(139, 92, 246, 0.1)',
                             borderRadius: '0.5rem',
-                            border: '1px solid rgba(245, 158, 11, 0.35)',
-                            flex: '1',
-                            maxWidth: '650px'
+                            border: '1px solid rgba(139, 92, 246, 0.35)'
                         }}>
-                            <button
-                                className={`btn ${isPriceHeld ? 'btn-danger' : 'btn-secondary'}`}
-                                onClick={togglePriceHold}
+                            <span style={{ fontSize: '0.9rem', color: '#94a3b8' }}>
+                                Manage prices at:
+                            </span>
+                            <a
+                                href="http://localhost:5001"
+                                target="_blank"
+                                rel="noopener noreferrer"
                                 style={{
-                                    fontSize: '0.875rem',
-                                    padding: '0.6rem 1.1rem',
-                                    minWidth: '85px'
+                                    padding: '0.6rem 1.25rem',
+                                    backgroundColor: '#8b5cf6',
+                                    color: 'white',
+                                    borderRadius: '0.375rem',
+                                    textDecoration: 'none',
+                                    fontWeight: '600',
+                                    fontSize: '0.9rem',
+                                    transition: 'all 0.2s'
                                 }}
+                                onMouseEnter={(e) => e.target.style.backgroundColor = '#7c3aed'}
+                                onMouseLeave={(e) => e.target.style.backgroundColor = '#8b5cf6'}
                             >
-                                {isPriceHeld ? '🔒 Held' : '▶️ Live'}
-                            </button>
-
-                            {isPriceHeld && (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                                    <button
-                                        onClick={() => {
-                                            const currentPrice = parseFloat(manualPrice.replace(/,/g, '')) || status.current_price;
-                                            const buyRate = status.config.buy_rate || 0.01;
-                                            const newPrice = Math.round(currentPrice * (1 - buyRate));
-                                            setManualPrice(newPrice.toString());
-                                        }}
-                                        style={{
-                                            padding: '0.6rem 0.85rem',
-                                            fontSize: '1.05rem',
-                                            backgroundColor: '#ef4444',
-                                            color: 'white',
-                                            border: 'none',
-                                            borderRadius: '0.375rem',
-                                            cursor: 'pointer',
-                                            fontWeight: 'bold'
-                                        }}
-                                        title="Decrease by buy rate"
-                                    >
-                                        ▼
-                                    </button>
-                                    <input
-                                        type="text"
-                                        value={manualPrice}
-                                        onChange={(e) => setManualPrice(e.target.value)}
-                                        placeholder="Enter price"
-                                        style={{
-                                            padding: '0.6rem 0.85rem',
-                                            borderRadius: '0.375rem',
-                                            border: '1px solid #475569',
-                                            backgroundColor: '#1e293b',
-                                            color: 'white',
-                                            width: '170px',
-                                            textAlign: 'center',
-                                            fontSize: '0.95rem'
-                                        }}
-                                    />
-                                    <button
-                                        onClick={() => {
-                                            const currentPrice = parseFloat(manualPrice.replace(/,/g, '')) || status.current_price;
-                                            const sellRate = status.config.sell_rate || 0.01;
-                                            const newPrice = Math.round(currentPrice * (1 + sellRate));
-                                            setManualPrice(newPrice.toString());
-                                        }}
-                                        style={{
-                                            padding: '0.6rem 0.85rem',
-                                            fontSize: '1.05rem',
-                                            backgroundColor: '#10b981',
-                                            color: 'white',
-                                            border: 'none',
-                                            borderRadius: '0.375rem',
-                                            cursor: 'pointer',
-                                            fontWeight: 'bold'
-                                        }}
-                                        title="Increase by sell rate"
-                                    >
-                                        ▲
-                                    </button>
-                                    <button
-                                        className="btn btn-primary"
-                                        onClick={handlePriceOverride}
-                                        style={{
-                                            fontSize: '0.875rem',
-                                            padding: '0.6rem 1.1rem',
-                                            minWidth: '95px'
-                                        }}
-                                    >
-                                        Set Price
-                                    </button>
-                                </div>
-                            )}
+                                🏦 Exchange UI
+                            </a>
                         </div>
                     )}
                 </div>
@@ -553,7 +545,12 @@ const Dashboard = () => {
 
             <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: '2rem' }}>
                 <div>
-                    <Config config={status.config} onUpdate={fetchStatus} selectedTicker={selectedTicker} />
+                    <Config
+                        config={status.config}
+                        onUpdate={fetchStatus}
+                        selectedTicker={selectedTicker}
+                        currentPrice={status.current_price}
+                    />
                 </div>
 
                 <div>

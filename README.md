@@ -1,6 +1,8 @@
-# SevenSplit - 자동 분할 매매 봇
+# SevenSplit - Automated Grid Trading Bot
 
 업비트에서 동작하는 자동 분할 매매 봇입니다.
+
+> An intelligent cryptocurrency trading bot with grid trading strategy for Upbit exchange.
 
 ## 주요 기능
 
@@ -36,31 +38,43 @@ UPBIT_ACCESS_KEY=your_access_key_here
 UPBIT_SECRET_KEY=your_secret_key_here
 ```
 
-## 실행 방법
+## 🚀 빠른 시작 / Quick Start
 
-### 개발 모드 (자동 재시작)
+### 의존성 설치 / Install Dependencies
 
-Frontend와 Backend를 동시에 실행:
+```bash
+# Python 패키지 설치
+pip install -r requirements.txt
 
+# Frontend 패키지 설치
+cd frontend && npm install && cd ..
+```
+
+### 실행 방법 / Running
+
+**전체 시스템 시작 / Start All Services:**
 ```bash
 ./run-dev.sh
 ```
 
-개별 실행:
-
+**개별 실행 / Individual Services:**
 ```bash
-# Backend만 실행 (자동 재시작)
-./run-backend.sh
-
-# Frontend만 실행 (HMR)
-./run-frontend.sh
+./run-exchange.sh      # 가상 거래소 서버 / Mock Exchange (Port 5001)
+./run-trading-bot.sh   # 트레이딩봇 백엔드 / Trading Bot Backend (Port 8000)
+./run-frontend.sh      # 봇 모니터링 UI / Bot Dashboard (Port 5173)
 ```
 
-### 접속 URL
+### 접속 URL / Access
 
-- **Frontend**: http://localhost:5173
-- **Backend API**: http://localhost:8000
-- **API 문서**: http://localhost:8000/docs
+- 🏦 **거래소 관리 / Exchange Control**: http://localhost:5001
+- 🤖 **봇 API / Bot API**: http://localhost:8000
+- 📊 **봇 대시보드 / Dashboard**: http://localhost:5173
+- 📖 **API 문서 / API Docs**: http://localhost:8000/docs
+
+## 📚 문서 / Documentation
+
+- [설치 가이드 / Setup Guide](SETUP.md) - 상세 설치 및 문제 해결
+- [아키텍처 / Architecture](ARCHITECTURE.md) - 시스템 구조 및 구성요소
 
 ## 전략 설정
 

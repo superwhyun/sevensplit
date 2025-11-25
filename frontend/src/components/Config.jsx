@@ -1,16 +1,20 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 
-const Config = ({ config, onUpdate, selectedTicker }) => {
+const Config = ({ config, onUpdate, selectedTicker, currentPrice }) => {
     const [formData, setFormData] = useState(config);
     const [isEditing, setIsEditing] = useState(false);
 
-    // Update form data when config prop changes, BUT ONLY if not editing
+    const lastTickerRef = React.useRef(selectedTicker);
+
+    // Update form data when config changes, BUT ONLY if not editing
+    // Note: Min/Max prices are now fixed once set - they don't auto-update with current price
     React.useEffect(() => {
         if (!isEditing) {
-            setFormData(config);
+            setFormData({ ...config });
+            lastTickerRef.current = selectedTicker;
         }
-    }, [config, isEditing]);
+    }, [config, isEditing, selectedTicker]);
 
     // Helper to format number with commas
     const formatNumber = (num) => {
@@ -105,7 +109,7 @@ const Config = ({ config, onUpdate, selectedTicker }) => {
                         type="number"
                         step="0.001"
                         name="buy_rate"
-                        value={formData.buy_rate || 0.01}
+                        value={formData.buy_rate ?? 0.005}
                         onChange={(e) => {
                             setIsEditing(true);
                             setFormData(prev => ({
@@ -113,10 +117,10 @@ const Config = ({ config, onUpdate, selectedTicker }) => {
                                 buy_rate: parseFloat(e.target.value)
                             }));
                         }}
-                        placeholder="e.g. 0.01 = 1%"
+                        placeholder="e.g. 0.005 = 0.5%"
                     />
                     <small style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
-                        {((formData.buy_rate || 0.01) * 100).toFixed(2)}% price drop triggers next buy
+                        {((formData.buy_rate ?? 0.005) * 100).toFixed(2)}% price drop triggers next buy
                     </small>
                 </div>
 
@@ -126,7 +130,7 @@ const Config = ({ config, onUpdate, selectedTicker }) => {
                         type="number"
                         step="0.001"
                         name="sell_rate"
-                        value={formData.sell_rate || 0.01}
+                        value={formData.sell_rate ?? 0.005}
                         onChange={(e) => {
                             setIsEditing(true);
                             setFormData(prev => ({
@@ -134,10 +138,32 @@ const Config = ({ config, onUpdate, selectedTicker }) => {
                                 sell_rate: parseFloat(e.target.value)
                             }));
                         }}
-                        placeholder="e.g. 0.01 = 1%"
+                        placeholder="e.g. 0.005 = 0.5%"
                     />
                     <small style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
-                        {((formData.sell_rate || 0.01) * 100).toFixed(2)}% profit triggers sell
+                        {((formData.sell_rate ?? 0.005) * 100).toFixed(2)}% profit triggers sell
+                    </small>
+                </div>
+
+                <div className="input-group">
+                    <label>Tick Interval (seconds)</label>
+                    <input
+                        type="number"
+                        step="0.1"
+                        min="0.1"
+                        name="tick_interval"
+                        value={formData.tick_interval ?? 1.0}
+                        onChange={(e) => {
+                            setIsEditing(true);
+                            setFormData(prev => ({
+                                ...prev,
+                                tick_interval: parseFloat(e.target.value)
+                            }));
+                        }}
+                        placeholder="e.g. 1.0"
+                    />
+                    <small style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
+                        How often the bot checks prices (default: 1 second)
                     </small>
                 </div>
 

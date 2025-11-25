@@ -1,20 +1,24 @@
 import os
 import pyupbit
-from fastapi import FastAPI, HTTPException
+import asyncio
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from pydantic import BaseModel
-from exchange import UpbitExchange, MockExchange
+from exchange import UpbitExchange
 from strategy import SevenSplitStrategy, StrategyConfig
 import threading
 import time
 import glob
 import logging
+from typing import Dict, Any
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-load_dotenv()
+# Load environment from backend/.env explicitly to ensure correct config even when run from repo root
+BACKEND_DIR = os.path.dirname(__file__)
+load_dotenv(os.path.join(BACKEND_DIR, ".env"))
 
 app = FastAPI(title="Seven Split Bitcoin Bot")
 
@@ -28,65 +32,96 @@ app.add_middleware(
 )
 
 # Initialize Exchange and Strategy
-access_key = os.getenv("UPBIT_ACCESS_KEY")
-secret_key = os.getenv("UPBIT_SECRET_KEY")
+from database import get_db
 
-if access_key and secret_key:
-    exchange = UpbitExchange(access_key, secret_key)
-    print("Using Real Upbit Exchange")
+# Initialize DB handle (still used elsewhere)
+db = get_db()
+
+# Check for .env file
+env_access_key = os.getenv("UPBIT_ACCESS_KEY")
+env_secret_key = os.getenv("UPBIT_SECRET_KEY")
+server_url = os.getenv("UPBIT_OPEN_API_SERVER_URL", "https://api.upbit.com")
+env_mode = os.getenv("MODE", "").upper()
+current_mode = env_mode if env_mode else ("REAL" if env_access_key and env_secret_key else "MOCK")
+
+# MODE in .env takes highest priority
+if env_mode == "MOCK":
+    # In mock mode, always talk to the server at UPBIT_OPEN_API_SERVER_URL (e.g., 5001 mock)
+    access_key = env_access_key or "mock_access_key"
+    secret_key = env_secret_key or "mock_secret_key"
+    exchange = UpbitExchange(access_key, secret_key, server_url=server_url)
+    current_mode = "MOCK"
+    print(f"Using Mock Exchange via API (forced by MODE=mock) URL: {server_url}")
+elif env_mode == "REAL":
+    # Force REAL; require keys from env
+    access_key = env_access_key
+    secret_key = env_secret_key
+    exchange = UpbitExchange(access_key, secret_key, server_url=server_url)
+    current_mode = "REAL"
+    print(f"Using Upbit Exchange (forced by MODE=real) URL: {server_url}")
 else:
-    exchange = MockExchange()
-    print("Using Mock Exchange")
+    # Priority: .env settings first (always use the URL from .env), otherwise UpbitExchange with mock creds
+    if env_access_key and env_secret_key:
+        exchange = UpbitExchange(env_access_key, env_secret_key, server_url=server_url)
+        current_mode = "REAL"
+        print(f"Using Upbit Exchange from .env (URL: {server_url})")
+    else:
+        exchange = UpbitExchange("mock_access_key", "mock_secret_key", server_url=server_url)
+        current_mode = "MOCK"
+        print(f"Using Upbit Exchange with default mock creds (URL: {server_url})")
 
 TICKERS = ["KRW-BTC", "KRW-ETH", "KRW-SOL"]
 strategies = {ticker: SevenSplitStrategy(exchange, ticker) for ticker in TICKERS}
 
+# --- WebSocket connection registry ---
+ws_connections = set()
+
 # Background thread for strategy tick
 def run_strategies():
+    # Track last tick time for each ticker
+    last_tick_time = {ticker: 0.0 for ticker in strategies.keys()}
+    
     while True:
         try:
-            # Batch fetch prices for all tickers
-            tickers = list(strategies.keys())
-            if tickers:
-                # For mock exchange, check if any ticker is held
-                # If held, use the held price instead of fetching live
+            current_time = time.time()
+            
+            # Determine which tickers need to be ticked based on their tick_interval
+            tickers_to_tick = []
+            for ticker, strategy in strategies.items():
+                if strategy.is_running:
+                    tick_interval = strategy.config.tick_interval
+                    if current_time - last_tick_time[ticker] >= tick_interval:
+                        tickers_to_tick.append(ticker)
+            
+            if tickers_to_tick:
+                # Batch fetch prices for tickers that need ticking
                 prices = {}
-
-                if isinstance(exchange, MockExchange):
-                    for ticker in tickers:
-                        if exchange.is_price_held(ticker):
-                            # Use held price
-                            prices[ticker] = exchange.get_current_price(ticker)
-                        else:
-                            # Fetch live price
-                            try:
-                                live_price = pyupbit.get_current_price(ticker)
-                                if live_price:
-                                    prices[ticker] = live_price
-                                    # Update exchange cache
-                                    exchange.price[ticker] = live_price
-                            except Exception as e:
-                                logging.error(f"Failed to fetch price for {ticker}: {e}")
+                
+                # Use exchange's get_current_prices method if available
+                if hasattr(exchange, "get_current_prices"):
+                    prices = exchange.get_current_prices(tickers_to_tick)
                 else:
-                    # Real exchange: fetch all prices at once
-                    fetched_prices = pyupbit.get_current_price(tickers)
+                    # Fallback to individual price fetches
+                    for ticker in tickers_to_tick:
+                        try:
+                            price = exchange.get_current_price(ticker)
+                            if price:
+                                prices[ticker] = price
+                        except Exception as e:
+                            logging.error(f"Failed to fetch price for {ticker}: {e}")
 
-                    # Normalize to dict if single float returned
-                    if isinstance(fetched_prices, (int, float)):
-                        prices = {tickers[0]: fetched_prices}
-                    elif fetched_prices is None:
-                        prices = {}
-                    else:
-                        prices = fetched_prices
-
-                for ticker, strategy in strategies.items():
-                    if strategy.is_running:
-                        price = prices.get(ticker)
-                        if price:
-                            strategy.tick(current_price=price)
+                # Tick strategies
+                for ticker in tickers_to_tick:
+                    price = prices.get(ticker)
+                    if price:
+                        strategies[ticker].tick(current_price=price)
+                        last_tick_time[ticker] = current_time
+                        
         except Exception as e:
-            print(f"Error in strategy loop: {e}")
-        time.sleep(1) # Tick every 1 second
+            logging.error(f"Error in strategy loop: {e}")
+        
+        # Sleep for a short interval to avoid busy waiting
+        time.sleep(0.1)
 
 thread = threading.Thread(target=run_strategies, daemon=True)
 thread.start()
@@ -99,9 +134,10 @@ def read_root():
 def get_status(ticker: str = "KRW-BTC"):
     if ticker not in strategies:
         raise HTTPException(status_code=404, detail="Ticker not found")
-    
+
     state = strategies[ticker].get_state()
-    state["mode"] = "REAL" if isinstance(exchange, UpbitExchange) else "MOCK"
+    # Mode flag
+    state["mode"] = current_mode
     
     # Add Wallet Info
     state["balance_krw"] = exchange.get_balance("KRW")
@@ -116,6 +152,26 @@ def get_status(ticker: str = "KRW-BTC"):
         state["total_asset_value"] = state["balance_krw"]
 
     return state
+
+
+def get_full_snapshot() -> Dict[str, Any]:
+    """Aggregate all tickers' status plus portfolio for websocket push."""
+    snapshot = {"tickers": {}, "portfolio": get_portfolio()}
+    for ticker in TICKERS:
+        try:
+            snapshot["tickers"][ticker] = get_status(ticker)
+        except Exception as e:
+            logging.error(f"Snapshot error for {ticker}: {e}")
+    return snapshot
+
+@app.get("/accounts")
+def get_accounts():
+    """Expose detailed exchange account info for dashboard or debugging."""
+    try:
+        return exchange.get_accounts()
+    except Exception as e:
+        logging.error(f"Failed to fetch accounts: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch accounts")
 
 class CommandRequest(BaseModel):
     ticker: str = "KRW-BTC"
@@ -146,116 +202,172 @@ def update_config(req: ConfigRequest):
     return {"status": "config updated", "ticker": req.ticker, "config": req.config}
 
 @app.post("/reset")
-def reset_mock():
-    global exchange, strategies
+def reset_strategy(cmd: CommandRequest):
+    """Reset a specific ticker's strategy"""
+    ticker = cmd.ticker
 
-    # Helper to reset mock state for testing
-    if isinstance(exchange, MockExchange):
-        # Stop all strategies first
-        for ticker in TICKERS:
-            try:
-                if strategies[ticker].is_running:
-                    strategies[ticker].stop()
-            except Exception as e:
-                print(f"Error stopping strategy for {ticker}: {e}")
+    if ticker not in strategies:
+        raise HTTPException(status_code=404, detail="Ticker not found")
 
-        # Delete all state files in backend directory
-        backend_dir = os.path.dirname(os.path.abspath(__file__))
-        state_files = glob.glob(os.path.join(backend_dir, "state_*.json"))
-        deleted_files = []
-        for file in state_files:
-            try:
-                os.remove(file)
-                deleted_files.append(file)
-                print(f"Deleted {file}")
-            except Exception as e:
-                print(f"Failed to delete {file}: {e}")
+    try:
+        # Stop the strategy if running
+        if strategies[ticker].is_running:
+            strategies[ticker].stop()
 
-        # Completely reinitialize exchange
-        exchange = MockExchange()
+        # Cancel all pending orders for this ticker
+        strategy = strategies[ticker]
+        for split in strategy.splits:
+            if split.buy_order_uuid:
+                try:
+                    exchange.cancel_order(split.buy_order_uuid)
+                except Exception as e:
+                    logging.error(f"Failed to cancel buy order {split.buy_order_uuid}: {e}")
+            if split.sell_order_uuid:
+                try:
+                    exchange.cancel_order(split.sell_order_uuid)
+                except Exception as e:
+                    logging.error(f"Failed to cancel sell order {split.sell_order_uuid}: {e}")
 
-        # Recreate all strategies
-        strategies = {}
-        for ticker in TICKERS:
-            strategies[ticker] = SevenSplitStrategy(exchange, ticker)
-            print(f"Recreated strategy for {ticker}")
+        # Clear splits and trades from database
+        db.delete_all_splits(ticker)
+        db.delete_all_trades(ticker)
 
-        return {"status": "mock reset", "deleted_files": deleted_files}
-    return {"status": "not a mock exchange"}
+        # Recreate the strategy for this ticker only
+        strategies[ticker] = SevenSplitStrategy(exchange, ticker)
+        logging.info(f"Reset strategy for {ticker}")
 
-class PriceOverrideRequest(BaseModel):
-    ticker: str
-    price: float
+        return {"status": "success", "ticker": ticker, "message": f"Strategy reset for {ticker}"}
+    except Exception as e:
+        logging.error(f"Failed to reset strategy for {ticker}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to reset: {str(e)}")
 
-@app.post("/override-price")
-def override_price(req: PriceOverrideRequest):
-    if not isinstance(exchange, MockExchange):
-        raise HTTPException(status_code=400, detail="Only available in mock mode")
+@app.post("/reset-all")
+def reset_all_mock():
+    """Reset all strategies and exchange (MOCK mode only)"""
+    global exchange, strategies, current_mode
 
-    print(f"Setting price for {req.ticker} to {req.price}")
-    exchange.set_mock_price(req.ticker, req.price)
+    # Only allow reset in MOCK mode
+    if current_mode != "MOCK":
+        return {"status": "not a mock exchange"}
 
-    # Verify the price was set
-    current = exchange.get_current_price(req.ticker)
-    print(f"Current price for {req.ticker} is now: {current}")
+    # Stop all strategies first
+    for ticker in TICKERS:
+        try:
+            if strategies[ticker].is_running:
+                strategies[ticker].stop()
+        except Exception as e:
+            print(f"Error stopping strategy for {ticker}: {e}")
 
-    return {"status": "price overridden", "ticker": req.ticker, "price": req.price, "current_price": current}
+    # Reset database
+    from database import get_db
+    db_local = get_db()
+    db_local.reset_all_data()
+    print("Database reset complete")
 
-class PriceHoldRequest(BaseModel):
-    ticker: str
-    hold: bool
+    # Reinitialize exchange pointing to mock server
+    access_key = env_access_key or "mock_access_key"
+    secret_key = env_secret_key or "mock_secret_key"
+    exchange = UpbitExchange(access_key, secret_key, server_url=server_url)
 
-@app.post("/toggle-price-hold")
-def toggle_price_hold(req: PriceHoldRequest):
-    if not isinstance(exchange, MockExchange):
-        raise HTTPException(status_code=400, detail="Only available in mock mode")
+    # Recreate all strategies
+    strategies = {}
+    for ticker in TICKERS:
+        strategies[ticker] = SevenSplitStrategy(exchange, ticker)
+        print(f"Recreated strategy for {ticker}")
 
-    print(f"Toggling price hold for {req.ticker} to {req.hold}")
-    exchange.hold_price(req.ticker, req.hold)
-    is_held = exchange.is_price_held(req.ticker)
-    print(f"Price hold for {req.ticker} is now: {is_held}")
-
-    return {"status": "price hold toggled", "ticker": req.ticker, "hold": req.hold, "is_held": is_held}
-
-@app.get("/price-hold-status")
-def get_price_hold_status(ticker: str = "KRW-BTC"):
-    if not isinstance(exchange, MockExchange):
-        return {"is_held": False}
-
-    is_held = exchange.is_price_held(ticker)
-    return {"ticker": ticker, "is_held": is_held}
+    return {"status": "mock reset", "message": "All strategies and database reset"}
 
 @app.get("/portfolio")
 def get_portfolio():
     """Get overall portfolio status across all tickers"""
     portfolio = {
-        "mode": "REAL" if isinstance(exchange, UpbitExchange) else "MOCK",
-        "balance_krw": exchange.get_balance("KRW"),
-        "coins": {}
+        "mode": current_mode,
+        "coins": {},
+        "accounts": []
     }
 
-    total_value = portfolio["balance_krw"]
+    accounts = exchange.get_accounts() if hasattr(exchange, "get_accounts") else []
+    # Normalize numeric fields in accounts to avoid stringy zeros
+    normalized_accounts = []
+    for acc in accounts:
+        if not isinstance(acc, dict):
+            continue
+        normalized_accounts.append({
+            **acc,
+            "balance": float(acc.get("balance", 0.0) or 0.0),
+            "locked": float(acc.get("locked", 0.0) or 0.0),
+            "avg_buy_price": float(acc.get("avg_buy_price", 0.0) or 0.0),
+            "current_price": float(acc.get("current_price", 0.0) or 0.0),
+            "balance_value": float(acc.get("balance_value", 0.0) or 0.0),
+            "total_balance": float(acc.get("total_balance", 0.0) or 0.0),
+        })
+
+    accounts = normalized_accounts
+    portfolio["accounts"] = accounts
+
+    # Seed KRW balance
+    balance_krw = 0.0
+    for acc in accounts:
+        if acc.get("currency") == "KRW":
+            balance_krw = float(acc.get("total_balance", acc.get("balance", 0.0)))
+            break
+    portfolio["balance_krw"] = balance_krw
+
+    total_value = 0.0
     initial_balance = 10000000  # Initial mock balance, adjust as needed
 
-    for ticker in TICKERS:
-        coin = ticker.split("-")[1]
-        balance_coin = exchange.get_balance(ticker)
-        current_price = exchange.get_current_price(ticker)
-        coin_value = balance_coin * current_price if current_price else 0
+    for acc in accounts:
+        currency = acc.get("currency")
+        ticker = acc.get("ticker")
+        if currency == "KRW":
+            total_value += balance_krw
+            continue
+
+        if not ticker:
+            ticker = f"KRW-{currency}"
+        coin = currency
+        current_price = float(acc.get("current_price", 0.0) or 0.0)
+        balance_val = float(acc.get("balance_value", 0.0) or 0.0)
+        available = float(acc.get("balance", 0.0) or 0.0)
+        locked = float(acc.get("locked", 0.0) or 0.0)
+        total_balance = float(acc.get("total_balance", available + locked))
 
         portfolio["coins"][coin] = {
             "ticker": ticker,
-            "balance": balance_coin,
+            "balance": total_balance,
+            "available": available,
+            "locked": locked,
             "current_price": current_price,
-            "value": coin_value
+            "value": balance_val,
+            "avg_buy_price": float(acc.get("avg_buy_price", 0.0) or 0.0)
         }
-        total_value += coin_value
+        total_value += balance_val
 
     portfolio["total_value"] = total_value
     portfolio["total_profit_amount"] = total_value - initial_balance
     portfolio["total_profit_rate"] = ((total_value - initial_balance) / initial_balance * 100) if initial_balance > 0 else 0
 
     return portfolio
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    ws_connections.add(websocket)
+    try:
+        # Send initial snapshot immediately
+        await websocket.send_json(get_full_snapshot())
+
+        while True:
+            # Simple heartbeat / polling loop
+            await websocket.send_json(get_full_snapshot())
+            await asyncio.sleep(1)
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logging.error(f"WebSocket error: {e}")
+    finally:
+        ws_connections.discard(websocket)
 
 class SetApiKeysRequest(BaseModel):
     access_key: str
@@ -264,7 +376,7 @@ class SetApiKeysRequest(BaseModel):
 @app.post("/set-api-keys")
 def set_api_keys(req: SetApiKeysRequest):
     """Switch to Real mode with provided API keys"""
-    global exchange, strategies
+    global exchange, strategies, current_mode
 
     try:
         # Stop all running strategies
@@ -274,6 +386,7 @@ def set_api_keys(req: SetApiKeysRequest):
 
         # Create new UpbitExchange with provided keys
         exchange = UpbitExchange(req.access_key, req.secret_key)
+        current_mode = "REAL"
 
         # Recreate strategies with new exchange
         strategies = {}
@@ -289,7 +402,7 @@ def set_api_keys(req: SetApiKeysRequest):
 @app.post("/switch-to-mock")
 def switch_to_mock():
     """Switch back to Mock mode"""
-    global exchange, strategies
+    global exchange, strategies, current_mode
 
     try:
         # Stop all running strategies
@@ -297,8 +410,11 @@ def switch_to_mock():
             if ticker in strategies and strategies[ticker].is_running:
                 strategies[ticker].stop()
 
-        # Create new MockExchange
-        exchange = MockExchange()
+        # Create new UpbitExchange pointing to mock server with mock creds
+        access_key = env_access_key or "mock_access_key"
+        secret_key = env_secret_key or "mock_secret_key"
+        exchange = UpbitExchange(access_key, secret_key, server_url=server_url)
+        current_mode = "MOCK"
 
         # Recreate strategies with new exchange
         strategies = {}
