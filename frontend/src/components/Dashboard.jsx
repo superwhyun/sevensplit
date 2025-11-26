@@ -17,10 +17,12 @@ const Dashboard = () => {
         selectedTickerRef.current = selectedTicker;
     }, [selectedTicker]);
 
+    const API_BASE_URL = `http://${window.location.hostname}:8000`;
+
     const fetchStatus = async () => {
         try {
             const currentTicker = selectedTickerRef.current;
-            const response = await axios.get(`http://127.0.0.1:8000/status?ticker=${currentTicker}`);
+            const response = await axios.get(`${API_BASE_URL}/status?ticker=${currentTicker}`);
             setStatus(response.data);
             setLoading(false);
         } catch (error) {
@@ -31,7 +33,7 @@ const Dashboard = () => {
 
     const fetchPortfolio = async () => {
         try {
-            const response = await axios.get('http://127.0.0.1:8000/portfolio');
+            const response = await axios.get(`${API_BASE_URL}/portfolio`);
             setPortfolio(response.data);
         } catch (error) {
             console.error('Error fetching portfolio:', error);
@@ -134,7 +136,7 @@ const Dashboard = () => {
 
     const handleStart = async () => {
         try {
-            await axios.post('http://127.0.0.1:8000/start', { ticker: selectedTicker });
+            await axios.post(`${API_BASE_URL}/start`, { ticker: selectedTicker });
             fetchStatus();
         } catch (error) {
             console.error('Error starting bot:', error);
@@ -143,7 +145,7 @@ const Dashboard = () => {
 
     const handleStop = async () => {
         try {
-            await axios.post('http://127.0.0.1:8000/stop', { ticker: selectedTicker });
+            await axios.post(`${API_BASE_URL}/stop`, { ticker: selectedTicker });
             fetchStatus();
         } catch (error) {
             console.error('Error stopping bot:', error);
@@ -155,7 +157,7 @@ const Dashboard = () => {
             return;
         }
         try {
-            await axios.post('http://127.0.0.1:8000/reset', { ticker: selectedTicker });
+            await axios.post(`${API_BASE_URL}/reset`, { ticker: selectedTicker });
             fetchStatus();
             fetchPortfolio();
         } catch (error) {
