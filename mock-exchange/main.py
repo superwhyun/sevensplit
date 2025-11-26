@@ -78,9 +78,38 @@ class MockExchangeLogic:
         # Simple per-ticker cache to avoid 429 (Too Many Requests)
         self.live_price_cache_sec = float(os.getenv("LIVE_PRICE_CACHE_SECONDS", "1.5"))
         self.last_live_fetch = {}  # ticker -> timestamp
+        
+        # Cache for valid markets
+        self.valid_markets = set()
+        self.last_markets_update = 0
 
         self._refresh_balances()
         self._load_orders()
+
+    def _get_valid_markets(self):
+        """Fetch and cache valid KRW markets to avoid 404s on delisted coins"""
+        current_time = time.time()
+        # Update cache every hour (3600 seconds)
+        if not self.valid_markets or (current_time - self.last_markets_update > 3600):
+            if not self.live_api_base:
+                return set()
+                
+            try:
+                url = f"{self.live_api_base}/v1/market/all"
+                resp = requests.get(url, params={'isDetails': 'false'}, timeout=3)
+                resp.raise_for_status()
+                data = resp.json()
+                
+                if isinstance(data, list):
+                    new_markets = {m['market'] for m in data if m['market'].startswith('KRW-')}
+                    if new_markets:
+                        self.valid_markets = new_markets
+                        self.last_markets_update = current_time
+                        logging.info(f"Mock server: Refreshed valid markets: {len(self.valid_markets)} KRW pairs found")
+            except Exception as e:
+                logging.warning(f"Mock server: Failed to fetch valid markets: {e}")
+                
+        return self.valid_markets
 
     def _load_orders(self):
         """Load pending orders from DB into memory"""
@@ -128,11 +157,17 @@ class MockExchangeLogic:
         self._refresh_balances()
         accounts = []
         with self.lock:
+            # Get valid markets to filter out delisted/invalid coins
+            valid_markets = self._get_valid_markets()
+
             # Batch fetch prices for all non-KRW currencies
             tickers_to_fetch = []
             for currency in self.balance.keys():
                 if currency != "KRW":
-                    tickers_to_fetch.append(f"KRW-{currency}")
+                    ticker = f"KRW-{currency}"
+                    # Only fetch price if it's a valid market (or if we failed to fetch valid markets, try anyway)
+                    if not valid_markets or ticker in valid_markets:
+                        tickers_to_fetch.append(ticker)
             
             # Fetch all prices in one call
             prices = self.get_prices_for_markets(tickers_to_fetch) if tickers_to_fetch else {}
@@ -612,6 +647,26 @@ def cancel_order(uuid: str, request: Request):
     if result:
         return result
     return JSONResponse(content={"error": {"message": "Order not found"}}, status_code=404)
+
+@app.get("/v1/market/all")
+def market_all(isDetails: bool = False):
+    """Proxy /v1/market/all from real Upbit API or return defaults"""
+    if mock_logic.live_api_base:
+        try:
+            url = f"{mock_logic.live_api_base}/v1/market/all"
+            resp = requests.get(url, params={'isDetails': str(isDetails).lower()}, timeout=3)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception as e:
+            logging.error(f"Failed to proxy /v1/market/all: {e}")
+    
+    # Fallback defaults if live API fails
+    return [
+        {"market": "KRW-BTC", "korean_name": "비트코인", "english_name": "Bitcoin"},
+        {"market": "KRW-ETH", "korean_name": "이더리움", "english_name": "Ethereum"},
+        {"market": "KRW-SOL", "korean_name": "솔라나", "english_name": "Solana"},
+        {"market": "KRW-XRP", "korean_name": "리플", "english_name": "Ripple"}
+    ]
 
 @app.get("/v1/ticker")
 def ticker(markets: str):

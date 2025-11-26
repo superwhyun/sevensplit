@@ -42,11 +42,38 @@ class UpbitExchange(Exchange):
         import urllib.parse
         import requests
         import uuid
+        import time
         self.jwt = jwt
         self.hashlib = hashlib
         self.urlencode = urllib.parse.urlencode
         self.requests = requests
         self.uuid = uuid
+        self.time = time
+        
+        # Cache for valid markets
+        self.valid_markets = set()
+        self.last_markets_update = 0
+
+    def _get_valid_markets(self):
+        """Fetch and cache valid KRW markets to avoid 404s on delisted coins"""
+        current_time = self.time.time()
+        # Update cache every hour (3600 seconds)
+        if not self.valid_markets or (current_time - self.last_markets_update > 3600):
+            try:
+                # Fetch all markets (warning: this is a public endpoint, no auth needed)
+                # If we are in Mock mode (localhost), this might fail if mock doesn't implement /v1/market/all
+                # So we try/except and fallback safely
+                resp = self._request('GET', '/v1/market/all', params={'isDetails': 'false'}, auth=False)
+                if isinstance(resp, list):
+                    new_markets = {m['market'] for m in resp if m['market'].startswith('KRW-')}
+                    if new_markets:
+                        self.valid_markets = new_markets
+                        self.last_markets_update = current_time
+                        logging.info(f"Refreshed valid markets: {len(self.valid_markets)} KRW pairs found")
+            except Exception as e:
+                logging.warning(f"Failed to fetch valid markets: {e}")
+                
+        return self.valid_markets
 
     def _request(self, method, endpoint, params=None, data=None, auth=True):
         url = f"{self.server_url}{endpoint}"
@@ -84,7 +111,7 @@ class UpbitExchange(Exchange):
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
-            logging.error(f"Request failed: {e}")
+            logging.error(f"Request failed: {e} for url: {url}")
             raise
 
     def get_balance(self, ticker="KRW"):
@@ -107,11 +134,17 @@ class UpbitExchange(Exchange):
         try:
             accounts = self._request('GET', '/v1/accounts')
 
+            # Get valid markets to filter out delisted/invalid coins
+            valid_markets = self._get_valid_markets()
+
             # Collect tickers to batch-fetch prices
             tickers = []
             for account in accounts:
                 if account.get('currency') and account['currency'] != 'KRW':
-                    tickers.append(f"KRW-{account['currency']}")
+                    ticker = f"KRW-{account['currency']}"
+                    # Only fetch price if it's a valid market (or if we failed to fetch valid markets, try anyway)
+                    if not valid_markets or ticker in valid_markets:
+                        tickers.append(ticker)
 
             prices = self.get_current_prices(tickers) if tickers else {}
 
@@ -121,7 +154,10 @@ class UpbitExchange(Exchange):
                 balance = float(account.get('balance', 0))
                 locked = float(account.get('locked', 0))
                 ticker = f"KRW-{currency}" if currency and currency != 'KRW' else None
+                
+                # Use price if available, else 0
                 current_price = 1.0 if currency == 'KRW' else prices.get(ticker, 0.0)
+                
                 total_balance = balance + locked
                 value = total_balance * current_price if current_price else 0.0
 

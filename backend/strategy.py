@@ -7,8 +7,8 @@ from database import get_db
 
 class StrategyConfig(BaseModel):
     investment_per_split: float = 100000.0 # KRW per split
-    min_price: float = 50000000.0 # Min Price (e.g., 50M KRW)
-    max_price: float = 100000000.0 # Max Price (e.g., 100M KRW) - not used for buy, just reference
+    min_price: float = 0.0 # Min Price (0.0 means uninitialized)
+    max_price: float = 0.0 # Max Price (0.0 means uninitialized)
     buy_rate: float = 0.005 # 0.5% - price drop rate to trigger next buy
     sell_rate: float = 0.005 # 0.5% - profit rate for sell order
     fee_rate: float = 0.0005 # 0.05% fee
@@ -44,13 +44,23 @@ class SevenSplitStrategy:
         # Load state first to see if we have existing config
         state_loaded = self.load_state()
 
-        # If no state was loaded (fresh start), set default prices based on current price
-        if not state_loaded:
+        # Check for "bad defaults" from previous runs (e.g. BTC defaults applied to ETH/SOL)
+        # Old default was 50,000,000. If we see this for non-BTC, it's likely wrong.
+        has_bad_default = (self.config.min_price == 50000000.0 and self.ticker != "KRW-BTC")
+        
+        # If no state loaded, or we have bad defaults, or uninitialized (0.0), try to set from current price
+        if not state_loaded or has_bad_default or self.config.min_price == 0.0:
             current_price = self.exchange.get_current_price(self.ticker)
             if current_price:
                 # Default grid range: -15% ~ +15% around the current price
                 self.config.min_price = current_price * 0.85
                 self.config.max_price = current_price * 1.15
+                # Ensure buy/sell rates are default 0.005 if they look wrong (optional, but requested)
+                if self.config.buy_rate != 0.005:
+                    self.config.buy_rate = 0.005
+                if self.config.sell_rate != 0.005:
+                    self.config.sell_rate = 0.005
+                    
                 logging.info(f"Initialized default config for {ticker}: min_price={self.config.min_price}, max_price={self.config.max_price}")
                 self.save_state()
 

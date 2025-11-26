@@ -18,7 +18,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # Load environment from backend/.env explicitly to ensure correct config even when run from repo root
 BACKEND_DIR = os.path.dirname(__file__)
-load_dotenv(os.path.join(BACKEND_DIR, ".env"))
+env_filename = os.getenv("ENV_FILE", ".env")
+load_dotenv(os.path.join(BACKEND_DIR, env_filename))
 
 app = FastAPI(title="Seven Split Bitcoin Bot")
 
@@ -70,7 +71,7 @@ else:
         current_mode = "MOCK"
         print(f"Using Upbit Exchange with default mock creds (URL: {server_url})")
 
-TICKERS = ["KRW-BTC", "KRW-ETH", "KRW-SOL"]
+TICKERS = ["KRW-BTC", "KRW-ETH", "KRW-SOL", "KRW-XRP"]
 strategies = {ticker: SevenSplitStrategy(exchange, ticker) for ticker in TICKERS}
 
 # --- WebSocket connection registry ---
@@ -424,8 +425,26 @@ def get_portfolio(prices: dict = {}):
         total_value += balance_val
 
     portfolio["total_value"] = total_value
-    portfolio["total_profit_amount"] = total_value - initial_balance
-    portfolio["total_profit_rate"] = ((total_value - initial_balance) / initial_balance * 100) if initial_balance > 0 else 0
+    
+    # Calculate Total Realized Profit from DB
+    try:
+        all_trades = db.get_all_trades()
+        total_realized_profit = sum(t.net_profit for t in all_trades)
+    except Exception as e:
+        logging.error(f"Failed to calculate realized profit: {e}")
+        total_realized_profit = 0.0
+
+    portfolio["total_realized_profit"] = total_realized_profit
+    
+    # Add realized profit per coin
+    for coin, data in portfolio["coins"].items():
+        ticker = data["ticker"]
+        try:
+            trades = db.get_trades(ticker)
+            coin_profit = sum(t.net_profit for t in trades)
+            data["realized_profit"] = coin_profit
+        except Exception:
+            data["realized_profit"] = 0.0
 
     return portfolio
 
@@ -449,60 +468,4 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         ws_connections.discard(websocket)
 
-class SetApiKeysRequest(BaseModel):
-    access_key: str
-    secret_key: str
 
-@app.post("/set-api-keys")
-def set_api_keys(req: SetApiKeysRequest):
-    """Switch to Real mode with provided API keys"""
-    global exchange, strategies, current_mode
-
-    try:
-        # Stop all running strategies
-        for ticker in TICKERS:
-            if ticker in strategies and strategies[ticker].is_running:
-                strategies[ticker].stop()
-
-        # Create new UpbitExchange with provided keys
-        exchange = UpbitExchange(req.access_key, req.secret_key)
-        current_mode = "REAL"
-
-        # Recreate strategies with new exchange
-        strategies = {}
-        for ticker in TICKERS:
-            strategies[ticker] = SevenSplitStrategy(exchange, ticker)
-            logging.info(f"Switched to REAL mode for {ticker}")
-
-        return {"status": "success", "mode": "REAL", "message": "Switched to Real mode"}
-    except Exception as e:
-        logging.error(f"Failed to switch to Real mode: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to switch to Real mode: {str(e)}")
-
-@app.post("/switch-to-mock")
-def switch_to_mock():
-    """Switch back to Mock mode"""
-    global exchange, strategies, current_mode
-
-    try:
-        # Stop all running strategies
-        for ticker in TICKERS:
-            if ticker in strategies and strategies[ticker].is_running:
-                strategies[ticker].stop()
-
-        # Create new UpbitExchange pointing to mock server with mock creds
-        access_key = env_access_key or "mock_access_key"
-        secret_key = env_secret_key or "mock_secret_key"
-        exchange = UpbitExchange(access_key, secret_key, server_url=server_url)
-        current_mode = "MOCK"
-
-        # Recreate strategies with new exchange
-        strategies = {}
-        for ticker in TICKERS:
-            strategies[ticker] = SevenSplitStrategy(exchange, ticker)
-            logging.info(f"Switched to MOCK mode for {ticker}")
-
-        return {"status": "success", "mode": "MOCK", "message": "Switched to Mock mode"}
-    except Exception as e:
-        logging.error(f"Failed to switch to Mock mode: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to switch to Mock mode: {str(e)}")

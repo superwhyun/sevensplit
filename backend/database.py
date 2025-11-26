@@ -150,11 +150,21 @@ class DatabaseManager:
 
     def __init__(self, db_path: str = None):
         if db_path is None:
-            # Default to backend directory
-            backend_dir = os.path.dirname(os.path.abspath(__file__))
-            db_path = os.path.join(backend_dir, "sevensplit.db")
+            # Check environment variable first
+            env_db_path = os.getenv("DB_PATH")
+            if env_db_path:
+                db_path = env_db_path
+            else:
+                # Derive from MODE if not explicitly set
+                mode = os.getenv("MODE", "MOCK").upper()
+                db_filename = "sevensplit_real.db" if mode == "REAL" else "sevensplit_mock.db"
+                
+                # Default to backend directory
+                backend_dir = os.path.dirname(os.path.abspath(__file__))
+                db_path = os.path.join(backend_dir, db_filename)
 
         self.db_path = db_path
+        print(f"Using Database: {self.db_path}")
         self.engine = create_engine(f'sqlite:///{db_path}', echo=False)
         Base.metadata.create_all(self.engine)
         self.SessionLocal = sessionmaker(bind=self.engine)

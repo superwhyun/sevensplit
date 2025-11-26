@@ -8,8 +8,6 @@ const Dashboard = () => {
     const [portfolio, setPortfolio] = useState(null);
     const [loading, setLoading] = useState(true);
     const [selectedTicker, setSelectedTicker] = useState("KRW-BTC");
-    const [showApiModal, setShowApiModal] = useState(false);
-    const [apiKeys, setApiKeys] = useState({ accessKey: '', secretKey: '' });
     const tickers = ["KRW-BTC", "KRW-ETH", "KRW-SOL"];
 
     const selectedTickerRef = useRef(selectedTicker);
@@ -165,88 +163,40 @@ const Dashboard = () => {
         }
     };
 
-    const handleModeToggle = () => {
-        if (portfolio.mode === "MOCK") {
-            // Switch to REAL mode - show API key modal
-            setShowApiModal(true);
-        } else {
-            // Switch back to MOCK mode
-            handleSwitchToMock();
-        }
-    };
-
-    const handleSwitchToMock = async () => {
-        if (!window.confirm('Switch back to Mock mode? All real trading will be stopped.')) {
-            return;
-        }
-        try {
-            await axios.post('http://127.0.0.1:8000/switch-to-mock');
-            fetchPortfolio();
-            fetchStatus();
-        } catch (error) {
-            console.error('Error switching to mock mode:', error);
-            alert('Failed to switch to Mock mode');
-        }
-    };
-
-    const handleSubmitApiKeys = async (e) => {
-        e.preventDefault();
-        if (!apiKeys.accessKey || !apiKeys.secretKey) {
-            alert('Please enter both Access Key and Secret Key');
-            return;
-        }
-        try {
-            const response = await axios.post('http://127.0.0.1:8000/set-api-keys', {
-                access_key: apiKeys.accessKey,
-                secret_key: apiKeys.secretKey
-            });
-            setShowApiModal(false);
-            setApiKeys({ accessKey: '', secretKey: '' });
-            fetchPortfolio();
-            fetchStatus();
-            alert(response.data.message);
-        } catch (error) {
-            console.error('Error setting API keys:', error);
-            alert('Failed to switch to Real mode. Please check your API keys.');
-        }
-    };
-
     if (loading) return <div>Loading...</div>;
     if (!status || !portfolio) return <div>Error loading status</div>;
 
     return (
         <div className="dashboard-container" style={{ position: 'relative' }}>
-            {/* Mode Toggle - Fixed Top Right */}
-            <button
-                onClick={handleModeToggle}
+            {/* Mode Indicator - Fixed Top Right */}
+            <div
                 style={{
                     position: 'fixed',
                     top: '1rem',
                     right: '1rem',
                     zIndex: 9999,
-                    backgroundColor: portfolio.mode === "MOCK" ? '#f59e0b' : '#10b981',
-                    color: portfolio.mode === "MOCK" ? '#000' : '#fff',
-                    padding: '0.75rem 1.5rem',
+                    backgroundColor: portfolio.mode === "MOCK" ? '#f59e0b' : '#ef4444',
+                    color: '#fff',
+                    padding: '0.5rem 1rem',
                     borderRadius: '0.5rem',
                     fontSize: '0.875rem',
                     fontWeight: 'bold',
                     letterSpacing: '0.05em',
-                    border: 'none',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.4)'
-                }}
-                onMouseEnter={(e) => {
-                    e.target.style.opacity = '0.85';
-                    e.target.style.transform = 'translateY(-2px)';
-                }}
-                onMouseLeave={(e) => {
-                    e.target.style.opacity = '1';
-                    e.target.style.transform = 'translateY(0)';
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem'
                 }}
             >
-                {portfolio.mode === "MOCK" ? '🧪 MOCK MODE' : '🔴 REAL MODE'}
-            </button>
+                <div style={{
+                    width: '8px',
+                    height: '8px',
+                    borderRadius: '50%',
+                    backgroundColor: 'white',
+                    animation: 'pulse 2s infinite'
+                }} />
+                {portfolio.mode === "MOCK" ? 'MOCK MODE' : 'REAL TRADING'}
+            </div>
 
             {/* Global Portfolio Header */}
             <header className="header" style={{
@@ -317,62 +267,55 @@ const Dashboard = () => {
                         </div>
                     </div>
                     <div style={{ textAlign: 'center', padding: '0.5rem' }}>
-                        <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>Total Profit</div>
+                        <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>Total Realized Profit</div>
                         <div style={{
                             fontSize: '1.25rem',
                             fontWeight: 'bold',
-                            color: portfolio.total_profit_rate > 0 ? '#10b981' : portfolio.total_profit_rate < 0 ? '#ef4444' : '#f8fafc'
+                            color: (portfolio.total_realized_profit || 0) >= 0 ? '#10b981' : '#ef4444'
                         }}>
-                            {portfolio.total_profit_rate?.toFixed(2)}%
-                            <div style={{
-                                fontSize: '0.875rem',
-                                marginTop: '0.25rem',
-                                color: '#94a3b8',
-                                fontWeight: 'normal'
-                            }}>
-                                ₩{Math.round(portfolio.total_profit_amount)?.toLocaleString()}
-                            </div>
+                            {new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(portfolio.total_realized_profit || 0)}
                         </div>
                     </div>
                 </div>
-
             </header>
 
             {/* Ticker Tabs */}
-            <div className="tabs" style={{
+            < div className="tabs" style={{
                 display: 'flex',
                 gap: '0.5rem',
                 padding: '1rem 1.5rem 0',
                 borderBottom: '1px solid #334155'
             }}>
-                {['KRW-BTC', 'KRW-ETH', 'KRW-SOL'].map(ticker => (
-                    <button
-                        key={ticker}
-                        className={`tab-btn ${selectedTicker === ticker ? 'active' : ''}`}
-                        onClick={() => {
-                            setLoading(true);
-                            setSelectedTicker(ticker);
-                        }}
-                        style={{
-                            padding: '0.75rem 2rem',
-                            borderRadius: '0.5rem 0.5rem 0 0',
-                            border: 'none',
-                            cursor: 'pointer',
-                            fontWeight: '600',
-                            fontSize: '1rem',
-                            backgroundColor: selectedTicker === ticker ? '#1e293b' : 'transparent',
-                            color: selectedTicker === ticker ? 'white' : '#94a3b8',
-                            transition: 'all 0.2s',
-                            borderBottom: selectedTicker === ticker ? '2px solid #3b82f6' : '2px solid transparent'
-                        }}
-                    >
-                        {ticker.split('-')[1]}
-                    </button>
-                ))}
-            </div>
+                {
+                    ['KRW-BTC', 'KRW-ETH', 'KRW-SOL'].map(ticker => (
+                        <button
+                            key={ticker}
+                            className={`tab-btn ${selectedTicker === ticker ? 'active' : ''}`}
+                            onClick={() => {
+                                setLoading(true);
+                                setSelectedTicker(ticker);
+                            }}
+                            style={{
+                                padding: '0.75rem 2rem',
+                                borderRadius: '0.5rem 0.5rem 0 0',
+                                border: 'none',
+                                cursor: 'pointer',
+                                fontWeight: '600',
+                                fontSize: '1rem',
+                                backgroundColor: selectedTicker === ticker ? '#1e293b' : 'transparent',
+                                color: selectedTicker === ticker ? 'white' : '#94a3b8',
+                                transition: 'all 0.2s',
+                                borderBottom: selectedTicker === ticker ? '2px solid #3b82f6' : '2px solid transparent'
+                            }}
+                        >
+                            {ticker.split('-')[1]}
+                        </button>
+                    ))
+                }
+            </div >
 
             {/* Ticker-specific Stats */}
-            <div style={{
+            < div style={{
                 padding: '1.5rem',
                 backgroundColor: 'rgba(15, 23, 42, 0.7)',
                 borderBottom: '1px solid #334155'
@@ -448,10 +391,10 @@ const Dashboard = () => {
                         </div>
                     </div>
                 </div>
-            </div>
+            </div >
 
             {/* Ticker-specific Control Panel */}
-            <div style={{
+            < div style={{
                 padding: '1.5rem',
                 backgroundColor: 'rgba(30, 41, 59, 0.5)',
                 borderBottom: '1px solid #334155'
@@ -541,7 +484,7 @@ const Dashboard = () => {
                         </div>
                     )}
                 </div>
-            </div>
+            </div >
 
             <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: '2rem' }}>
                 <div>
@@ -627,204 +570,103 @@ const Dashboard = () => {
             </div>
 
             {/* Recent Trades Section */}
-            {status.trade_history && status.trade_history.length > 0 && (
-                <div className="card" style={{ marginTop: '2rem' }}>
-                    <div className="card-header">
-                        <span className="card-title">Recent Trades ({selectedTicker})</span>
-                    </div>
-                    <div style={{ overflowX: 'auto' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-                            <thead>
-                                <tr style={{ borderBottom: '2px solid #334155', color: '#94a3b8' }}>
-                                    <th style={{ padding: '1rem' }}>Time</th>
-                                    <th style={{ padding: '1rem' }}>Split</th>
-                                    <th style={{ padding: '1rem', textAlign: 'right' }}>Buy Amount</th>
-                                    <th style={{ padding: '1rem', textAlign: 'right' }}>Sell Amount</th>
-                                    <th style={{ padding: '1rem', textAlign: 'right' }}>Gross Profit</th>
-                                    <th style={{ padding: '1rem', textAlign: 'right' }}>Total Fee</th>
-                                    <th style={{ padding: '1rem', textAlign: 'right' }}>Net Profit</th>
-                                    <th style={{ padding: '1rem', textAlign: 'right' }}>Rate</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {status.trade_history.map((trade, index) => {
-                                    // Handle old trade history format (fallback)
-                                    const buyAmount = trade.buy_amount || 0;
-                                    const sellAmount = trade.sell_amount || 0;
-                                    const grossProfit = trade.gross_profit || (sellAmount - buyAmount);
-                                    const totalFee = trade.total_fee || 0;
-                                    const netProfit = trade.net_profit || (grossProfit - totalFee);
-                                    const profitRate = trade.profit_rate || 0;
+            {
+                status.trade_history && status.trade_history.length > 0 && (
+                    <div className="card" style={{ marginTop: '2rem' }}>
+                        <div className="card-header">
+                            <span className="card-title">Recent Trades ({selectedTicker})</span>
+                        </div>
+                        <div style={{ overflowX: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                                <thead>
+                                    <tr style={{ borderBottom: '2px solid #334155', color: '#94a3b8' }}>
+                                        <th style={{ padding: '1rem' }}>Time</th>
+                                        <th style={{ padding: '1rem' }}>Split</th>
+                                        <th style={{ padding: '1rem', textAlign: 'right' }}>Buy Amount</th>
+                                        <th style={{ padding: '1rem', textAlign: 'right' }}>Sell Amount</th>
+                                        <th style={{ padding: '1rem', textAlign: 'right' }}>Gross Profit</th>
+                                        <th style={{ padding: '1rem', textAlign: 'right' }}>Total Fee</th>
+                                        <th style={{ padding: '1rem', textAlign: 'right' }}>Net Profit</th>
+                                        <th style={{ padding: '1rem', textAlign: 'right' }}>Rate</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {status.trade_history.map((trade, index) => {
+                                        // Handle old trade history format (fallback)
+                                        const buyAmount = trade.buy_amount || 0;
+                                        const sellAmount = trade.sell_amount || 0;
+                                        const grossProfit = trade.gross_profit || (sellAmount - buyAmount);
+                                        const totalFee = trade.total_fee || 0;
+                                        const netProfit = trade.net_profit || (grossProfit - totalFee);
+                                        const profitRate = trade.profit_rate || 0;
 
-                                    return (
-                                        <tr key={index} style={{ borderBottom: '1px solid #1e293b' }}>
-                                            <td style={{ padding: '1rem', fontSize: '0.875rem' }}>
-                                                {new Date(trade.timestamp).toLocaleString()}
-                                            </td>
-                                            <td style={{ padding: '1rem', fontWeight: 'bold' }}>#{trade.split_id}</td>
-                                            <td style={{ padding: '1rem', textAlign: 'right' }}>
-                                                <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>
-                                                    ₩{Math.round(buyAmount).toLocaleString()}
-                                                </div>
-                                                <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                                                    @₩{trade.buy_price?.toLocaleString()}
-                                                </div>
-                                            </td>
-                                            <td style={{ padding: '1rem', textAlign: 'right' }}>
-                                                <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>
-                                                    ₩{Math.round(sellAmount).toLocaleString()}
-                                                </div>
-                                                <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                                                    @₩{trade.sell_price?.toLocaleString()}
-                                                </div>
-                                            </td>
-                                            <td style={{
-                                                padding: '1rem',
-                                                textAlign: 'right',
-                                                color: grossProfit > 0 ? '#10b981' : grossProfit < 0 ? '#ef4444' : '#94a3b8',
-                                                fontSize: '0.875rem'
-                                            }}>
-                                                {grossProfit > 0 ? '+' : ''}₩{Math.round(grossProfit).toLocaleString()}
-                                            </td>
-                                            <td style={{
-                                                padding: '1rem',
-                                                textAlign: 'right',
-                                                color: '#ef4444',
-                                                fontSize: '0.875rem'
-                                            }}>
-                                                -₩{Math.round(totalFee).toLocaleString()}
-                                            </td>
-                                            <td style={{
-                                                padding: '1rem',
-                                                textAlign: 'right',
-                                                fontWeight: 'bold',
-                                                fontSize: '0.95rem',
-                                                color: netProfit > 0 ? '#10b981' : netProfit < 0 ? '#ef4444' : '#94a3b8'
-                                            }}>
-                                                {netProfit > 0 ? '+' : ''}₩{Math.round(netProfit).toLocaleString()}
-                                            </td>
-                                            <td style={{
-                                                padding: '1rem',
-                                                textAlign: 'right',
-                                                fontWeight: 'bold',
-                                                fontSize: '0.95rem',
-                                                color: profitRate > 0 ? '#10b981' : profitRate < 0 ? '#ef4444' : '#94a3b8'
-                                            }}>
-                                                {profitRate > 0 ? '+' : ''}{profitRate.toFixed(2)}%
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
+                                        return (
+                                            <tr key={index} style={{ borderBottom: '1px solid #1e293b' }}>
+                                                <td style={{ padding: '1rem', fontSize: '0.875rem' }}>
+                                                    {new Date(trade.timestamp).toLocaleString()}
+                                                </td>
+                                                <td style={{ padding: '1rem', fontWeight: 'bold' }}>#{trade.split_id}</td>
+                                                <td style={{ padding: '1rem', textAlign: 'right' }}>
+                                                    <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>
+                                                        ₩{Math.round(buyAmount).toLocaleString()}
+                                                    </div>
+                                                    <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                                                        @₩{trade.buy_price?.toLocaleString()}
+                                                    </div>
+                                                </td>
+                                                <td style={{ padding: '1rem', textAlign: 'right' }}>
+                                                    <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>
+                                                        ₩{Math.round(sellAmount).toLocaleString()}
+                                                    </div>
+                                                    <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                                                        @₩{trade.sell_price?.toLocaleString()}
+                                                    </div>
+                                                </td>
+                                                <td style={{
+                                                    padding: '1rem',
+                                                    textAlign: 'right',
+                                                    color: grossProfit > 0 ? '#10b981' : grossProfit < 0 ? '#ef4444' : '#94a3b8',
+                                                    fontSize: '0.875rem'
+                                                }}>
+                                                    {grossProfit > 0 ? '+' : ''}₩{Math.round(grossProfit).toLocaleString()}
+                                                </td>
+                                                <td style={{
+                                                    padding: '1rem',
+                                                    textAlign: 'right',
+                                                    color: '#ef4444',
+                                                    fontSize: '0.875rem'
+                                                }}>
+                                                    -₩{Math.round(totalFee).toLocaleString()}
+                                                </td>
+                                                <td style={{
+                                                    padding: '1rem',
+                                                    textAlign: 'right',
+                                                    fontWeight: 'bold',
+                                                    fontSize: '0.95rem',
+                                                    color: netProfit > 0 ? '#10b981' : netProfit < 0 ? '#ef4444' : '#94a3b8'
+                                                }}>
+                                                    {netProfit > 0 ? '+' : ''}₩{Math.round(netProfit).toLocaleString()}
+                                                </td>
+                                                <td style={{
+                                                    padding: '1rem',
+                                                    textAlign: 'right',
+                                                    fontWeight: 'bold',
+                                                    fontSize: '0.95rem',
+                                                    color: profitRate > 0 ? '#10b981' : profitRate < 0 ? '#ef4444' : '#94a3b8'
+                                                }}>
+                                                    {profitRate > 0 ? '+' : ''}{profitRate.toFixed(2)}%
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
-                </div>
-            )}
+                )
+            }
 
-            {/* API Keys Modal */}
-            {showApiModal && (
-                <div style={{
-                    position: 'fixed',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    backgroundColor: 'rgba(0, 0, 0, 0.75)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    zIndex: 1000
-                }}>
-                    <div style={{
-                        backgroundColor: '#1e293b',
-                        padding: '2rem',
-                        borderRadius: '0.75rem',
-                        width: '500px',
-                        maxWidth: '90%',
-                        border: '2px solid #334155',
-                        boxShadow: '0 20px 50px rgba(0, 0, 0, 0.5)'
-                    }}>
-                        <h2 style={{ marginTop: 0, marginBottom: '1.5rem', color: '#f8fafc', fontSize: '1.5rem' }}>
-                            Switch to Real Trading Mode
-                        </h2>
-                        <form onSubmit={handleSubmitApiKeys}>
-                            <div style={{ marginBottom: '1.25rem' }}>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', color: '#94a3b8', fontSize: '0.875rem' }}>
-                                    Upbit Access Key
-                                </label>
-                                <input
-                                    type="text"
-                                    value={apiKeys.accessKey}
-                                    onChange={(e) => setApiKeys(prev => ({ ...prev, accessKey: e.target.value }))}
-                                    placeholder="Enter your Upbit Access Key"
-                                    style={{
-                                        width: '100%',
-                                        padding: '0.75rem',
-                                        borderRadius: '0.375rem',
-                                        border: '1px solid #475569',
-                                        backgroundColor: '#0f172a',
-                                        color: '#f8fafc',
-                                        fontSize: '0.875rem'
-                                    }}
-                                />
-                            </div>
-                            <div style={{ marginBottom: '1.5rem' }}>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', color: '#94a3b8', fontSize: '0.875rem' }}>
-                                    Upbit Secret Key
-                                </label>
-                                <input
-                                    type="password"
-                                    value={apiKeys.secretKey}
-                                    onChange={(e) => setApiKeys(prev => ({ ...prev, secretKey: e.target.value }))}
-                                    placeholder="Enter your Upbit Secret Key"
-                                    style={{
-                                        width: '100%',
-                                        padding: '0.75rem',
-                                        borderRadius: '0.375rem',
-                                        border: '1px solid #475569',
-                                        backgroundColor: '#0f172a',
-                                        color: '#f8fafc',
-                                        fontSize: '0.875rem'
-                                    }}
-                                />
-                            </div>
-                            <div style={{
-                                padding: '1rem',
-                                backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                                borderRadius: '0.5rem',
-                                border: '1px solid rgba(239, 68, 68, 0.3)',
-                                marginBottom: '1.5rem'
-                            }}>
-                                <p style={{ margin: 0, fontSize: '0.8rem', color: '#fca5a5', lineHeight: '1.5' }}>
-                                    ⚠️ Warning: Real mode will execute actual trades with real money.
-                                    Make sure you understand the risks before proceeding.
-                                </p>
-                            </div>
-                            <div style={{ display: 'flex', gap: '1rem' }}>
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setShowApiModal(false);
-                                        setApiKeys({ accessKey: '', secretKey: '' });
-                                    }}
-                                    className="btn btn-secondary"
-                                    style={{ flex: 1, padding: '0.75rem' }}
-                                >
-                                    Cancel
-                                </button>
-                                <button
-                                    type="submit"
-                                    className="btn btn-primary"
-                                    style={{ flex: 1, padding: '0.75rem', backgroundColor: '#10b981' }}
-                                >
-                                    Switch to Real Mode
-                                </button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-            )}
-        </div>
+        </div >
     );
 };
 
