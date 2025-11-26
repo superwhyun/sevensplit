@@ -465,7 +465,7 @@ const Dashboard = () => {
                                 Manage prices at:
                             </span>
                             <a
-                                href="http://localhost:5001"
+                                href={`http://${window.location.hostname}:5001`}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 style={{

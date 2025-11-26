@@ -6,4 +6,5 @@ fi
 if [ -f .env ]; then
   export $(cat .env | xargs)
 fi
+export HOST=0.0.0.0
 python main.py
