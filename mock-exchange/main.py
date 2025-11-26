@@ -14,20 +14,36 @@ import uvicorn
 import os
 from database import get_db
 
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Initialize prices and start background threads
+    initialize_default_prices()
+    
+    price_updater_thread = threading.Thread(target=price_updater, daemon=True)
+    price_updater_thread.start()
+    
+    matcher_thread = threading.Thread(target=order_matcher, daemon=True)
+    matcher_thread.start()
+    
+    yield
+    # Shutdown: Threads are daemon, so they will exit when the process ends
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 
 
 @app.middleware("http")
 async def log_server_side(request: Request, call_next):
     """Log requests with server host/port instead of client addr."""
-    server_host, server_port = request.scope.get("server", ("?", "?"))
-    path = request.url.path
-    method = request.method
+    # server_host, server_port = request.scope.get("server", ("?", "?"))
+    # path = request.url.path
+    # method = request.method
     response = await call_next(request)
-    logging.info(f"[{server_host}:{server_port}] {method} {path} -> {response.status_code}")
+    # logging.info(f"[{server_host}:{server_port}] {method} {path} -> {response.status_code}")
     return response
 
 # Add CORS middleware
@@ -40,7 +56,7 @@ app.add_middleware(
 )
 
 # Get the exchange-ui directory path
-EXCHANGE_UI_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "exchange-ui")
+EXCHANGE_UI_DIR = os.path.join(os.path.dirname(__file__), "ui")
 
 class MockExchangeLogic:
     def __init__(self, initial_balance=10000000):
@@ -50,8 +66,8 @@ class MockExchangeLogic:
         self.price_overrides = {}  # ticker -> price
         self.price_held = {}       # ticker -> bool
         self.avg_buy_prices = {}   # currency -> avg buy price
-        self.lock = threading.Lock()
-        # Base URL for fetching live prices directly; default is disabled to avoid hitting real Upbit
+        self.lock = threading.RLock()
+        # Base URL for fetching live prices directly
         live_base = os.getenv("UPBIT_LIVE_API_BASE")
         if not live_base:
             live_base = os.getenv("UPBIT_OPEN_API_SERVER_URL")
@@ -112,6 +128,15 @@ class MockExchangeLogic:
         self._refresh_balances()
         accounts = []
         with self.lock:
+            # Batch fetch prices for all non-KRW currencies
+            tickers_to_fetch = []
+            for currency in self.balance.keys():
+                if currency != "KRW":
+                    tickers_to_fetch.append(f"KRW-{currency}")
+            
+            # Fetch all prices in one call
+            prices = self.get_prices_for_markets(tickers_to_fetch) if tickers_to_fetch else {}
+            
             for currency, balance in self.balance.items():
                 # Calculate locked amount from open orders
                 locked = 0.0
@@ -127,7 +152,10 @@ class MockExchangeLogic:
 
                 total_balance = balance + locked
                 ticker = f"KRW-{currency}" if currency != "KRW" else None
-                current_price = 1.0 if currency == "KRW" else self.get_current_price(ticker)
+                if currency == "KRW":
+                    current_price = 1.0
+                else:
+                    current_price = prices.get(ticker, 0.0) if ticker else 0.0
                 balance_value = total_balance * current_price if current_price else 0.0
 
                 
@@ -175,8 +203,16 @@ class MockExchangeLogic:
             return prices
 
         url = f"{self.live_api_base}/v1/ticker"
+        markets_param = ",".join(tickers)
         try:
-            resp = requests.get(url, params={"markets": ",".join(tickers)}, timeout=3)
+            # Log who is calling this with full stack trace
+            import traceback
+            stack = traceback.extract_stack()
+            # Get last 5 callers
+            stack_trace = " <- ".join([f"{s.filename.split('/')[-1]}:{s.lineno}({s.name})" for s in stack[-5:-1]])
+            logging.info(f"🌐 Upbit API Request: GET {url}?markets={markets_param} [Stack: {stack_trace}]")
+            
+            resp = requests.get(url, params={"markets": markets_param}, timeout=3)
             resp.raise_for_status()
             data = resp.json()
             if isinstance(data, list):
@@ -185,50 +221,50 @@ class MockExchangeLogic:
                     price = item.get("trade_price")
                     if market and price:
                         prices[market] = float(price)
+                logging.info(f"✅ Upbit API Response: {len(prices)} prices fetched")
             if not prices:
                 logging.error(f"Live price batch parse error for {tickers}: {data}")
         except Exception as e:
-            logging.error(f"Live price batch HTTP error for {tickers}: {e}")
+            logging.error(f"❌ Upbit API Error for {tickers}: {e}")
         return prices
 
-    def get_prices_for_markets(self, markets: list[str]) -> dict[str, float]:
-        """Return prices for multiple markets using hold/cache to minimize HTTP calls."""
-        now = time.time()
+    def get_prices_for_markets(self, markets: list[str], force_fetch: bool = False) -> dict[str, float]:
+        """Return prices for multiple markets. Uses cached prices unless force_fetch=True."""
         result: dict[str, float] = {}
+        
+        if not force_fetch:
+            # Use cached prices
+            for market in markets:
+                cached_price = self.price_overrides.get(market, 0.0)
+                result[market] = cached_price
+            return result
+        
+        # Force fetch from Upbit
         fetch_targets: list[str] = []
-
         for market in markets:
             # Held tickers: always use override/cached
             if self.price_held.get(market, False):
                 result[market] = self.price_overrides.get(market, 0.0)
                 continue
-
-            # Fresh cache?
-            last = self.last_live_fetch.get(market, 0)
-            cached = self.price_overrides.get(market)
-            if cached is not None and now - last < self.live_price_cache_sec:
-                result[market] = cached
-                continue
-
             fetch_targets.append(market)
 
-        # Batch fetch remaining tickers
-        live_prices = self._fetch_live_prices(fetch_targets) if fetch_targets else {}
-        if live_prices:
-            for market, price in live_prices.items():
-                self.price_overrides[market] = price
-                self.last_live_fetch[market] = now
-                result[market] = price
-
-        # Any missing -> fallback to cached/manual
-        for market in fetch_targets:
-            if market not in result:
-                fallback = self.price_overrides.get(market, 0.0)
-                if fallback:
-                    logging.warning(f"Using cached price for {market} because live fetch failed.")
-                else:
-                    logging.error(f"No live or cached price available for {market}. Returning 0.")
-                result[market] = fallback
+        # Batch fetch all targets in one API call
+        if fetch_targets:
+            live_prices = self._fetch_live_prices(fetch_targets)
+            if live_prices:
+                for market, price in live_prices.items():
+                    self.price_overrides[market] = price
+                    result[market] = price
+            else:
+                logging.error(f"Failed to fetch live prices from Upbit API")
+                # Fallback to last known prices
+                for market in fetch_targets:
+                    fallback = self.price_overrides.get(market, 0.0)
+                    if fallback:
+                        logging.warning(f"Using last known price for {market}")
+                    else:
+                        logging.error(f"No price available for {market}. Returning 0.")
+                    result[market] = fallback
 
         return result
 
@@ -323,6 +359,10 @@ class MockExchangeLogic:
             # Cache in memory
             order = {**order_data, "created_at": datetime.now().isoformat()}
             self.orders[order_id] = order
+            
+            # Check for immediate execution
+            self.check_orders()
+            
             return order
 
     def cancel_order(self, uuid):
@@ -402,9 +442,12 @@ class MockExchangeLogic:
     def check_orders(self):
         self._refresh_balances()
         with self.lock:
+            # Use cached prices from price_overrides instead of fetching
+            # Prices are updated by get_prices_for_markets calls from API requests
             for order in list(self.orders.values()):
                 if order["state"] == "wait":
-                    current_price = self.get_current_price(order["market"])
+                    # Use cached price if available
+                    current_price = self.price_overrides.get(order["market"], 0.0)
                     if not current_price:
                         continue
                         
@@ -470,6 +513,53 @@ class MockExchangeLogic:
 
 mock_logic = MockExchangeLogic()
 
+# Initialize default prices on startup
+def initialize_default_prices():
+    """Fetch initial prices from Upbit API on startup"""
+    if not mock_logic.live_api_base:
+        logging.warning("No live API configured - prices will return 0 until manually set via /mock/price")
+        return
+    
+    try:
+        tickers = ["KRW-BTC", "KRW-ETH", "KRW-SOL"]
+        prices = mock_logic._fetch_live_prices(tickers)
+        if prices:
+            for ticker, price in prices.items():
+                mock_logic.price_overrides[ticker] = price
+            logging.info(f"Initialized prices from Upbit API: {prices}")
+        else:
+            logging.error("Failed to fetch initial prices from Upbit API")
+    except Exception as e:
+        logging.error(f"Error initializing prices from Upbit API: {e}")
+
+
+
+# Price updater thread - periodically fetch prices from Upbit
+def price_updater():
+    """Periodically update prices from Upbit API"""
+    default_tickers = ["KRW-BTC", "KRW-ETH", "KRW-SOL"]
+    while True:
+        try:
+            # Collect tickers from pending orders
+            pending_tickers = set()
+            with mock_logic.lock:
+                for order in mock_logic.orders.values():
+                    if order["state"] == "wait":
+                        pending_tickers.add(order["market"])
+            
+            # Combine with default tickers
+            tickers_to_fetch = list(set(default_tickers) | pending_tickers)
+            
+            # Force fetch prices for all tickers in one API call
+            if tickers_to_fetch:
+                mock_logic.get_prices_for_markets(tickers_to_fetch, force_fetch=True)
+                # Check orders immediately after price update
+                mock_logic.check_orders()
+            # Prices are automatically cached in price_overrides
+        except Exception as e:
+            logging.error(f"Price updater error: {e}")
+        time.sleep(1)  # Update every second
+
 def order_matcher():
     while True:
         try:
@@ -478,8 +568,8 @@ def order_matcher():
             logging.error(f"Order matcher error: {e}")
         time.sleep(1)
 
-matcher_thread = threading.Thread(target=order_matcher, daemon=True)
-matcher_thread.start()
+# Start background threads
+
 
 # --- Upbit API Endpoints ---
 
@@ -666,4 +756,4 @@ if __name__ == "__main__":
     enable_reload = os.getenv("RELOAD", "0") == "1"
     host = os.getenv("HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "5001"))
-    uvicorn.run(app, host=host, port=port, reload=enable_reload, access_log=False)
+    uvicorn.run("main:app", host=host, port=port, reload=enable_reload, access_log=False)

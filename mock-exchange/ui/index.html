@@ -584,14 +584,19 @@
             `;
         }
 
-        async function fetchTickerPrice(ticker) {
+        async function fetchTickerPrices(tickers) {
             try {
-                const response = await fetch(`${API_BASE}/v1/ticker?markets=${ticker}`);
+                const markets = tickers.join(',');
+                const response = await fetch(`${API_BASE}/v1/ticker?markets=${markets}`);
                 const data = await response.json();
-                return data[0]?.trade_price || 0;
+                const prices = {};
+                data.forEach(item => {
+                    prices[item.market] = item.trade_price || 0;
+                });
+                return prices;
             } catch (error) {
-                console.error(`Failed to fetch price for ${ticker}:`, error);
-                return 0;
+                console.error(`Failed to fetch prices:`, error);
+                return {};
             }
         }
 
@@ -718,8 +723,11 @@
         async function initializeTickers() {
             const container = document.getElementById('tickerCards');
 
+            // Batch fetch prices for all tickers
+            const prices = await fetchTickerPrices(TICKERS);
+
             for (const ticker of TICKERS) {
-                const price = await fetchTickerPrice(ticker);
+                const price = prices[ticker] || 0;
                 const held = await fetchHoldStatus(ticker);
 
                 tickerStates[ticker] = { price, held };
@@ -734,13 +742,19 @@
         }
 
         async function updatePrices() {
-            for (const ticker of TICKERS) {
-                if (!tickerStates[ticker]?.held) {
-                    const price = await fetchTickerPrice(ticker);
-                    tickerStates[ticker].price = price;
+            // Get list of non-held tickers
+            const tickersToFetch = TICKERS.filter(ticker => !tickerStates[ticker]?.held);
+            
+            if (tickersToFetch.length > 0) {
+                // Batch fetch prices for all non-held tickers in one API call
+                const prices = await fetchTickerPrices(tickersToFetch);
+                
+                for (const ticker of tickersToFetch) {
+                    tickerStates[ticker].price = prices[ticker] || tickerStates[ticker].price;
                     updateTickerCard(ticker);
                 }
             }
+            
             fetchAccounts();
         }
 

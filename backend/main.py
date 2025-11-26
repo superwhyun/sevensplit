@@ -135,7 +135,18 @@ def get_status(ticker: str = "KRW-BTC"):
     if ticker not in strategies:
         raise HTTPException(status_code=404, detail="Ticker not found")
 
-    state = strategies[ticker].get_state()
+    # Batch fetch price for the requested ticker to avoid individual API call
+    try:
+        if hasattr(exchange, "get_current_prices"):
+            prices = exchange.get_current_prices([ticker])
+            current_price = prices.get(ticker)
+        else:
+            current_price = None
+    except Exception as e:
+        logging.error(f"Failed to fetch price for {ticker}: {e}")
+        current_price = None
+
+    state = strategies[ticker].get_state(current_price=current_price)
     # Mode flag
     state["mode"] = current_mode
     
@@ -156,12 +167,44 @@ def get_status(ticker: str = "KRW-BTC"):
 
 def get_full_snapshot() -> Dict[str, Any]:
     """Aggregate all tickers' status plus portfolio for websocket push."""
-    snapshot = {"tickers": {}, "portfolio": get_portfolio()}
+    snapshot = {"tickers": {}}
+    
+    # Batch fetch prices for all tickers ONCE
+    try:
+        if hasattr(exchange, "get_current_prices"):
+            prices = exchange.get_current_prices(TICKERS)
+        else:
+            prices = {}
+    except Exception as e:
+        logging.error(f"Failed to batch fetch prices: {e}")
+        prices = {}
+    
     for ticker in TICKERS:
         try:
-            snapshot["tickers"][ticker] = get_status(ticker)
+            # Get strategy state with pre-fetched price
+            state = strategies[ticker].get_state(current_price=prices.get(ticker))
+            
+            # Add mode flag
+            state["mode"] = current_mode
+            
+            # Add Wallet Info
+            state["balance_krw"] = exchange.get_balance("KRW")
+            state["balance_coin"] = exchange.get_balance(ticker)
+            
+            # Calculate Total Asset Value
+            current_price = state["current_price"]
+            if current_price:
+                state["total_asset_value"] = state["balance_krw"] + (state["balance_coin"] * current_price)
+            else:
+                state["total_asset_value"] = state["balance_krw"]
+            
+            snapshot["tickers"][ticker] = state
         except Exception as e:
             logging.error(f"Snapshot error for {ticker}: {e}")
+    
+    # Get portfolio with pre-fetched prices
+    snapshot["portfolio"] = get_portfolio(prices)
+    
     return snapshot
 
 @app.get("/accounts")
@@ -180,7 +223,19 @@ class CommandRequest(BaseModel):
 def start_bot(cmd: CommandRequest):
     if cmd.ticker not in strategies:
         raise HTTPException(status_code=404, detail="Ticker not found")
-    strategies[cmd.ticker].start()
+    
+    # Fetch current price before starting to avoid individual API call
+    try:
+        if hasattr(exchange, "get_current_prices"):
+            prices = exchange.get_current_prices([cmd.ticker])
+            current_price = prices.get(cmd.ticker)
+        else:
+            current_price = None
+    except Exception as e:
+        logging.error(f"Failed to fetch price for {cmd.ticker}: {e}")
+        current_price = None
+    
+    strategies[cmd.ticker].start(current_price=current_price)
     return {"status": "started", "ticker": cmd.ticker}
 
 @app.post("/stop")
@@ -278,7 +333,7 @@ def reset_all_mock():
     return {"status": "mock reset", "message": "All strategies and database reset"}
 
 @app.get("/portfolio")
-def get_portfolio():
+def get_portfolio(prices: dict = {}):
     """Get overall portfolio status across all tickers"""
     portfolio = {
         "mode": current_mode,
@@ -286,7 +341,32 @@ def get_portfolio():
         "accounts": []
     }
 
-    accounts = exchange.get_accounts() if hasattr(exchange, "get_accounts") else []
+    # Get accounts - if prices are provided, use them to avoid redundant API calls
+    if hasattr(exchange, "get_accounts"):
+        if prices:
+            # Temporarily inject prices into accounts manually to avoid extra API call
+            accounts_raw = exchange._request('GET', '/v1/accounts') if hasattr(exchange, '_request') else []
+            accounts = []
+            for account in accounts_raw:
+                currency = account.get('currency')
+                balance = float(account.get('balance', 0))
+                locked = float(account.get('locked', 0))
+                ticker = f"KRW-{currency}" if currency and currency != 'KRW' else None
+                current_price = 1.0 if currency == 'KRW' else prices.get(ticker, 0.0)
+                total_balance = balance + locked
+                value = total_balance * current_price if current_price else 0.0
+                
+                accounts.append({
+                    **account,
+                    "ticker": ticker,
+                    "current_price": current_price,
+                    "balance_value": value,
+                    "total_balance": total_balance
+                })
+        else:
+            accounts = exchange.get_accounts()
+    else:
+        accounts = []
     # Normalize numeric fields in accounts to avoid stringy zeros
     normalized_accounts = []
     for acc in accounts:

@@ -171,12 +171,13 @@ class SevenSplitStrategy:
             logging.error(f"Failed to load state from database: {e}")
             return False
 
-    def start(self):
+    def start(self, current_price=None):
         """Start the strategy. Create first buy order at current price."""
         self.is_running = True
 
         # Always create the first split at current price when starting
-        current_price = self.exchange.get_current_price(self.ticker)
+        if current_price is None:
+            current_price = self.exchange.get_current_price(self.ticker)
         if current_price and not self.splits:
             logging.info(f"Starting strategy at current price: {current_price}")
             self._create_buy_split(current_price)
@@ -488,8 +489,9 @@ class SevenSplitStrategy:
                     break
                 logging.info(f"Created buy split {i+1}/{levels_crossed} at {current_price}")
 
-    def get_state(self):
-        current_price = self.exchange.get_current_price(self.ticker)
+    def get_state(self, current_price=None):
+        if current_price is None:
+            current_price = self.exchange.get_current_price(self.ticker)
 
         # Calculate aggregated profit for active positions
         total_invested = 0.0

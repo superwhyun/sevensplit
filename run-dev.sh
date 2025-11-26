@@ -46,7 +46,7 @@ trap cleanup SIGINT SIGTERM EXIT
 # Start Mock Exchange Server in background
 echo -e "${BLUE}[Exchange]${NC} Starting Mock Exchange Server on ${HOST:-127.0.0.1}:${PORT:-5001}..."
 (
-    RELOAD=1 ./run-exchange.sh
+    ./mock-exchange/run.sh
 ) &
 EXCHANGE_PID=$!
 
@@ -56,7 +56,7 @@ sleep 2
 # Start Trading Bot Backend in background
 echo -e "${BLUE}[Bot]${NC} Starting Trading Bot Backend..."
 (
-    RELOAD=0 ./run-trading-bot.sh
+    ./backend/run.sh
 ) &
 BOT_PID=$!
 
@@ -66,7 +66,7 @@ sleep 2
 # Start Frontend in background
 echo -e "${BLUE}[Frontend]${NC} Starting Bot Monitoring UI..."
 (
-    ./run-frontend.sh
+    ./frontend/run.sh
 ) &
 FRONTEND_PID=$!
 
