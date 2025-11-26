@@ -70,7 +70,9 @@ const Dashboard = () => {
 
         const connect = () => {
             try {
-                const ws = new WebSocket(`${wsProtocol}://${wsHost}/ws`);
+                const wsUrl = `${wsProtocol}://${wsHost}/ws`;
+                console.log('Attempting WS connection to:', wsUrl);
+                const ws = new WebSocket(wsUrl);
                 wsRef.current = ws;
 
                 ws.onopen = () => {
