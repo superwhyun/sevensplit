@@ -54,6 +54,33 @@ class UpbitExchange(Exchange):
         self.valid_markets = set()
         self.last_markets_update = 0
 
+    def get_tick_size(self, price):
+        """Return the tick size for a given price in KRW market."""
+        if price >= 2000000:
+            return 1000
+        elif price >= 1000000:
+            return 500
+        elif price >= 500000:
+            return 100
+        elif price >= 100000:
+            return 50
+        elif price >= 10000:
+            return 10
+        elif price >= 1000:
+            return 5
+        elif price >= 100:
+            return 1
+        elif price >= 10:
+            return 0.1
+        else:
+            return 0.01
+
+    def normalize_price(self, price):
+        """Normalize price to the nearest tick size (floor)."""
+        tick_size = self.get_tick_size(price)
+        # Use decimal to avoid floating point errors if needed, but int/float logic is usually enough for these ranges
+        return float(int(price / tick_size) * tick_size)
+
     def _get_valid_markets(self):
         """Fetch and cache valid KRW markets to avoid 404s on delisted coins"""
         current_time = self.time.time()
@@ -108,6 +135,10 @@ class UpbitExchange(Exchange):
             elif method == 'DELETE':
                 resp = self.requests.delete(url, params=params, headers=headers)
             
+            # Check for error response content before raising
+            if not resp.ok:
+                logging.error(f"Upbit API Error: {resp.status_code} {resp.text}")
+
             resp.raise_for_status()
             return resp.json()
         except Exception as e:

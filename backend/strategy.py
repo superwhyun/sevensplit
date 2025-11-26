@@ -272,9 +272,22 @@ class SevenSplitStrategy:
             created_at=datetime.now().isoformat()
         )
 
+        # Normalize price to valid tick size
+        target_price = self.exchange.normalize_price(target_price)
+
         # Calculate volume for limit order
         amount = self.config.investment_per_split
-        volume = amount / target_price
+        
+        if amount < 5000:
+            logging.error(f"Investment amount {amount} is less than minimum order amount (5000 KRW). Skipping.")
+            return None
+
+        # Calculate volume ensuring it meets the minimum amount (round up to 8 decimal places)
+        # 1.00000001 BTC * price > amount
+        import math
+        volume = math.ceil((amount / target_price) * 100000000) / 100000000
+
+        logging.info(f"Attempting buy order: {self.ticker}, Price: {target_price}, Volume: {volume}, Total: {target_price * volume}")
 
         # Place limit buy order
         result = self.exchange.buy_limit_order(self.ticker, target_price, volume)
@@ -325,6 +338,9 @@ class SevenSplitStrategy:
         """Create sell order after buy is filled."""
         # Calculate sell price based on sell_rate
         sell_price = split.actual_buy_price * (1 + self.config.sell_rate)
+        # Normalize price to valid tick size
+        sell_price = self.exchange.normalize_price(sell_price)
+        
         split.target_sell_price = sell_price
 
         # Place limit sell order
