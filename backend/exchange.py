@@ -78,8 +78,21 @@ class UpbitExchange(Exchange):
     def normalize_price(self, price):
         """Normalize price to the nearest tick size (floor)."""
         tick_size = self.get_tick_size(price)
-        # Use decimal to avoid floating point errors if needed, but int/float logic is usually enough for these ranges
-        return float(int(price / tick_size) * tick_size)
+        
+        # Use Decimal for precise arithmetic
+        from decimal import Decimal
+        
+        # Convert to string first to avoid float precision issues
+        d_price = Decimal(str(price))
+        d_tick = Decimal(str(tick_size))
+        
+        # Floor division to get number of ticks
+        normalized = (d_price // d_tick) * d_tick
+        
+        if tick_size >= 1:
+            return int(normalized)
+        else:
+            return float(normalized)
 
     def _get_valid_markets(self):
         """Fetch and cache valid KRW markets to avoid 404s on delisted coins"""
