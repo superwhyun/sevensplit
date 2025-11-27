@@ -426,14 +426,12 @@ const Dashboard = () => {
                                 ⏸ Stop Bot
                             </button>
                         )}
-                        {portfolio.mode === "MOCK" && (
-                            <button className="btn btn-secondary" onClick={handleReset} style={{
-                                padding: '0.65rem 1.75rem',
-                                fontSize: '0.95rem'
-                            }}>
-                                🔄 Reset
-                            </button>
-                        )}
+                        <button className="btn btn-secondary" onClick={handleReset} style={{
+                            padding: '0.65rem 1.75rem',
+                            fontSize: '0.95rem'
+                        }}>
+                            🔄 Reset
+                        </button>
                     </div>
 
                     {/* Center: Current Price */}
