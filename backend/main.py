@@ -41,13 +41,18 @@ db = get_db()
 # Check for .env file
 env_access_key = os.getenv("UPBIT_ACCESS_KEY")
 env_secret_key = os.getenv("UPBIT_SECRET_KEY")
-server_url = os.getenv("UPBIT_OPEN_API_SERVER_URL", "https://api.upbit.com")
+server_url_env = os.getenv("UPBIT_OPEN_API_SERVER_URL")
+server_url = server_url_env if server_url_env else "https://api.upbit.com"
 env_mode = os.getenv("MODE", "").upper()
 current_mode = env_mode if env_mode else ("REAL" if env_access_key and env_secret_key else "MOCK")
 
 # MODE in .env takes highest priority
 if env_mode == "MOCK":
     # In mock mode, always talk to the server at UPBIT_OPEN_API_SERVER_URL (e.g., 5001 mock)
+    # If URL not explicitly set, default to localhost mock server
+    if not server_url_env:
+        server_url = "http://localhost:5001"
+        
     access_key = env_access_key or "mock_access_key"
     secret_key = env_secret_key or "mock_secret_key"
     exchange = UpbitExchange(access_key, secret_key, server_url=server_url)
@@ -67,6 +72,10 @@ else:
         current_mode = "REAL"
         print(f"Using Upbit Exchange from .env (URL: {server_url})")
     else:
+        # If URL not explicitly set, default to localhost mock server for fallback mock mode
+        if not server_url_env:
+            server_url = "http://localhost:5001"
+            
         exchange = UpbitExchange("mock_access_key", "mock_secret_key", server_url=server_url)
         current_mode = "MOCK"
         print(f"Using Upbit Exchange with default mock creds (URL: {server_url})")
