@@ -11,7 +11,7 @@
 - **자동 Split 관리**: 매도 체결 시 해당 split 자동 삭제
 - **실시간 주문 추적**: 폴링 방식으로 주문 체결 상태 확인
 
-## 설치
+## 설치 및 설정
 
 ### 1. Python 의존성 설치
 
@@ -29,47 +29,42 @@ npm install
 cd ..
 ```
 
-### 3. 환경 변수 설정
+### 3. 환경 변수 설정 (Real Mode)
 
-`.env` 파일을 생성하고 업비트 API 키를 설정합니다:
+실제 거래(Real Mode)를 위해서는 `backend` 디렉토리 안에 `.env.real` 파일을 생성하고 업비트 API 키를 설정해야 합니다.
 
-```bash
-UPBIT_ACCESS_KEY=your_access_key_here
-UPBIT_SECRET_KEY=your_secret_key_here
-```
-
-## 🚀 빠른 시작 / Quick Start
-
-### 의존성 설치 / Install Dependencies
+**`backend/.env.real` 파일 생성:**
 
 ```bash
-# Python 패키지 설치
-pip install -r requirements.txt
-
-# Frontend 패키지 설치
-cd frontend && npm install && cd ..
+MODE=REAL
+UPBIT_ACCESS_KEY=your_actual_access_key_here
+UPBIT_SECRET_KEY=your_actual_secret_key_here
 ```
 
-### 실행 방법 / Running
+> **참고:** Mock 모드는 별도의 설정 없이 자동으로 가상 환경에서 실행됩니다.
 
-**전체 시스템 시작 / Start All Services:**
+## 🚀 실행 방법 / Running
+
+### 1. Mock 모드 실행 (테스트용)
+
+가상 거래소와 가상 자산을 사용하여 안전하게 전략을 테스트할 수 있습니다.
+
 ```bash
-./run-dev.sh
+./run-mock.sh
 ```
 
-**개별 실행 / Individual Services:**
+- **Mock Exchange**: http://localhost:5001 (가격 조작 및 가상 계좌 확인)
+- **Dashboard**: http://localhost:5173
+
+### 2. Real 모드 실행 (실전 매매)
+
+실제 업비트 계좌와 연동하여 매매를 수행합니다. **주의: 실제 자산이 사용됩니다.**
+
 ```bash
-./run-exchange.sh      # 가상 거래소 서버 / Mock Exchange (Port 5001)
-./run-trading-bot.sh   # 트레이딩봇 백엔드 / Trading Bot Backend (Port 8000)
-./run-frontend.sh      # 봇 모니터링 UI / Bot Dashboard (Port 5173)
+./run-real.sh
 ```
 
-### 접속 URL / Access
-
-- 🏦 **거래소 관리 / Exchange Control**: http://localhost:5001
-- 🤖 **봇 API / Bot API**: http://localhost:8000
-- 📊 **봇 대시보드 / Dashboard**: http://localhost:5173
-- 📖 **API 문서 / API Docs**: http://localhost:8000/docs
+- **Dashboard**: http://localhost:5173
 
 ## 📚 문서 / Documentation
 
@@ -133,15 +128,17 @@ SevenSplit/
 │   ├── strategy.py          # 매매 전략 로직
 │   ├── main.py             # FastAPI 서버
 │   ├── requirements.txt    # Python 의존성
+│   ├── .env.mock           # Mock 모드 설정 (기본 제공)
+│   ├── .env.real           # Real 모드 설정 (사용자 생성 필요)
 │   └── tests/              # 테스트 파일
 ├── frontend/
 │   ├── src/
 │   │   └── main.jsx        # React 앱
 │   ├── package.json
 │   └── vite.config.js      # Vite 설정
-├── run-dev.sh              # 개발 서버 통합 실행
-├── run-backend.sh          # Backend만 실행
-└── run-frontend.sh         # Frontend만 실행
+├── run-mock.sh             # Mock 모드 실행 스크립트
+├── run-real.sh             # Real 모드 실행 스크립트
+└── README.md
 ```
 
 ## API 엔드포인트
@@ -150,16 +147,11 @@ SevenSplit/
 - `POST /start` - 전략 시작
 - `POST /stop` - 전략 중지
 - `POST /config` - 설정 업데이트
-- `POST /reset` - Mock 거래소 리셋 (테스트용)
-
-## 자동 재시작
-
-- **Backend**: uvicorn의 `--reload` 옵션으로 `.py` 파일 변경 시 자동 재시작
-- **Frontend**: Vite의 HMR(Hot Module Replacement)로 즉시 반영
+- `POST /reset` - 전략 리셋 (주문 취소 및 DB 데이터 삭제)
 
 ## 주의사항
 
 ⚠️ **실제 거래 전 반드시 Mock 모드로 충분히 테스트하세요!**
 
-- Mock 모드: `.env` 파일 없이 실행
-- Real 모드: `.env` 파일에 API 키 설정 후 실행
+- **Mock 모드**: `./run-mock.sh` 실행. 가상 자산 사용.
+- **Real 모드**: `backend/.env.real` 파일 설정 후 `./run-real.sh` 실행. 실제 자산 사용.
