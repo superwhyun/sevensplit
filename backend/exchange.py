@@ -67,7 +67,7 @@ class UpbitExchange(Exchange):
         elif price >= 10000:
             return 10
         elif price >= 1000:
-            return 5
+            return 1
         elif price >= 100:
             return 1
         elif price >= 10:
@@ -274,21 +274,25 @@ class UpbitExchange(Exchange):
         return self._request('POST', '/v1/orders', data=data)
 
     def buy_limit_order(self, ticker, price, volume):
+        # Ensure price is integer string if it's a whole number
+        price_str = str(int(price)) if price == int(price) else str(price)
         data = {
             'market': ticker,
             'side': 'bid',
             'volume': str(volume),
-            'price': str(price),
+            'price': price_str,
             'ord_type': 'limit'
         }
         return self._request('POST', '/v1/orders', data=data)
 
     def sell_limit_order(self, ticker, price, volume):
+        # Ensure price is integer string if it's a whole number
+        price_str = str(int(price)) if price == int(price) else str(price)
         data = {
             'market': ticker,
             'side': 'ask',
             'volume': str(volume),
-            'price': str(price),
+            'price': price_str,
             'ord_type': 'limit'
         }
         return self._request('POST', '/v1/orders', data=data)

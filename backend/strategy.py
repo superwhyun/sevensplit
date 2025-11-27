@@ -226,6 +226,18 @@ class SevenSplitStrategy:
         if not self.is_running:
             return
 
+        # Self-healing: Remove duplicate splits by ID if any exist
+        unique_splits = {}
+        for s in self.splits:
+            if s.id not in unique_splits:
+                unique_splits[s.id] = s
+            else:
+                logging.warning(f"Found duplicate split ID {s.id} in memory. Removing duplicate.")
+        
+        if len(unique_splits) != len(self.splits):
+            self.splits = list(unique_splits.values())
+            self.splits.sort(key=lambda x: x.id)
+
         if current_price is None:
             current_price = self.exchange.get_current_price(self.ticker)
 
@@ -297,11 +309,14 @@ class SevenSplitStrategy:
                 split.buy_order_uuid = result.get('uuid')
                 split.buy_amount = amount
                 split.buy_volume = volume
-                self.splits.append(split)
-                self.next_split_id += 1
-                self.last_buy_price = target_price
-                logging.info(f"Created buy split {split.id} at {target_price} with order {split.buy_order_uuid}")
-                self.save_state()
+                
+                # Prevent duplicate append
+                if not any(s.id == split.id for s in self.splits):
+                    self.splits.append(split)
+                    self.next_split_id += 1
+                    self.last_buy_price = target_price
+                    logging.info(f"Created buy split {split.id} at {target_price} with order {split.buy_order_uuid}")
+                    self.save_state()
                 return split
         except Exception as e:
             logging.warning(f"Failed to create buy order at {target_price}: {e}")
@@ -309,17 +324,20 @@ class SevenSplitStrategy:
             if "invalid_price" in str(e) or "400" in str(e):
                 logging.info(f"Retrying buy order with re-normalization...")
                 try:
-                    target_price = self.exchange.normalize_price(target_price)
-                    result = self.exchange.buy_limit_order(self.ticker, target_price, volume)
+                    new_target_price = self.exchange.normalize_price(target_price)
+                    logging.info(f"Retry normalization: {target_price} -> {new_target_price}")
+                    result = self.exchange.buy_limit_order(self.ticker, new_target_price, volume)
                     if result:
                         split.buy_order_uuid = result.get('uuid')
                         split.buy_amount = amount
                         split.buy_volume = volume
-                        self.splits.append(split)
-                        self.next_split_id += 1
-                        self.last_buy_price = target_price
-                        logging.info(f"Retry successful: Created buy split {split.id} at {target_price}")
-                        self.save_state()
+                        
+                        if not any(s.id == split.id for s in self.splits):
+                            self.splits.append(split)
+                            self.next_split_id += 1
+                            self.last_buy_price = new_target_price
+                            logging.info(f"Retry successful: Created buy split {split.id} at {new_target_price}")
+                            self.save_state()
                         return split
                 except Exception as retry_e:
                     logging.error(f"Retry failed: {retry_e}")
@@ -360,6 +378,10 @@ class SevenSplitStrategy:
         # Normalize price to valid tick size
         sell_price = self.exchange.normalize_price(raw_sell_price)
         
+        # Debug log for price calculation
+        tick_size = self.exchange.get_tick_size(raw_sell_price)
+        logging.info(f"Sell Order Debug: Raw={raw_sell_price}, Normalized={sell_price}, TickSize={tick_size}, Ticker={self.ticker}")
+
         split.target_sell_price = sell_price
 
         try:
