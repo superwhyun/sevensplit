@@ -54,7 +54,8 @@ const Config = ({ config, onUpdate, selectedTicker, currentPrice }) => {
     const handleSubmit = async (e) => {
         e.preventDefault();
         try {
-            await axios.post('http://127.0.0.1:8000/config', {
+            const API_BASE_URL = `http://${window.location.hostname}:8000`;
+            await axios.post(`${API_BASE_URL}/config`, {
                 ticker: selectedTicker,
                 config: formData
             });
