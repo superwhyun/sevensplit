@@ -480,3 +480,26 @@ async def websocket_endpoint(websocket: WebSocket):
         ws_connections.discard(websocket)
 
 
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
+# ... (existing code) ...
+
+# Serve frontend static files if they exist (Production/Docker mode)
+# This assumes the frontend is built to ../frontend/dist
+FRONTEND_DIST = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "dist")
+
+if os.path.exists(FRONTEND_DIST):
+    # Mount assets directory
+    app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets")), name="assets")
+
+    # Catch-all route for SPA (React Router)
+    @app.get("/{full_path:path}")
+    async def serve_react_app(full_path: str):
+        # Check if file exists in dist (e.g. favicon.ico, robots.txt)
+        file_path = os.path.join(FRONTEND_DIST, full_path)
+        if os.path.exists(file_path) and os.path.isfile(file_path):
+            return FileResponse(file_path)
+            
+        # Otherwise return index.html for client-side routing
+        return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))

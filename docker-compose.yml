@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  # User 1 Bot Instance
+  bot-user1:
+    build: .
+    image: sevensplit-bot:latest
+    container_name: sevensplit-user1
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    environment:
+      - MODE=REAL
+      - UPBIT_ACCESS_KEY=${USER1_ACCESS_KEY}
+      - UPBIT_SECRET_KEY=${USER1_SECRET_KEY}
+    volumes:
+      - ./data/user1.db:/app/backend/sevensplit.db
+
+  # User 2 Bot Instance (Example)
+  # bot-user2:
+  #   image: sevensplit-bot:latest
+  #   container_name: sevensplit-user2
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8002:8000"
+  #   environment:
+  #     - MODE=REAL
+  #     - UPBIT_ACCESS_KEY=${USER2_ACCESS_KEY}
+  #     - UPBIT_SECRET_KEY=${USER2_SECRET_KEY}
+  #   volumes:
+  #     - ./data/user2.db:/app/backend/sevensplit.db
+
+  # Mock Exchange (Optional, for testing)
+  mock-exchange:
+    build: 
+      context: .
+      dockerfile: mock-exchange/Dockerfile
+    container_name: sevensplit-mock
+    ports:
+      - "5001:5001"

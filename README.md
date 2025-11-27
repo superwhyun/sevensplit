@@ -66,6 +66,42 @@ UPBIT_SECRET_KEY=your_actual_secret_key_here
 
 - **Dashboard**: http://localhost:5173
 
+## 🐳 Docker 배포 (멀티 유저 / 서버 운영)
+
+Docker를 사용하면 여러 개의 봇을 격리된 환경에서 안정적으로 운영할 수 있습니다.
+
+### 1. 이미지 빌드
+
+```bash
+docker-compose build
+```
+
+### 2. 컨테이너 실행
+
+```bash
+# 백그라운드 실행
+docker-compose up -d
+```
+
+### 3. 멀티 유저 설정
+
+`docker-compose.yml` 파일을 수정하여 사용자별로 봇을 추가할 수 있습니다.
+
+```yaml
+  bot-user2:
+    image: sevensplit-bot:latest
+    ports:
+      - "8002:8000"  # 다른 포트 사용
+    environment:
+      - UPBIT_ACCESS_KEY=사용자2_키
+      - UPBIT_SECRET_KEY=사용자2_시크릿
+    volumes:
+      - ./data/user2.db:/app/backend/sevensplit.db
+```
+
+- **User 1 Dashboard**: http://localhost:8001
+- **User 2 Dashboard**: http://localhost:8002
+
 ## 📚 문서 / Documentation
 
 - [설치 가이드 / Setup Guide](SETUP.md) - 상세 설치 및 문제 해결
