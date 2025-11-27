@@ -19,12 +19,16 @@ echo ""
 export ENV_FILE=".env.mock"
 
 # Source the mock config to make variables available to shell
-if [ -f "./backend/.env.mock" ]; then
+if [ -f ".env.mock" ]; then
     set -a # automatically export all variables
+    source .env.mock
+    set +a
+elif [ -f "./backend/.env.mock" ]; then
+    set -a
     source ./backend/.env.mock
     set +a
 else
-    echo -e "${RED}Error: backend/.env.mock not found${NC}"
+    echo -e "${RED}Error: .env.mock not found in root or backend/${NC}"
     exit 1
 fi
 

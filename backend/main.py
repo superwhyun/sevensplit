@@ -138,9 +138,10 @@ def run_strategies():
 thread = threading.Thread(target=run_strategies, daemon=True)
 thread.start()
 
-@app.get("/")
-def read_root():
-    return {"message": "Seven Split Bot API is running"}
+# Root route removed to allow frontend serving
+# @app.get("/")
+# def read_root():
+#     return {"message": "Seven Split Bot API is running"}
 
 @app.get("/status")
 def get_status(ticker: str = "KRW-BTC"):
@@ -162,9 +163,18 @@ def get_status(ticker: str = "KRW-BTC"):
     # Mode flag
     state["mode"] = current_mode
     
+    # Fetch accounts once to get both balances
+    try:
+        accounts_raw = exchange._request('GET', '/v1/accounts') if hasattr(exchange, '_request') else []
+        balance_map = {acc['currency']: float(acc['balance']) for acc in accounts_raw}
+    except Exception as e:
+        logging.error(f"Failed to fetch accounts for status: {e}")
+        balance_map = {}
+
     # Add Wallet Info
-    state["balance_krw"] = exchange.get_balance("KRW")
-    state["balance_coin"] = exchange.get_balance(ticker)
+    state["balance_krw"] = balance_map.get("KRW", 0.0)
+    currency = ticker.split("-")[1] if "-" in ticker else ticker
+    state["balance_coin"] = balance_map.get(currency, 0.0)
     
     # Calculate Total Asset Value (KRW + Coin Value)
     # Note: This is a rough estimate using current price.
@@ -191,6 +201,16 @@ def get_full_snapshot() -> Dict[str, Any]:
         logging.error(f"Failed to batch fetch prices: {e}")
         prices = {}
     
+    # Fetch Accounts (Raw) ONCE
+    try:
+        accounts_raw = exchange._request('GET', '/v1/accounts') if hasattr(exchange, '_request') else []
+    except Exception as e:
+        logging.error(f"Failed to fetch accounts: {e}")
+        accounts_raw = []
+
+    # Create Balance Map
+    balance_map = {acc['currency']: float(acc['balance']) for acc in accounts_raw}
+
     for ticker in TICKERS:
         try:
             # Get strategy state with pre-fetched price
@@ -199,9 +219,10 @@ def get_full_snapshot() -> Dict[str, Any]:
             # Add mode flag
             state["mode"] = current_mode
             
-            # Add Wallet Info
-            state["balance_krw"] = exchange.get_balance("KRW")
-            state["balance_coin"] = exchange.get_balance(ticker)
+            # Add Wallet Info using cached balance map
+            state["balance_krw"] = balance_map.get("KRW", 0.0)
+            currency = ticker.split("-")[1] if "-" in ticker else ticker
+            state["balance_coin"] = balance_map.get(currency, 0.0)
             
             # Calculate Total Asset Value
             current_price = state["current_price"]
@@ -214,8 +235,8 @@ def get_full_snapshot() -> Dict[str, Any]:
         except Exception as e:
             logging.error(f"Snapshot error for {ticker}: {e}")
     
-    # Get portfolio with pre-fetched prices
-    snapshot["portfolio"] = get_portfolio(prices)
+    # Get portfolio with pre-fetched prices and accounts
+    snapshot["portfolio"] = _calculate_portfolio(prices, accounts_raw)
     
     return snapshot
 
@@ -344,9 +365,8 @@ def reset_all_mock():
 
     return {"status": "mock reset", "message": "All strategies and database reset"}
 
-@app.get("/portfolio")
-def get_portfolio(prices: dict = {}):
-    """Get overall portfolio status across all tickers"""
+def _calculate_portfolio(prices: dict = {}, accounts_raw: list = None):
+    """Internal logic to calculate portfolio status"""
     portfolio = {
         "mode": current_mode,
         "coins": {},
@@ -355,7 +375,26 @@ def get_portfolio(prices: dict = {}):
 
     # Get accounts - if prices are provided, use them to avoid redundant API calls
     if hasattr(exchange, "get_accounts"):
-        if prices:
+        if accounts_raw is not None:
+             # Use provided raw accounts
+             accounts = []
+             for account in accounts_raw:
+                currency = account.get('currency')
+                balance = float(account.get('balance', 0))
+                locked = float(account.get('locked', 0))
+                ticker = f"KRW-{currency}" if currency and currency != 'KRW' else None
+                current_price = 1.0 if currency == 'KRW' else prices.get(ticker, 0.0)
+                total_balance = balance + locked
+                value = total_balance * current_price if current_price else 0.0
+                
+                accounts.append({
+                    **account,
+                    "ticker": ticker,
+                    "current_price": current_price,
+                    "balance_value": value,
+                    "total_balance": total_balance
+                })
+        elif prices:
             # Temporarily inject prices into accounts manually to avoid extra API call
             accounts_raw = exchange._request('GET', '/v1/accounts') if hasattr(exchange, '_request') else []
             accounts = []
@@ -460,6 +499,11 @@ def get_portfolio(prices: dict = {}):
     return portfolio
 
 
+@app.get("/portfolio")
+def get_portfolio():
+    return _calculate_portfolio()
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -493,6 +537,11 @@ if os.path.exists(FRONTEND_DIST):
     # Mount assets directory
     app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets")), name="assets")
 
+    # Serve index.html at root
+    @app.get("/")
+    async def serve_spa_root():
+        return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
+
     # Catch-all route for SPA (React Router)
     @app.get("/{full_path:path}")
     async def serve_react_app(full_path: str):
@@ -503,3 +552,8 @@ if os.path.exists(FRONTEND_DIST):
             
         # Otherwise return index.html for client-side routing
         return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
+
+else:
+    @app.get("/")
+    def read_root():
+        return {"message": "Seven Split Bot API is running (Frontend build not found)"}

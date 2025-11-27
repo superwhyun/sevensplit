@@ -20,13 +20,23 @@ echo ""
 export ENV_FILE=".env.real"
 
 # Source the real config
-if [ -f "./backend/.env.real" ]; then
+if [ -f ".env.real" ]; then
+    echo -e "${YELLOW}Loading configuration from .env.real...${NC}"
+    set -a
+    source .env.real
+    set +a
+elif [ -f ".env" ]; then
+    echo -e "${YELLOW}Loading configuration from .env...${NC}"
+    set -a
+    source .env
+    set +a
+elif [ -f "./backend/.env.real" ]; then
     echo -e "${YELLOW}Loading configuration from backend/.env.real...${NC}"
     set -a
     source ./backend/.env.real
     set +a
 else
-    echo -e "${RED}Error: backend/.env.real not found${NC}"
+    echo -e "${RED}Error: Configuration file not found (.env.real or .env)${NC}"
     exit 1
 fi
 
@@ -37,63 +47,62 @@ if [ -z "$UPBIT_ACCESS_KEY" ] || [ -z "$UPBIT_SECRET_KEY" ]; then
     exit 1
 fi
 
-# Kill existing processes on ports 8000, 5173 (NOT 5001, as we don't use mock server)
-echo -e "${YELLOW}Checking for processes on ports 8000, 5173...${NC}"
-PIDS=$(lsof -ti:8000,5173 2>/dev/null)
+# Kill existing processes on port 8000
+echo -e "${YELLOW}Checking for processes on port 8000...${NC}"
+PIDS=$(lsof -ti:8000 2>/dev/null)
 if [ -n "$PIDS" ]; then
     echo -e "${YELLOW}Killing existing processes: $PIDS${NC}"
     echo "$PIDS" | xargs kill -9 2>/dev/null
     sleep 1
     echo -e "${GREEN}✓ Ports cleared${NC}"
 else
-    echo -e "${GREEN}✓ All ports are free${NC}"
+    echo -e "${GREEN}✓ Port 8000 is free${NC}"
 fi
+echo ""
+
+# Build Frontend
+echo -e "${BLUE}[Frontend]${NC} Building static assets..."
+cd frontend
+npm run build
+if [ $? -ne 0 ]; then
+    echo -e "${RED}Frontend build failed!${NC}"
+    exit 1
+fi
+cd ..
+echo -e "${GREEN}✓ Frontend built successfully${NC}"
 echo ""
 
 # Trap CTRL+C and kill all background processes
 cleanup() {
   echo ""
-  echo -e "${YELLOW}Stopping all servers...${NC}"
+  echo -e "${YELLOW}Stopping server...${NC}"
   kill $(jobs -p) 2>/dev/null
   wait
-  echo -e "${GREEN}All servers stopped${NC}"
+  echo -e "${GREEN}Server stopped${NC}"
 }
 trap cleanup SIGINT SIGTERM EXIT
 
-# Start Trading Bot Backend in background
-echo -e "${BLUE}[Bot]${NC} Starting Trading Bot Backend (REAL MODE)..."
+# Start Trading Bot Backend (which serves Frontend)
+echo -e "${BLUE}[System]${NC} Starting SevenSplit (Backend + UI)..."
 (
     ./backend/run.sh
 ) &
 BOT_PID=$!
 
-# Wait a bit for backend to start
-sleep 2
-
-# Start Frontend in background
-echo -e "${BLUE}[Frontend]${NC} Starting Bot Monitoring UI..."
-(
-    ./frontend/run.sh
-) &
-FRONTEND_PID=$!
-
-# Wait for servers to fully start
+# Wait for server to start
 sleep 2
 
 # Display access information
 echo ""
-echo -e "${RED}✓ All servers are running in REAL TRADING MODE!${NC}"
+echo -e "${RED}✓ SevenSplit is running in REAL TRADING MODE!${NC}"
 echo ""
 echo -e "${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${BLUE}  🤖 Trading Bot API:${NC}   http://localhost:8000"
-echo -e "     ${YELLOW}→ Backend API for bot operations${NC}"
-echo ""
-echo -e "${BLUE}  📊 Bot Dashboard:${NC}     http://localhost:5173"
-echo -e "     ${YELLOW}→ Monitor bot status, trades, portfolio${NC}"
+echo -e "${BLUE}  🚀 Access URL:${NC}     http://localhost:8000"
+echo -e "     ${YELLOW}→ Dashboard & API are both on this port${NC}"
 echo -e "${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
-echo -e "${YELLOW}Press CTRL+C to stop all servers${NC}"
+echo -e "${YELLOW}Press CTRL+C to stop${NC}"
 echo ""
 
-# Wait for all background jobs
+# Wait for background jobs
 wait
