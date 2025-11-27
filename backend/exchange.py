@@ -63,11 +63,13 @@ class UpbitExchange(Exchange):
         elif price >= 500000:
             return 100
         elif price >= 100000:
-            return 50
+            # Conservative: Use 100 instead of 50 to be safe
+            return 100
         elif price >= 10000:
             return 10
         elif price >= 1000:
-            return 1
+            # Conservative: Use 10 instead of 1 to be safe
+            return 10
         elif price >= 100:
             return 1
         elif price >= 10:
