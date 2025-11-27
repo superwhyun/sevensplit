@@ -289,21 +289,40 @@ class SevenSplitStrategy:
 
         logging.info(f"Attempting buy order: {self.ticker}, Price: {target_price}, Volume: {volume}, Total: {target_price * volume}")
 
-        # Place limit buy order
-        result = self.exchange.buy_limit_order(self.ticker, target_price, volume)
+        try:
+            # Place limit buy order
+            result = self.exchange.buy_limit_order(self.ticker, target_price, volume)
 
-        if result:
-            split.buy_order_uuid = result.get('uuid')
-            split.buy_amount = amount
-            split.buy_volume = volume
-            self.splits.append(split)
-            self.next_split_id += 1
-            self.last_buy_price = target_price
-            logging.info(f"Created buy split {split.id} at {target_price} with order {split.buy_order_uuid}")
-            self.save_state()
-            return split
-        else:
-            logging.error(f"Failed to create buy order at {target_price}")
+            if result:
+                split.buy_order_uuid = result.get('uuid')
+                split.buy_amount = amount
+                split.buy_volume = volume
+                self.splits.append(split)
+                self.next_split_id += 1
+                self.last_buy_price = target_price
+                logging.info(f"Created buy split {split.id} at {target_price} with order {split.buy_order_uuid}")
+                self.save_state()
+                return split
+        except Exception as e:
+            logging.warning(f"Failed to create buy order at {target_price}: {e}")
+            # Retry logic
+            if "invalid_price" in str(e) or "400" in str(e):
+                logging.info(f"Retrying buy order with re-normalization...")
+                try:
+                    target_price = self.exchange.normalize_price(target_price)
+                    result = self.exchange.buy_limit_order(self.ticker, target_price, volume)
+                    if result:
+                        split.buy_order_uuid = result.get('uuid')
+                        split.buy_amount = amount
+                        split.buy_volume = volume
+                        self.splits.append(split)
+                        self.next_split_id += 1
+                        self.last_buy_price = target_price
+                        logging.info(f"Retry successful: Created buy split {split.id} at {target_price}")
+                        self.save_state()
+                        return split
+                except Exception as retry_e:
+                    logging.error(f"Retry failed: {retry_e}")
             return None
 
     def _check_buy_order(self, split: SplitState):
@@ -337,22 +356,36 @@ class SevenSplitStrategy:
     def _create_sell_order(self, split: SplitState):
         """Create sell order after buy is filled."""
         # Calculate sell price based on sell_rate
-        sell_price = split.actual_buy_price * (1 + self.config.sell_rate)
+        raw_sell_price = split.actual_buy_price * (1 + self.config.sell_rate)
         # Normalize price to valid tick size
-        sell_price = self.exchange.normalize_price(sell_price)
+        sell_price = self.exchange.normalize_price(raw_sell_price)
         
         split.target_sell_price = sell_price
 
-        # Place limit sell order
-        result = self.exchange.sell_limit_order(self.ticker, sell_price, split.buy_volume)
+        try:
+            # Place limit sell order
+            result = self.exchange.sell_limit_order(self.ticker, sell_price, split.buy_volume)
 
-        if result:
-            split.sell_order_uuid = result.get('uuid')
-            split.status = "PENDING_SELL"
-            logging.info(f"Created sell order {split.sell_order_uuid} for split {split.id} at {sell_price}")
-            self.save_state()
-        else:
-            logging.error(f"Failed to create sell order for split {split.id}")
+            if result:
+                split.sell_order_uuid = result.get('uuid')
+                split.status = "PENDING_SELL"
+                logging.info(f"Created sell order {split.sell_order_uuid} for split {split.id} at {sell_price}")
+                self.save_state()
+        except Exception as e:
+            logging.warning(f"Failed to create sell order for split {split.id} at {sell_price}: {e}")
+            # Retry logic
+            if "invalid_price" in str(e) or "400" in str(e):
+                logging.info(f"Retrying sell order for split {split.id} with re-normalization...")
+                try:
+                    sell_price = self.exchange.normalize_price(raw_sell_price)
+                    result = self.exchange.sell_limit_order(self.ticker, sell_price, split.buy_volume)
+                    if result:
+                        split.sell_order_uuid = result.get('uuid')
+                        split.status = "PENDING_SELL"
+                        logging.info(f"Retry successful: Created sell order {split.sell_order_uuid} for split {split.id} at {sell_price}")
+                        self.save_state()
+                except Exception as retry_e:
+                    logging.error(f"Retry failed for split {split.id}: {retry_e}")
 
     def _check_sell_order(self, split: SplitState):
         """Check if sell order is filled."""

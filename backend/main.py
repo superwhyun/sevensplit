@@ -129,6 +129,8 @@ def run_strategies():
                         
         except Exception as e:
             logging.error(f"Error in strategy loop: {e}")
+            # Sleep longer on error to prevent rapid-fire logging/retries
+            time.sleep(2.0)
         
         # Sleep for a short interval to avoid busy waiting
         time.sleep(0.1)
