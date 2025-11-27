@@ -17,7 +17,11 @@ const Dashboard = () => {
         selectedTickerRef.current = selectedTicker;
     }, [selectedTicker]);
 
-    const API_BASE_URL = `http://${window.location.hostname}:8000`;
+    // If running on Vite dev server (port 5173), point to backend port 8000.
+    // Otherwise (Docker/Production), use relative path (same origin).
+    const API_BASE_URL = window.location.port === '5173'
+        ? `http://${window.location.hostname}:8000`
+        : '';
 
     const fetchStatus = async () => {
         try {
@@ -49,7 +53,14 @@ const Dashboard = () => {
 
         // Set up websocket connection for live updates
         const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-        const wsHost = `${window.location.hostname}:8000`;
+
+        // For WS, we need absolute URL. 
+        // If dev (5173), target 8000. 
+        // If prod (Docker), target current host:port (e.g. 8001).
+        const wsHost = window.location.port === '5173'
+            ? `${window.location.hostname}:8000`
+            : window.location.host; // host includes port
+
         let retryTimer;
         let fallbackTimer;
 

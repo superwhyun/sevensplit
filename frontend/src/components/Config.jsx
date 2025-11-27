@@ -54,7 +54,12 @@ const Config = ({ config, onUpdate, selectedTicker, currentPrice }) => {
     const handleSubmit = async (e) => {
         e.preventDefault();
         try {
-            const API_BASE_URL = `http://${window.location.hostname}:8000`;
+            // If running on Vite dev server (port 5173), point to backend port 8000.
+            // Otherwise (Docker/Production), use relative path (same origin).
+            const API_BASE_URL = window.location.port === '5173'
+                ? `http://${window.location.hostname}:8000`
+                : '';
+
             await axios.post(`${API_BASE_URL}/config`, {
                 ticker: selectedTicker,
                 config: formData
