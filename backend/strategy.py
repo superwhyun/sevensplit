@@ -206,12 +206,18 @@ class SevenSplitStrategy:
                     logging.info(f"Cancelled buy order {split.buy_order_uuid} for split {split.id}")
                 except Exception as e:
                     logging.error(f"Failed to cancel buy order {split.buy_order_uuid}: {e}")
+                # Reset order info so it can be recreated on start
+                split.buy_order_uuid = None
+                
             elif split.status == "PENDING_SELL" and split.sell_order_uuid:
                 try:
                     self.exchange.cancel_order(split.sell_order_uuid)
                     logging.info(f"Cancelled sell order {split.sell_order_uuid} for split {split.id}")
                 except Exception as e:
                     logging.error(f"Failed to cancel sell order {split.sell_order_uuid}: {e}")
+                # Reset order info and revert status so it creates a new sell order on start
+                split.sell_order_uuid = None
+                split.status = "BUY_FILLED"
 
         self.save_state()
 
