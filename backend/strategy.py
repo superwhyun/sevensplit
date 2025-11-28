@@ -2,6 +2,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 import logging
 import json
+import threading
 from datetime import datetime
 from database import get_db
 
@@ -36,6 +37,7 @@ class SevenSplitStrategy:
         self.budget = budget
         self.db = get_db()
         self.config = StrategyConfig()
+        self.lock = threading.RLock()
         self.splits: List[SplitState] = []
         self.is_running = False
         self.trade_history = []
@@ -189,99 +191,102 @@ class SevenSplitStrategy:
 
     def start(self, current_price=None):
         """Start the strategy. Create first buy order at current price."""
-        self.is_running = True
+        with self.lock:
+            # Always create the first split at current price when starting
+            if current_price is None:
+                current_price = self.exchange.get_current_price(self.ticker)
+            if current_price and not self.splits:
+                logging.info(f"Starting strategy {self.strategy_id} at current price: {current_price}")
+                self._create_buy_split(current_price)
 
-        # Always create the first split at current price when starting
-        if current_price is None:
-            current_price = self.exchange.get_current_price(self.ticker)
-        if current_price and not self.splits:
-            logging.info(f"Starting strategy {self.strategy_id} at current price: {current_price}")
-            self._create_buy_split(current_price)
-
-        self.save_state()
+            self.is_running = True
+            self.save_state()
 
     def stop(self):
         """Stop the strategy and cancel all pending orders."""
-        self.is_running = False
+        with self.lock:
+            self.is_running = False
 
-        # Cancel all pending orders
-        for split in self.splits:
-            if split.status == "PENDING_BUY" and split.buy_order_uuid:
-                try:
-                    self.exchange.cancel_order(split.buy_order_uuid)
-                    logging.info(f"Cancelled buy order {split.buy_order_uuid} for split {split.id}")
-                except Exception as e:
-                    logging.error(f"Failed to cancel buy order {split.buy_order_uuid}: {e}")
-                # Reset order info so it can be recreated on start
-                split.buy_order_uuid = None
-                
-            elif split.status == "PENDING_SELL" and split.sell_order_uuid:
-                try:
-                    self.exchange.cancel_order(split.sell_order_uuid)
-                    logging.info(f"Cancelled sell order {split.sell_order_uuid} for split {split.id}")
-                except Exception as e:
-                    logging.error(f"Failed to cancel sell order {split.sell_order_uuid}: {e}")
-                # Reset order info and revert status so it creates a new sell order on start
-                split.sell_order_uuid = None
-                split.status = "BUY_FILLED"
+            # Cancel all pending orders
+            for split in self.splits:
+                if split.status == "PENDING_BUY" and split.buy_order_uuid:
+                    try:
+                        self.exchange.cancel_order(split.buy_order_uuid)
+                        logging.info(f"Cancelled buy order {split.buy_order_uuid} for split {split.id}")
+                    except Exception as e:
+                        logging.error(f"Failed to cancel buy order {split.buy_order_uuid}: {e}")
+                    # Reset order info so it can be recreated on start
+                    split.buy_order_uuid = None
+                    
+                elif split.status == "PENDING_SELL" and split.sell_order_uuid:
+                    try:
+                        self.exchange.cancel_order(split.sell_order_uuid)
+                        logging.info(f"Cancelled sell order {split.sell_order_uuid} for split {split.id}")
+                    except Exception as e:
+                        logging.error(f"Failed to cancel sell order {split.sell_order_uuid}: {e}")
+                    # Reset order info and revert status so it creates a new sell order on start
+                    split.sell_order_uuid = None
+                    split.status = "BUY_FILLED"
 
-        self.save_state()
+            self.save_state()
 
     def update_config(self, config: StrategyConfig):
         """Update configuration."""
-        logging.info(f"Updating config for Strategy {self.strategy_id}. Old: {self.config}, New: {config}")
-        self.config = config
-        self.save_state()
+        with self.lock:
+            logging.info(f"Updating config for Strategy {self.strategy_id}. Old: {self.config}, New: {config}")
+            self.config = config
+            self.save_state()
 
     def tick(self, current_price: float = None):
         """Main tick function called periodically to check and update splits."""
-        if not self.is_running:
-            return
+        with self.lock:
+            if not self.is_running:
+                return
 
-        # Self-healing: Remove duplicate splits by ID if any exist
-        unique_splits = {}
-        for s in self.splits:
-            if s.id not in unique_splits:
-                unique_splits[s.id] = s
-            else:
-                logging.warning(f"Found duplicate split ID {s.id} in memory. Removing duplicate.")
-        
-        if len(unique_splits) != len(self.splits):
-            self.splits = list(unique_splits.values())
-            self.splits.sort(key=lambda x: x.id)
+            # Self-healing: Remove duplicate splits by ID if any exist
+            unique_splits = {}
+            for s in self.splits:
+                if s.id not in unique_splits:
+                    unique_splits[s.id] = s
+                else:
+                    logging.warning(f"Found duplicate split ID {s.id} in memory. Removing duplicate.")
+            
+            if len(unique_splits) != len(self.splits):
+                self.splits = list(unique_splits.values())
+                self.splits.sort(key=lambda x: x.id)
 
-        if current_price is None:
-            current_price = self.exchange.get_current_price(self.ticker)
+            if current_price is None:
+                current_price = self.exchange.get_current_price(self.ticker)
 
-        if not current_price:
-            return
+            if not current_price:
+                return
 
-        # Check all splits for order status updates
-        splits_to_remove = []
+            # Check all splits for order status updates
+            splits_to_remove = []
 
-        for split in self.splits:
-            if split.status == "PENDING_BUY":
-                self._check_buy_order(split)
+            for split in self.splits:
+                if split.status == "PENDING_BUY":
+                    self._check_buy_order(split)
 
-            elif split.status == "BUY_FILLED":
-                # Buy filled, create sell order
-                self._create_sell_order(split)
+                elif split.status == "BUY_FILLED":
+                    # Buy filled, create sell order
+                    self._create_sell_order(split)
 
-            elif split.status == "PENDING_SELL":
-                self._check_sell_order(split)
+                elif split.status == "PENDING_SELL":
+                    self._check_sell_order(split)
 
-            elif split.status == "SELL_FILLED":
-                # Sell completed, mark for removal
-                splits_to_remove.append(split)
+                elif split.status == "SELL_FILLED":
+                    # Sell completed, mark for removal
+                    splits_to_remove.append(split)
 
-        # Remove completed splits
-        for split in splits_to_remove:
-            logging.info(f"Removing completed split {split.id}")
-            self.splits.remove(split)
-            self.save_state()
+            # Remove completed splits
+            for split in splits_to_remove:
+                logging.info(f"Removing completed split {split.id}")
+                self.splits.remove(split)
+                self.save_state()
 
-        # Check if we need to create new buy split based on price drop
-        self._check_create_new_buy_split(current_price)
+            # Check if we need to create new buy split based on price drop
+            self._check_create_new_buy_split(current_price)
 
     def _create_buy_split(self, target_price: float):
         """Create a new buy split at the given target price."""
@@ -589,54 +594,55 @@ class SevenSplitStrategy:
                 logging.info(f"Created buy split {i+1}/{levels_crossed} at {current_price}")
 
     def get_state(self, current_price=None):
-        if current_price is None:
-            current_price = self.exchange.get_current_price(self.ticker)
+        with self.lock:
+            if current_price is None:
+                current_price = self.exchange.get_current_price(self.ticker)
 
-        # Calculate aggregated profit for active positions
-        total_invested = 0.0
-        total_valuation = 0.0
-        total_coin_volume = 0.0
+            # Calculate aggregated profit for active positions
+            total_invested = 0.0
+            total_valuation = 0.0
+            total_coin_volume = 0.0
 
-        for split in self.splits:
-            # Count splits with buy filled or pending sell as active positions
-            if split.status in ["BUY_FILLED", "PENDING_SELL"]:
-                invested = split.buy_amount
-                valuation = split.buy_volume * current_price if current_price else 0
-                total_invested += invested
-                total_valuation += valuation
-                total_coin_volume += split.buy_volume
+            for split in self.splits:
+                # Count splits with buy filled or pending sell as active positions
+                if split.status in ["BUY_FILLED", "PENDING_SELL"]:
+                    invested = split.buy_amount
+                    valuation = split.buy_volume * current_price if current_price else 0
+                    total_invested += invested
+                    total_valuation += valuation
+                    total_coin_volume += split.buy_volume
 
-        total_profit_amount = total_valuation - total_invested
-        total_profit_rate = (total_profit_amount / total_invested * 100) if total_invested > 0 else 0.0
+            total_profit_amount = total_valuation - total_invested
+            total_profit_rate = (total_profit_amount / total_invested * 100) if total_invested > 0 else 0.0
 
-        # Count splits by status
-        status_counts = {
-            "pending_buy": sum(1 for s in self.splits if s.status == "PENDING_BUY"),
-            "buy_filled": sum(1 for s in self.splits if s.status == "BUY_FILLED"),
-            "pending_sell": sum(1 for s in self.splits if s.status == "PENDING_SELL"),
-            "sell_filled": sum(1 for s in self.splits if s.status == "SELL_FILLED")
-        }
+            # Count splits by status
+            status_counts = {
+                "pending_buy": sum(1 for s in self.splits if s.status == "PENDING_BUY"),
+                "buy_filled": sum(1 for s in self.splits if s.status == "BUY_FILLED"),
+                "pending_sell": sum(1 for s in self.splits if s.status == "PENDING_SELL"),
+                "sell_filled": sum(1 for s in self.splits if s.status == "SELL_FILLED")
+            }
 
-        # Get strategy name from DB (optimization: could cache this)
-        strategy_name = "Unknown"
-        strategy_rec = self.db.get_strategy(self.strategy_id)
-        if strategy_rec:
-            strategy_name = strategy_rec.name
+            # Get strategy name from DB (optimization: could cache this)
+            strategy_name = "Unknown"
+            strategy_rec = self.db.get_strategy(self.strategy_id)
+            if strategy_rec:
+                strategy_name = strategy_rec.name
 
-        return {
-            "id": self.strategy_id,
-            "name": strategy_name,
-            "ticker": self.ticker,
-            "budget": self.budget,
-            "is_running": self.is_running,
-            "config": self.config.dict(),
-            "splits": [s.dict() for s in self.splits],
-            "current_price": current_price,
-            "total_profit_amount": total_profit_amount,
-            "total_profit_rate": total_profit_rate,
-            "total_invested": total_invested,
-            "total_coin_volume": total_coin_volume,
-            "total_valuation": total_valuation,
-            "status_counts": status_counts,
-            "trade_history": self.trade_history[:10] # Return last 10 trades
-        }
+            return {
+                "id": self.strategy_id,
+                "name": strategy_name,
+                "ticker": self.ticker,
+                "budget": self.budget,
+                "is_running": self.is_running,
+                "config": self.config.dict(),
+                "splits": [s.dict() for s in self.splits],
+                "current_price": current_price,
+                "total_profit_amount": total_profit_amount,
+                "total_profit_rate": total_profit_rate,
+                "total_invested": total_invested,
+                "total_coin_volume": total_coin_volume,
+                "total_valuation": total_valuation,
+                "status_counts": status_counts,
+                "trade_history": self.trade_history[:10] # Return last 10 trades
+            }
