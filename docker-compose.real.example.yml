@@ -13,6 +13,7 @@ services:
       - UPBIT_ACCESS_KEY=${USER1_ACCESS_KEY}
       - UPBIT_SECRET_KEY=${USER1_SECRET_KEY}
       - UPBIT_OPEN_API_SERVER_URL=https://api.upbit.com
+      - DB_PATH=/app/backend/sevensplit.db
     volumes:
       - ./data/user1.db:/app/backend/sevensplit.db
 

@@ -12,6 +12,7 @@ services:
       - MODE=MOCK
       # In Docker network, we use the service name 'mock-exchange' as the hostname
       - UPBIT_OPEN_API_SERVER_URL=http://mock-exchange:5001
+      - DB_PATH=/app/backend/sevensplit.db
     volumes:
       - ./data/user1_mock.db:/app/backend/sevensplit.db
     depends_on:
