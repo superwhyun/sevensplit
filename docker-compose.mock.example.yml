@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  # User 1 Bot Instance (Mock Trading)
+  bot-user1:
+    image: sevensplit-bot:latest
+    container_name: sevensplit-user1-mock
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    environment:
+      - MODE=MOCK
+      # In Docker network, we use the service name 'mock-exchange' as the hostname
+      - UPBIT_OPEN_API_SERVER_URL=http://mock-exchange:5001
+    volumes:
+      - ./data/user1_mock.db:/app/backend/sevensplit.db
+    depends_on:
+      - mock-exchange
+
+  # Mock Exchange Server
+  mock-exchange:
+    image: sevensplit-mock-exchange
+    container_name: sevensplit-mock
+    ports:
+      - "5001:5001"

@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  # User 1 Bot Instance (Real Trading)
+  bot-user1:
+    image: sevensplit-bot:latest
+    container_name: sevensplit-user1
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    environment:
+      - MODE=REAL
+      - UPBIT_ACCESS_KEY=${USER1_ACCESS_KEY}
+      - UPBIT_SECRET_KEY=${USER1_SECRET_KEY}
+      - UPBIT_OPEN_API_SERVER_URL=https://api.upbit.com
+    volumes:
+      - ./data/user1.db:/app/backend/sevensplit.db
+
+  # User 2 Bot Instance (Example - Uncomment to use)
+  # bot-user2:
+  #   image: sevensplit-bot:latest
+  #   container_name: sevensplit-user2
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8002:8000"
+  #   environment:
+  #     - MODE=REAL
+  #     - UPBIT_ACCESS_KEY=${USER2_ACCESS_KEY}
+  #     - UPBIT_SECRET_KEY=${USER2_SECRET_KEY}
+  #     - UPBIT_OPEN_API_SERVER_URL=https://api.upbit.com
+  #   volumes:
+  #     - ./data/user2.db:/app/backend/sevensplit.db
