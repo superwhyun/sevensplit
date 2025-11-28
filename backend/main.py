@@ -3,6 +3,7 @@ import pyupbit
 import asyncio
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from exchange import UpbitExchange
@@ -11,7 +12,9 @@ import threading
 import time
 import glob
 import logging
-from typing import Dict, Any
+import io
+import csv
+from typing import Dict, Any, List, Optional
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -80,52 +83,90 @@ else:
         current_mode = "MOCK"
         print(f"Using Upbit Exchange with default mock creds (URL: {server_url})")
 
-TICKERS = ["KRW-BTC", "KRW-ETH", "KRW-SOL", "KRW-XRP"]
-strategies = {ticker: SevenSplitStrategy(exchange, ticker) for ticker in TICKERS}
+# --- Strategy Management ---
+strategies: Dict[int, SevenSplitStrategy] = {}
+
+def load_strategies():
+    """Load strategies from DB, or create defaults if none exist."""
+    global strategies
+    strategies = {}
+    db_strategies = db.get_all_strategies()
+    
+    if not db_strategies:
+        # Create defaults
+        defaults = ["KRW-BTC", "KRW-ETH", "KRW-SOL", "KRW-XRP"]
+        logging.info("No strategies found in DB. Creating default strategies.")
+        for ticker in defaults:
+            s = db.create_strategy(
+                name=f"{ticker} Default", 
+                ticker=ticker, 
+                config=StrategyConfig().dict()
+            )
+            strategies[s.id] = SevenSplitStrategy(exchange, s.id, s.ticker, s.budget)
+    else:
+        logging.info(f"Loading {len(db_strategies)} strategies from DB.")
+        for s in db_strategies:
+            strategies[s.id] = SevenSplitStrategy(exchange, s.id, s.ticker, s.budget)
+
+load_strategies()
 
 # --- WebSocket connection registry ---
 ws_connections = set()
 
 # Background thread for strategy tick
 def run_strategies():
-    # Track last tick time for each ticker
-    last_tick_time = {ticker: 0.0 for ticker in strategies.keys()}
+    # Track last tick time for each strategy
+    last_tick_time = {s_id: 0.0 for s_id in strategies.keys()}
     
     while True:
         try:
             current_time = time.time()
             
-            # Determine which tickers need to be ticked based on their tick_interval
-            tickers_to_tick = []
-            for ticker, strategy in strategies.items():
+            # Refresh strategy list keys in case of additions/deletions
+            current_strategy_ids = list(strategies.keys())
+            
+            # Determine which strategies need to be ticked
+            strategies_to_tick = []
+            tickers_to_fetch = set()
+            
+            for s_id in current_strategy_ids:
+                if s_id not in strategies: continue # Handle deletion race condition
+                strategy = strategies[s_id]
+                
+                if s_id not in last_tick_time:
+                    last_tick_time[s_id] = 0.0
+                
                 if strategy.is_running:
                     tick_interval = strategy.config.tick_interval
-                    if current_time - last_tick_time[ticker] >= tick_interval:
-                        tickers_to_tick.append(ticker)
+                    if current_time - last_tick_time[s_id] >= tick_interval:
+                        strategies_to_tick.append(strategy)
+                        tickers_to_fetch.add(strategy.ticker)
             
-            if tickers_to_tick:
-                # Batch fetch prices for tickers that need ticking
+            if strategies_to_tick:
+                # Batch fetch prices for all unique tickers needed
                 prices = {}
+                ticker_list = list(tickers_to_fetch)
                 
-                # Use exchange's get_current_prices method if available
-                if hasattr(exchange, "get_current_prices"):
-                    prices = exchange.get_current_prices(tickers_to_tick)
-                else:
-                    # Fallback to individual price fetches
-                    for ticker in tickers_to_tick:
-                        try:
-                            price = exchange.get_current_price(ticker)
-                            if price:
-                                prices[ticker] = price
-                        except Exception as e:
-                            logging.error(f"Failed to fetch price for {ticker}: {e}")
+                if ticker_list:
+                    # Use exchange's get_current_prices method if available
+                    if hasattr(exchange, "get_current_prices"):
+                        prices = exchange.get_current_prices(ticker_list)
+                    else:
+                        # Fallback to individual price fetches
+                        for ticker in ticker_list:
+                            try:
+                                price = exchange.get_current_price(ticker)
+                                if price:
+                                    prices[ticker] = price
+                            except Exception as e:
+                                logging.error(f"Failed to fetch price for {ticker}: {e}")
 
                 # Tick strategies
-                for ticker in tickers_to_tick:
-                    price = prices.get(ticker)
+                for strategy in strategies_to_tick:
+                    price = prices.get(strategy.ticker)
                     if price:
-                        strategies[ticker].tick(current_price=price)
-                        last_tick_time[ticker] = current_time
+                        strategy.tick(current_price=price)
+                        last_tick_time[strategy.strategy_id] = current_time
                         
         except Exception as e:
             logging.error(f"Error in strategy loop: {e}")
@@ -138,15 +179,102 @@ def run_strategies():
 thread = threading.Thread(target=run_strategies, daemon=True)
 thread.start()
 
-# Root route removed to allow frontend serving
-# @app.get("/")
-# def read_root():
-#     return {"message": "Seven Split Bot API is running"}
+# --- API Endpoints ---
+
+class CreateStrategyRequest(BaseModel):
+    name: str
+    ticker: str
+    budget: float = 1000000.0
+    config: StrategyConfig
+
+@app.get("/strategies")
+def get_strategies():
+    """List all strategies"""
+    return [
+        {
+            "id": s.strategy_id,
+            "name": db.get_strategy(s.strategy_id).name,
+            "ticker": s.ticker,
+            "budget": s.budget,
+            "is_running": s.is_running
+        }
+        for s in strategies.values()
+    ]
+
+@app.post("/strategies")
+def create_strategy(req: CreateStrategyRequest):
+    """Create a new strategy"""
+    try:
+        s = db.create_strategy(
+            name=req.name,
+            ticker=req.ticker,
+            budget=req.budget,
+            config=req.config.dict()
+        )
+        strategies[s.id] = SevenSplitStrategy(exchange, s.id, s.ticker, s.budget)
+        return {"status": "success", "strategy_id": s.id, "message": "Strategy created"}
+    except Exception as e:
+        logging.error(f"Failed to create strategy: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/strategies/{strategy_id}")
+def delete_strategy(strategy_id: int):
+    """Delete a strategy"""
+    if strategy_id not in strategies:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    
+    try:
+        # Stop if running
+        if strategies[strategy_id].is_running:
+            strategies[strategy_id].stop()
+            
+        # Remove from memory
+        del strategies[strategy_id]
+        
+        # Remove from DB
+        db.delete_strategy(strategy_id)
+        
+        return {"status": "success", "message": "Strategy deleted"}
+    except Exception as e:
+        logging.error(f"Failed to delete strategy: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/strategies/{strategy_id}/export")
+def export_trades(strategy_id: int):
+    """Export trades to CSV"""
+    trades = db.get_trades(strategy_id)
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Header
+    writer.writerow([
+        "ID", "Ticker", "Split ID", "Buy Price", "Sell Price", 
+        "Volume", "Buy Amount", "Sell Amount", "Gross Profit", 
+        "Total Fee", "Net Profit", "Profit Rate (%)", "Timestamp"
+    ])
+    
+    for t in trades:
+        writer.writerow([
+            t.id, t.ticker, t.split_id, t.buy_price, t.sell_price,
+            t.coin_volume, t.buy_amount, t.sell_amount, t.gross_profit,
+            t.total_fee, t.net_profit, t.profit_rate, t.timestamp
+        ])
+    
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=trades_strategy_{strategy_id}.csv"}
+    )
 
 @app.get("/status")
-def get_status(ticker: str = "KRW-BTC"):
-    if ticker not in strategies:
-        raise HTTPException(status_code=404, detail="Ticker not found")
+def get_status(strategy_id: int):
+    if strategy_id not in strategies:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+
+    strategy = strategies[strategy_id]
+    ticker = strategy.ticker
 
     # Batch fetch price for the requested ticker to avoid individual API call
     try:
@@ -159,7 +287,7 @@ def get_status(ticker: str = "KRW-BTC"):
         logging.error(f"Failed to fetch price for {ticker}: {e}")
         current_price = None
 
-    state = strategies[ticker].get_state(current_price=current_price)
+    state = strategy.get_state(current_price=current_price)
     # Mode flag
     state["mode"] = current_mode
     
@@ -188,13 +316,16 @@ def get_status(ticker: str = "KRW-BTC"):
 
 
 def get_full_snapshot() -> Dict[str, Any]:
-    """Aggregate all tickers' status plus portfolio for websocket push."""
-    snapshot = {"tickers": {}}
+    """Aggregate all strategies' status plus portfolio for websocket push."""
+    snapshot = {"strategies": {}}
+    
+    # Collect all tickers needed
+    all_tickers = list(set(s.ticker for s in strategies.values()))
     
     # Batch fetch prices for all tickers ONCE
     try:
-        if hasattr(exchange, "get_current_prices"):
-            prices = exchange.get_current_prices(TICKERS)
+        if hasattr(exchange, "get_current_prices") and all_tickers:
+            prices = exchange.get_current_prices(all_tickers)
         else:
             prices = {}
     except Exception as e:
@@ -211,10 +342,11 @@ def get_full_snapshot() -> Dict[str, Any]:
     # Create Balance Map
     balance_map = {acc['currency']: float(acc['balance']) for acc in accounts_raw}
 
-    for ticker in TICKERS:
+    for s_id, strategy in strategies.items():
         try:
+            ticker = strategy.ticker
             # Get strategy state with pre-fetched price
-            state = strategies[ticker].get_state(current_price=prices.get(ticker))
+            state = strategy.get_state(current_price=prices.get(ticker))
             
             # Add mode flag
             state["mode"] = current_mode
@@ -231,9 +363,9 @@ def get_full_snapshot() -> Dict[str, Any]:
             else:
                 state["total_asset_value"] = state["balance_krw"]
             
-            snapshot["tickers"][ticker] = state
+            snapshot["strategies"][s_id] = state
         except Exception as e:
-            logging.error(f"Snapshot error for {ticker}: {e}")
+            logging.error(f"Snapshot error for strategy {s_id}: {e}")
     
     # Get portfolio with pre-fetched prices and accounts
     snapshot["portfolio"] = _calculate_portfolio(prices, accounts_raw)
@@ -250,60 +382,65 @@ def get_accounts():
         raise HTTPException(status_code=500, detail="Failed to fetch accounts")
 
 class CommandRequest(BaseModel):
-    ticker: str = "KRW-BTC"
+    strategy_id: int
 
 @app.post("/start")
 def start_bot(cmd: CommandRequest):
-    if cmd.ticker not in strategies:
-        raise HTTPException(status_code=404, detail="Ticker not found")
+    if cmd.strategy_id not in strategies:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    
+    strategy = strategies[cmd.strategy_id]
     
     # Fetch current price before starting to avoid individual API call
     try:
         if hasattr(exchange, "get_current_prices"):
-            prices = exchange.get_current_prices([cmd.ticker])
-            current_price = prices.get(cmd.ticker)
+            prices = exchange.get_current_prices([strategy.ticker])
+            current_price = prices.get(strategy.ticker)
         else:
             current_price = None
     except Exception as e:
-        logging.error(f"Failed to fetch price for {cmd.ticker}: {e}")
+        logging.error(f"Failed to fetch price for {strategy.ticker}: {e}")
         current_price = None
     
-    strategies[cmd.ticker].start(current_price=current_price)
-    return {"status": "started", "ticker": cmd.ticker}
+    strategy.start(current_price=current_price)
+    return {"status": "started", "strategy_id": cmd.strategy_id}
 
 @app.post("/stop")
 def stop_bot(cmd: CommandRequest):
-    if cmd.ticker not in strategies:
-        raise HTTPException(status_code=404, detail="Ticker not found")
-    strategies[cmd.ticker].stop()
-    return {"status": "stopped", "ticker": cmd.ticker}
+    if cmd.strategy_id not in strategies:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    strategies[cmd.strategy_id].stop()
+    return {"status": "stopped", "strategy_id": cmd.strategy_id}
 
 class ConfigRequest(BaseModel):
-    ticker: str = "KRW-BTC"
+    strategy_id: int
     config: StrategyConfig
+    budget: Optional[float] = None
 
 @app.post("/config")
 def update_config(req: ConfigRequest):
-    if req.ticker not in strategies:
-        raise HTTPException(status_code=404, detail="Ticker not found")
-    strategies[req.ticker].update_config(req.config)
-    return {"status": "config updated", "ticker": req.ticker, "config": req.config}
+    if req.strategy_id not in strategies:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    if req.budget is not None:
+        strategies[req.strategy_id].budget = req.budget
+    strategies[req.strategy_id].update_config(req.config)
+    return {"status": "config updated", "strategy_id": req.strategy_id, "config": req.config, "budget": strategies[req.strategy_id].budget}
 
 @app.post("/reset")
 def reset_strategy(cmd: CommandRequest):
-    """Reset a specific ticker's strategy"""
-    ticker = cmd.ticker
+    """Reset a specific strategy"""
+    s_id = cmd.strategy_id
 
-    if ticker not in strategies:
-        raise HTTPException(status_code=404, detail="Ticker not found")
+    if s_id not in strategies:
+        raise HTTPException(status_code=404, detail="Strategy not found")
 
     try:
         # Stop the strategy if running
-        if strategies[ticker].is_running:
-            strategies[ticker].stop()
+        if strategies[s_id].is_running:
+            strategies[s_id].stop()
 
-        # Cancel all pending orders for this ticker
-        strategy = strategies[ticker]
+        # Cancel all pending orders for this strategy
+        strategy = strategies[s_id]
         for split in strategy.splits:
             if split.buy_order_uuid:
                 try:
@@ -317,16 +454,17 @@ def reset_strategy(cmd: CommandRequest):
                     logging.error(f"Failed to cancel sell order {split.sell_order_uuid}: {e}")
 
         # Clear splits and trades from database
-        db.delete_all_splits(ticker)
-        db.delete_all_trades(ticker)
+        db.delete_all_splits(s_id)
+        db.delete_all_trades(s_id)
 
-        # Recreate the strategy for this ticker only
-        strategies[ticker] = SevenSplitStrategy(exchange, ticker)
-        logging.info(f"Reset strategy for {ticker}")
+        # Recreate the strategy instance
+        s_rec = db.get_strategy(s_id)
+        strategies[s_id] = SevenSplitStrategy(exchange, s_id, s_rec.ticker, s_rec.budget)
+        logging.info(f"Reset strategy {s_id}")
 
-        return {"status": "success", "ticker": ticker, "message": f"Strategy reset for {ticker}"}
+        return {"status": "success", "strategy_id": s_id, "message": f"Strategy reset for {s_id}"}
     except Exception as e:
-        logging.error(f"Failed to reset strategy for {ticker}: {e}")
+        logging.error(f"Failed to reset strategy {s_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to reset: {str(e)}")
 
 @app.post("/reset-all")
@@ -339,12 +477,12 @@ def reset_all_mock():
         return {"status": "not a mock exchange"}
 
     # Stop all strategies first
-    for ticker in TICKERS:
+    for s_id, strategy in strategies.items():
         try:
-            if strategies[ticker].is_running:
-                strategies[ticker].stop()
+            if strategy.is_running:
+                strategy.stop()
         except Exception as e:
-            print(f"Error stopping strategy for {ticker}: {e}")
+            print(f"Error stopping strategy {s_id}: {e}")
 
     # Reset database
     from database import get_db
@@ -357,11 +495,8 @@ def reset_all_mock():
     secret_key = env_secret_key or "mock_secret_key"
     exchange = UpbitExchange(access_key, secret_key, server_url=server_url)
 
-    # Recreate all strategies
-    strategies = {}
-    for ticker in TICKERS:
-        strategies[ticker] = SevenSplitStrategy(exchange, ticker)
-        print(f"Recreated strategy for {ticker}")
+    # Reload strategies (will be empty, then create defaults)
+    load_strategies()
 
     return {"status": "mock reset", "message": "All strategies and database reset"}
 
@@ -490,8 +625,13 @@ def _calculate_portfolio(prices: dict = {}, accounts_raw: list = None):
     for coin, data in portfolio["coins"].items():
         ticker = data["ticker"]
         try:
-            trades = db.get_trades(ticker)
-            coin_profit = sum(t.net_profit for t in trades)
+            # This is tricky now because trades are by strategy_id, not just ticker.
+            # But we can still query by ticker if we wanted, but the DB method get_trades uses strategy_id now.
+            # We need a method to get trades by ticker or just sum up all strategies for this ticker.
+            # For now, let's just sum up all trades for this coin across all strategies.
+            # Wait, db.get_all_trades() returns all trades. We can filter in memory.
+            coin_trades = [t for t in all_trades if t.ticker == ticker]
+            coin_profit = sum(t.net_profit for t in coin_trades)
             data["realized_profit"] = coin_profit
         except Exception:
             data["realized_profit"] = 0.0

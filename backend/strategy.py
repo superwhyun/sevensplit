@@ -29,9 +29,11 @@ class SplitState(BaseModel):
     bought_at: Optional[str] = None
 
 class SevenSplitStrategy:
-    def __init__(self, exchange, ticker="KRW-BTC"):
+    def __init__(self, exchange, strategy_id: int, ticker: str, budget: float = 1000000.0):
         self.exchange = exchange
+        self.strategy_id = strategy_id
         self.ticker = ticker
+        self.budget = budget
         self.db = get_db()
         self.config = StrategyConfig()
         self.splits: List[SplitState] = []
@@ -61,7 +63,7 @@ class SevenSplitStrategy:
                 if self.config.sell_rate != 0.005:
                     self.config.sell_rate = 0.005
                     
-                logging.info(f"Initialized default config for {ticker}: min_price={self.config.min_price}, max_price={self.config.max_price}")
+                logging.info(f"Initialized default config for {ticker} (Strategy {strategy_id}): min_price={self.config.min_price}, max_price={self.config.max_price}")
                 self.save_state()
 
     def save_state(self):
@@ -70,7 +72,7 @@ class SevenSplitStrategy:
             # Update strategy state
             config_dict = self.config.dict()
             self.db.update_strategy_state(
-                self.ticker,
+                self.strategy_id,
                 investment_per_split=config_dict['investment_per_split'],
                 min_price=config_dict['min_price'],
                 max_price=config_dict['max_price'],
@@ -82,17 +84,18 @@ class SevenSplitStrategy:
                 is_running=self.is_running,
                 next_split_id=self.next_split_id,
                 last_buy_price=self.last_buy_price,
-                last_sell_price=self.last_sell_price
+                last_sell_price=self.last_sell_price,
+                budget=self.budget
             )
 
             # Sync splits to database
-            db_splits = self.db.get_splits(self.ticker)
+            db_splits = self.db.get_splits(self.strategy_id)
             db_split_ids = {s.split_id for s in db_splits}
             mem_split_ids = {s.id for s in self.splits}
 
             # Delete splits that are in DB but not in memory
             for split_id in db_split_ids - mem_split_ids:
-                self.db.delete_split(self.ticker, split_id)
+                self.db.delete_split(self.strategy_id, split_id)
 
             # Update or add splits from memory to DB
             for split in self.splits:
@@ -110,9 +113,9 @@ class SevenSplitStrategy:
                 if split.id in db_split_ids:
                     # For update, remove split_id from kwargs as it's already passed as argument
                     update_data = {k: v for k, v in split_data.items() if k != 'split_id'}
-                    self.db.update_split(self.ticker, split.id, **update_data)
+                    self.db.update_split(self.strategy_id, split.id, **update_data)
                 else:
-                    self.db.add_split(self.ticker, split_data)
+                    self.db.add_split(self.strategy_id, self.ticker, split_data)
 
         except Exception as e:
             logging.error(f"Failed to save state to database: {e}")
@@ -121,7 +124,9 @@ class SevenSplitStrategy:
         """Load state from database. Returns True if state was loaded, False otherwise."""
         try:
             # Load strategy state
-            state = self.db.get_strategy_state(self.ticker)
+            state = self.db.get_strategy(self.strategy_id)
+            if not state:
+                return False
 
             # Update config
             self.config = StrategyConfig(
@@ -139,9 +144,10 @@ class SevenSplitStrategy:
             self.next_split_id = state.next_split_id
             self.last_buy_price = state.last_buy_price
             self.last_sell_price = state.last_sell_price
+            self.budget = state.budget
 
             # Load splits
-            db_splits = self.db.get_splits(self.ticker)
+            db_splits = self.db.get_splits(self.strategy_id)
             self.splits = []
             for db_split in db_splits:
                 split = SplitState(
@@ -160,7 +166,7 @@ class SevenSplitStrategy:
                 self.splits.append(split)
 
             # Load trade history
-            db_trades = self.db.get_trades(self.ticker, limit=100)
+            db_trades = self.db.get_trades(self.strategy_id, limit=100)
             self.trade_history = []
             for trade in db_trades:
                 self.trade_history.append({
@@ -189,7 +195,7 @@ class SevenSplitStrategy:
         if current_price is None:
             current_price = self.exchange.get_current_price(self.ticker)
         if current_price and not self.splits:
-            logging.info(f"Starting strategy at current price: {current_price}")
+            logging.info(f"Starting strategy {self.strategy_id} at current price: {current_price}")
             self._create_buy_split(current_price)
 
         self.save_state()
@@ -223,7 +229,7 @@ class SevenSplitStrategy:
 
     def update_config(self, config: StrategyConfig):
         """Update configuration."""
-        logging.info(f"Updating config. Old: {self.config}, New: {config}")
+        logging.info(f"Updating config for Strategy {self.strategy_id}. Old: {self.config}, New: {config}")
         self.config = config
         self.save_state()
 
@@ -281,6 +287,12 @@ class SevenSplitStrategy:
         """Create a new buy split at the given target price."""
         if target_price < self.config.min_price:
             logging.warning(f"Target price {target_price} below min_price {self.config.min_price}. Skipping.")
+            return None
+
+        # Check Budget
+        total_invested = sum(s.buy_amount for s in self.splits)
+        if total_invested + self.config.investment_per_split > self.budget:
+            logging.warning(f"Budget exceeded for Strategy {self.strategy_id}. Invested: {total_invested}, Budget: {self.budget}. Skipping buy.")
             return None
 
         split = SplitState(
@@ -452,7 +464,7 @@ class SevenSplitStrategy:
                     "buy_order_id": split.buy_order_uuid,
                     "sell_order_id": split.sell_order_uuid
                 }
-                self.db.add_trade(self.ticker, trade_data)
+                self.db.add_trade(self.strategy_id, self.ticker, trade_data)
 
                 # Also keep in memory for quick access (limit to 50)
                 self.trade_history.insert(0, {
@@ -605,8 +617,17 @@ class SevenSplitStrategy:
             "sell_filled": sum(1 for s in self.splits if s.status == "SELL_FILLED")
         }
 
+        # Get strategy name from DB (optimization: could cache this)
+        strategy_name = "Unknown"
+        strategy_rec = self.db.get_strategy(self.strategy_id)
+        if strategy_rec:
+            strategy_name = strategy_rec.name
+
         return {
+            "id": self.strategy_id,
+            "name": strategy_name,
             "ticker": self.ticker,
+            "budget": self.budget,
             "is_running": self.is_running,
             "config": self.config.dict(),
             "splits": [s.dict() for s in self.splits],

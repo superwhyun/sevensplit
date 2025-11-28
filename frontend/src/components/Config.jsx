@@ -1,20 +1,20 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 
-const Config = ({ config, onUpdate, selectedTicker, currentPrice }) => {
+const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
     const [formData, setFormData] = useState(config);
     const [isEditing, setIsEditing] = useState(false);
 
-    const lastTickerRef = React.useRef(selectedTicker);
+    const lastStrategyIdRef = React.useRef(strategyId);
 
     // Update form data when config changes, BUT ONLY if not editing
-    // Note: Min/Max prices are now fixed once set - they don't auto-update with current price
     React.useEffect(() => {
-        if (!isEditing) {
-            setFormData({ ...config });
-            lastTickerRef.current = selectedTicker;
+        if (!isEditing || lastStrategyIdRef.current !== strategyId) {
+            setFormData({ ...config, budget });
+            lastStrategyIdRef.current = strategyId;
+            setIsEditing(false);
         }
-    }, [config, isEditing, selectedTicker]);
+    }, [config, budget, isEditing, strategyId]);
 
     // Helper to format number with commas
     const formatNumber = (num) => {
@@ -60,13 +60,15 @@ const Config = ({ config, onUpdate, selectedTicker, currentPrice }) => {
                 ? `http://${window.location.hostname}:8000`
                 : '';
 
+            const { budget: newBudget, ...configData } = formData;
             await axios.post(`${API_BASE_URL}/config`, {
-                ticker: selectedTicker,
-                config: formData
+                strategy_id: strategyId,
+                config: configData,
+                budget: newBudget
             });
             setIsEditing(false); // Done editing
             onUpdate();
-            alert(`Configuration updated for ${selectedTicker}!`);
+            alert(`Configuration updated!`);
         } catch (error) {
             console.error('Error updating config:', error);
             alert('Failed to update config');
@@ -79,6 +81,16 @@ const Config = ({ config, onUpdate, selectedTicker, currentPrice }) => {
                 <span className="card-title">Strategy Configuration</span>
             </div>
             <form onSubmit={handleSubmit}>
+                <div className="input-group">
+                    <label>Total Budget (KRW)</label>
+                    <input
+                        type="text"
+                        name="budget"
+                        value={formatNumber(formData.budget)}
+                        onChange={handleChange}
+                        placeholder="e.g. 1,000,000"
+                    />
+                </div>
                 <div className="input-group">
                     <label>Investment per Split (KRW)</label>
                     <input

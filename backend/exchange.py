@@ -55,27 +55,25 @@ class UpbitExchange(Exchange):
         self.last_markets_update = 0
 
     def get_tick_size(self, price):
-        """Return the tick size for a given price in KRW market."""
-        if price >= 2000000:
+        """Return the tick size for a given price in KRW market based on user provided table."""
+        if price >= 1000000:
             return 1000
-        elif price >= 1000000:
-            return 500
         elif price >= 500000:
-            return 100
+            return 500
         elif price >= 100000:
-            # Conservative: Use 100 instead of 50 to be safe
             return 100
+        elif price >= 50000:
+            return 50
         elif price >= 10000:
             return 10
+        elif price >= 5000:
+            return 5
         elif price >= 1000:
-            # Conservative: Use 10 instead of 1 to be safe
-            return 10
+            return 1
         elif price >= 100:
             return 1
-        elif price >= 10:
-            return 0.1
         else:
-            return 0.01
+            return 0.1 # Default for < 100
 
     def normalize_price(self, price):
         """Normalize price to the nearest tick size (floor)."""

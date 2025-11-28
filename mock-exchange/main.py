@@ -111,6 +111,49 @@ class MockExchangeLogic:
                 
         return self.valid_markets
 
+    def get_tick_size(self, price):
+        """Return the tick size for a given price in KRW market based on user provided table."""
+        if price >= 1000000:
+            return 1000
+        elif price >= 500000:
+            return 500
+        elif price >= 100000:
+            return 100
+        elif price >= 50000:
+            return 50
+        elif price >= 10000:
+            return 10
+        elif price >= 5000:
+            return 5
+        elif price >= 1000:
+            return 1
+        elif price >= 100:
+            return 1
+        else:
+            return 0.1 # Default for < 100
+
+    def normalize_price(self, price):
+        """Normalize price to the nearest tick size (floor)."""
+        tick_size = self.get_tick_size(price)
+        
+        # Use Decimal for precise arithmetic
+        from decimal import Decimal
+        
+        # Convert to string first to avoid float precision issues
+        try:
+            d_price = Decimal(str(price))
+            d_tick = Decimal(str(tick_size))
+            
+            # Floor division to get number of ticks
+            normalized = (d_price // d_tick) * d_tick
+            
+            if tick_size >= 1:
+                return int(normalized)
+            else:
+                return float(normalized)
+        except:
+            return price
+
     def _load_orders(self):
         """Load pending orders from DB into memory"""
         try:
@@ -361,7 +404,8 @@ class MockExchangeLogic:
                 self._persist_balance("KRW")
                 locked = total_needed
             else:
-                if self.balance.get(currency, 0) < float(volume):
+                # Add epsilon for float precision issues
+                if self.balance.get(currency, 0) < float(volume) - 1e-9:
                     return {"error": {"message": "Insufficient funds"}}
                 self.balance[currency] -= float(volume)
                 self._persist_balance(currency)
@@ -461,8 +505,10 @@ class MockExchangeLogic:
 
     def set_price(self, ticker, price):
         with self.lock:
-            self.price_overrides[ticker] = float(price)
-            logging.info(f"Mock price set for {ticker}: {price}")
+            # Normalize price before setting
+            normalized_price = self.normalize_price(float(price))
+            self.price_overrides[ticker] = normalized_price
+            logging.info(f"Mock price set for {ticker}: {normalized_price} (raw: {price})")
 
     def hold_price(self, ticker, hold):
         with self.lock:

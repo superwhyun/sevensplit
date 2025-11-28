@@ -3,21 +3,23 @@ Database module for SevenSplit trading bot.
 Uses SQLite with SQLAlchemy ORM.
 """
 
-from sqlalchemy import create_engine, Column, Integer, Float, String, Boolean, DateTime, Text, JSON
+from sqlalchemy import create_engine, Column, Integer, Float, String, Boolean, DateTime, Text, JSON, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import sessionmaker, Session, relationship
 from datetime import datetime
 import json
 import os
 
 Base = declarative_base()
 
-class StrategyState(Base):
+class Strategy(Base):
     """Strategy configuration and runtime state"""
-    __tablename__ = 'strategy_states'
+    __tablename__ = 'strategies'
 
     id = Column(Integer, primary_key=True)
-    ticker = Column(String(20), unique=True, nullable=False, index=True)
+    name = Column(String(50), nullable=False, default="Default Strategy")
+    ticker = Column(String(20), nullable=False, index=True) # Not unique anymore
+    budget = Column(Float, nullable=False, default=1000000.0)
 
     # Configuration
     investment_per_split = Column(Float, nullable=False)
@@ -39,13 +41,18 @@ class StrategyState(Base):
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
+    # Relationships
+    splits = relationship("Split", back_populates="strategy", cascade="all, delete-orphan")
+    trades = relationship("Trade", back_populates="strategy", cascade="all, delete-orphan")
+
 
 class Split(Base):
     """Active trading splits"""
     __tablename__ = 'splits'
 
     id = Column(Integer, primary_key=True)
-    ticker = Column(String(20), nullable=False, index=True)
+    strategy_id = Column(Integer, ForeignKey('strategies.id'), nullable=False, index=True)
+    ticker = Column(String(20), nullable=False)
     split_id = Column(Integer, nullable=False)  # Strategy-specific ID
 
     status = Column(String(20), nullable=False)  # PENDING_BUY, BUY_FILLED, PENDING_SELL
@@ -63,13 +70,17 @@ class Split(Base):
     buy_filled_at = Column(DateTime, nullable=True)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
+    # Relationship
+    strategy = relationship("Strategy", back_populates="splits")
+
 
 class Trade(Base):
     """Completed trade history"""
     __tablename__ = 'trades'
 
     id = Column(Integer, primary_key=True)
-    ticker = Column(String(20), nullable=False, index=True)
+    strategy_id = Column(Integer, ForeignKey('strategies.id'), nullable=False, index=True)
+    ticker = Column(String(20), nullable=False)
     split_id = Column(Integer, nullable=False)
 
     # Trade details
@@ -92,6 +103,9 @@ class Trade(Base):
     # Timestamps
     timestamp = Column(DateTime, default=datetime.now)
     created_at = Column(DateTime, default=datetime.now)
+
+    # Relationship
+    strategy = relationship("Strategy", back_populates="trades")
 
 
 class SystemConfig(Base):
@@ -173,61 +187,80 @@ class DatabaseManager:
         """Get a new database session"""
         return self.SessionLocal()
 
-    # Strategy State operations
-    def get_strategy_state(self, ticker: str) -> StrategyState:
-        """Get or create strategy state for a ticker"""
+    # Strategy operations
+    def create_strategy(self, name: str, ticker: str, config: dict, budget: float = 1000000.0) -> Strategy:
+        """Create a new strategy"""
         session = self.get_session()
         try:
-            state = session.query(StrategyState).filter_by(ticker=ticker).first()
-            if state is None:
-                # Create default state
-                state = StrategyState(
-                    ticker=ticker,
-                    investment_per_split=100000.0,
-                    min_price=0.0,
-                    max_price=999999999.0,
-                    buy_rate=0.005,
-                    sell_rate=0.005,
-                    fee_rate=0.0005,
-                    tick_interval=1.0,
-                    rebuy_strategy="reset_on_clear",
-                    is_running=False,
-                    next_split_id=1
-                )
-                session.add(state)
-                session.commit()
-                session.refresh(state)
-            return state
+            strategy = Strategy(
+                name=name,
+                ticker=ticker,
+                budget=budget,
+                **config,
+                is_running=False,
+                next_split_id=1
+            )
+            session.add(strategy)
+            session.commit()
+            session.refresh(strategy)
+            return strategy
         finally:
             session.close()
 
-    def update_strategy_state(self, ticker: str, **kwargs):
+    def get_strategy(self, strategy_id: int) -> Strategy:
+        """Get strategy by ID"""
+        session = self.get_session()
+        try:
+            return session.query(Strategy).filter_by(id=strategy_id).first()
+        finally:
+            session.close()
+
+    def get_all_strategies(self):
+        """Get all strategies"""
+        session = self.get_session()
+        try:
+            return session.query(Strategy).all()
+        finally:
+            session.close()
+
+    def delete_strategy(self, strategy_id: int):
+        """Delete a strategy and its splits/trades"""
+        session = self.get_session()
+        try:
+            strategy = session.query(Strategy).filter_by(id=strategy_id).first()
+            if strategy:
+                session.delete(strategy)
+                session.commit()
+        finally:
+            session.close()
+
+    def update_strategy_state(self, strategy_id: int, **kwargs):
         """Update strategy state"""
         session = self.get_session()
         try:
-            state = session.query(StrategyState).filter_by(ticker=ticker).first()
-            if state:
+            strategy = session.query(Strategy).filter_by(id=strategy_id).first()
+            if strategy:
                 for key, value in kwargs.items():
-                    if hasattr(state, key):
-                        setattr(state, key, value)
+                    if hasattr(strategy, key):
+                        setattr(strategy, key, value)
                 session.commit()
         finally:
             session.close()
 
     # Split operations
-    def get_splits(self, ticker: str):
-        """Get all active splits for a ticker"""
+    def get_splits(self, strategy_id: int):
+        """Get all active splits for a strategy"""
         session = self.get_session()
         try:
-            return session.query(Split).filter_by(ticker=ticker).all()
+            return session.query(Split).filter_by(strategy_id=strategy_id).all()
         finally:
             session.close()
 
-    def add_split(self, ticker: str, split_data: dict) -> Split:
+    def add_split(self, strategy_id: int, ticker: str, split_data: dict) -> Split:
         """Add a new split"""
         session = self.get_session()
         try:
-            split = Split(ticker=ticker, **split_data)
+            split = Split(strategy_id=strategy_id, ticker=ticker, **split_data)
             session.add(split)
             session.commit()
             session.refresh(split)
@@ -235,12 +268,12 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def update_split(self, ticker: str, split_id: int, **kwargs):
+    def update_split(self, strategy_id: int, split_id: int, **kwargs):
         """Update a split"""
         session = self.get_session()
         try:
             split = session.query(Split).filter_by(
-                ticker=ticker,
+                strategy_id=strategy_id,
                 split_id=split_id
             ).first()
             if split:
@@ -251,12 +284,12 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def delete_split(self, ticker: str, split_id: int):
+    def delete_split(self, strategy_id: int, split_id: int):
         """Delete a split"""
         session = self.get_session()
         try:
             split = session.query(Split).filter_by(
-                ticker=ticker,
+                strategy_id=strategy_id,
                 split_id=split_id
             ).first()
             if split:
@@ -265,30 +298,30 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def delete_all_splits(self, ticker: str):
-        """Delete all splits for a specific ticker"""
+    def delete_all_splits(self, strategy_id: int):
+        """Delete all splits for a specific strategy"""
         session = self.get_session()
         try:
-            session.query(Split).filter_by(ticker=ticker).delete()
+            session.query(Split).filter_by(strategy_id=strategy_id).delete()
             session.commit()
         finally:
             session.close()
 
-    def delete_all_trades(self, ticker: str):
-        """Delete all trades for a specific ticker"""
+    def delete_all_trades(self, strategy_id: int):
+        """Delete all trades for a specific strategy"""
         session = self.get_session()
         try:
-            session.query(Trade).filter_by(ticker=ticker).delete()
+            session.query(Trade).filter_by(strategy_id=strategy_id).delete()
             session.commit()
         finally:
             session.close()
 
     # Trade operations
-    def add_trade(self, ticker: str, trade_data: dict) -> Trade:
+    def add_trade(self, strategy_id: int, ticker: str, trade_data: dict) -> Trade:
         """Add a completed trade to history"""
         session = self.get_session()
         try:
-            trade = Trade(ticker=ticker, **trade_data)
+            trade = Trade(strategy_id=strategy_id, ticker=ticker, **trade_data)
             session.add(trade)
             session.commit()
             session.refresh(trade)
@@ -296,11 +329,11 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def get_trades(self, ticker: str, limit: int = None):
-        """Get trade history for a ticker"""
+    def get_trades(self, strategy_id: int, limit: int = None):
+        """Get trade history for a strategy"""
         session = self.get_session()
         try:
-            query = session.query(Trade).filter_by(ticker=ticker).order_by(Trade.timestamp.desc())
+            query = session.query(Trade).filter_by(strategy_id=strategy_id).order_by(Trade.timestamp.desc())
             if limit:
                 query = query.limit(limit)
             return query.all()
@@ -308,7 +341,7 @@ class DatabaseManager:
             session.close()
 
     def get_all_trades(self, limit: int = None):
-        """Get all trades across all tickers"""
+        """Get all trades across all strategies"""
         session = self.get_session()
         try:
             query = session.query(Trade).order_by(Trade.timestamp.desc())
@@ -326,15 +359,11 @@ class DatabaseManager:
             session.query(Split).delete()
             # Delete all trades
             session.query(Trade).delete()
+            # Delete all strategies
+            session.query(Strategy).delete()
             # Reset mock accounts to defaults
             session.query(MockAccount).delete()
             session.add(MockAccount(currency="KRW", balance=10000000.0, avg_buy_price=0.0))
-            # Reset strategy states to default
-            for state in session.query(StrategyState).all():
-                state.is_running = False
-                state.next_split_id = 1
-                state.last_buy_price = None
-                state.last_sell_price = None
             session.commit()
         finally:
             session.close()
