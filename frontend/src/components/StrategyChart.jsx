@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createChart, ColorType, CrosshairMode } from 'lightweight-charts';
 import axios from 'axios';
 
-const StrategyChart = ({ ticker }) => {
+const StrategyChart = ({ ticker, splits = [], tradeHistory = [] }) => {
     const chartContainerRef = useRef();
     const chartRef = useRef();
     const candlestickSeriesRef = useRef();
@@ -12,7 +12,7 @@ const StrategyChart = ({ ticker }) => {
     useEffect(() => {
         const fetchCandles = async () => {
             try {
-                console.log(`[Chart] Fetching candles for ${ticker}...`);
+                // console.log(`[Chart] Fetching candles for ${ticker}...`);
 
                 const response = await axios.get(`https://api.upbit.com/v1/candles/minutes/5?market=${ticker}&count=200`);
 
@@ -29,12 +29,6 @@ const StrategyChart = ({ ticker }) => {
                         volume: item.candle_acc_trade_volume,
                     };
                 }).sort((a, b) => a.time - b.time);
-
-                console.log('[Chart] Sample:', {
-                    kst: response.data[0]?.candle_date_time_kst,
-                    timestamp: data[0]?.time,
-                    asDate: new Date(data[0]?.time * 1000)
-                });
 
                 setCandleData(data);
             } catch (error) {
@@ -149,6 +143,83 @@ const StrategyChart = ({ ticker }) => {
             }
         }
     }, [candleData]);
+
+    // Update markers when splits or tradeHistory change
+    useEffect(() => {
+        if (!candlestickSeriesRef.current) return;
+
+        const markers = [];
+
+        // 1. Active Splits (Buy Markers)
+        if (splits && splits.length > 0) {
+            splits.forEach(split => {
+                if (split.bought_at) {
+                    const timeStr = split.bought_at.endsWith('Z') ? split.bought_at : split.bought_at + 'Z';
+                    const time = Date.parse(timeStr) / 1000;
+
+                    if (!isNaN(time)) {
+                        markers.push({
+                            time: time,
+                            position: 'belowBar',
+                            color: split.status === 'PENDING_SELL' ? '#eab308' : '#10b981', // Yellow if Pending Sell, else Green
+                            shape: 'arrowUp',
+                            text: '', // No text
+                            size: 1,
+                        });
+                    }
+                }
+            });
+        }
+
+        // 2. Trade History
+        if (tradeHistory && tradeHistory.length > 0) {
+            tradeHistory.forEach(trade => {
+                // Sell Marker
+                if (trade.timestamp) {
+                    const timeStr = trade.timestamp.endsWith('Z') ? trade.timestamp : trade.timestamp + 'Z';
+                    const time = Date.parse(timeStr) / 1000;
+
+                    if (!isNaN(time)) {
+                        markers.push({
+                            time: time,
+                            position: 'aboveBar',
+                            color: '#ef4444', // Red
+                            shape: 'arrowDown',
+                            text: '', // No text
+                            size: 1,
+                        });
+                    }
+                }
+
+                // Buy Marker (if available)
+                if (trade.bought_at) {
+                    const timeStr = trade.bought_at.endsWith('Z') ? trade.bought_at : trade.bought_at + 'Z';
+                    const time = Date.parse(timeStr) / 1000;
+
+                    if (!isNaN(time)) {
+                        markers.push({
+                            time: time,
+                            position: 'belowBar',
+                            color: '#10b981', // Green (Completed trade buy was just a normal buy)
+                            shape: 'arrowUp',
+                            text: '', // No text
+                            size: 1,
+                        });
+                    }
+                }
+            });
+        }
+
+        // Sort markers by time (required by lightweight-charts)
+        markers.sort((a, b) => a.time - b.time);
+
+        try {
+            candlestickSeriesRef.current.setMarkers(markers);
+        } catch (e) {
+            console.error("Error setting markers:", e);
+        }
+
+    }, [splits, tradeHistory, candleData]); // Re-run when data changes
 
     return (
         <div style={{

@@ -109,7 +109,8 @@ class SevenSplitStrategy:
                     'investment_amount': split.buy_amount,
                     'coin_volume': split.buy_volume,
                     'buy_order_id': split.buy_order_uuid,
-                    'sell_order_id': split.sell_order_uuid
+                    'sell_order_id': split.sell_order_uuid,
+                    'buy_filled_at': datetime.fromisoformat(split.bought_at) if split.bought_at else None
                 }
 
                 if split.id in db_split_ids:
@@ -485,7 +486,8 @@ class SevenSplitStrategy:
                     "gross_profit": sell_total - buy_total,
                     "net_profit": net_profit,
                     "profit_rate": profit_rate,
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
+                    "bought_at": split.bought_at
                 })
 
                 if len(self.trade_history) > 50:
