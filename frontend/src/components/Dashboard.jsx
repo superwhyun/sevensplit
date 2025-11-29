@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import axios from 'axios';
+import StrategyChart from './StrategyChart';
 import Config from './Config';
 
 const AddStrategyModal = ({ isOpen, onClose, onAdd }) => {
@@ -454,10 +455,9 @@ const Dashboard = () => {
                 </button>
             </div>
 
-            {/* Strategy Content */}
             {status && (
                 <>
-                    {/* Strategy Stats */}
+                    {/* Strategy Stats (Top Row) */}
                     <div style={{
                         padding: '1.5rem',
                         backgroundColor: 'rgba(15, 23, 42, 0.7)',
@@ -536,89 +536,16 @@ const Dashboard = () => {
                         </div>
                     </div>
 
-                    {/* Control Panel */}
+                    {/* Main Content Grid */}
                     <div style={{
+                        display: 'grid',
+                        gridTemplateColumns: '350px 1fr',
+                        gap: '1.5rem',
                         padding: '1.5rem',
-                        backgroundColor: 'rgba(30, 41, 59, 0.5)',
-                        borderBottom: '1px solid #334155'
+                        alignItems: 'start'
                     }}>
-                        <div style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            gap: '1.5rem'
-                        }}>
-                            {/* Left: Bot Controls */}
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                                {!status.is_running ? (
-                                    <button className="btn btn-primary" onClick={handleStart} style={{
-                                        padding: '0.65rem 1.75rem',
-                                        fontSize: '0.95rem'
-                                    }}>
-                                        ▶ Start Bot
-                                    </button>
-                                ) : (
-                                    <button className="btn btn-danger" onClick={handleStop} style={{
-                                        padding: '0.65rem 1.75rem',
-                                        fontSize: '0.95rem'
-                                    }}>
-                                        ⏸ Stop Bot
-                                    </button>
-                                )}
-                                <button className="btn btn-secondary" onClick={handleReset} style={{
-                                    padding: '0.65rem 1.75rem',
-                                    fontSize: '0.95rem'
-                                }}>
-                                    🔄 Reset
-                                </button>
-                                <button className="btn btn-secondary" onClick={handleExport} style={{
-                                    padding: '0.65rem 1.75rem',
-                                    fontSize: '0.95rem',
-                                    backgroundColor: '#0f766e',
-                                    borderColor: '#0f766e'
-                                }}>
-                                    ⬇ Export CSV
-                                </button>
-                            </div>
-
-                            {/* Right: Delete & Exchange Link */}
-                            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-                                <button onClick={handleDeleteStrategy} style={{
-                                    padding: '0.65rem 1rem',
-                                    fontSize: '0.85rem',
-                                    backgroundColor: 'transparent',
-                                    border: '1px solid #ef4444',
-                                    color: '#ef4444',
-                                    borderRadius: '0.375rem',
-                                    cursor: 'pointer'
-                                }}>
-                                    🗑 Delete Strategy
-                                </button>
-
-                                {portfolio.mode === "MOCK" && (
-                                    <a
-                                        href={`http://${window.location.hostname}:5001`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        style={{
-                                            padding: '0.6rem 1.25rem',
-                                            backgroundColor: '#8b5cf6',
-                                            color: 'white',
-                                            borderRadius: '0.375rem',
-                                            textDecoration: 'none',
-                                            fontWeight: '600',
-                                            fontSize: '0.9rem'
-                                        }}
-                                    >
-                                        🏦 Exchange UI
-                                    </a>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-
-                    <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: '2rem' }}>
-                        <div>
+                        {/* Left Sidebar: Config */}
+                        <aside style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
                             <Config
                                 config={status.config}
                                 onUpdate={fetchStatus}
@@ -626,15 +553,106 @@ const Dashboard = () => {
                                 currentPrice={status.current_price}
                                 budget={status.budget}
                             />
-                            <div style={{ marginTop: '1rem', padding: '1rem', backgroundColor: '#1e293b', borderRadius: '0.5rem', border: '1px solid #334155' }}>
+                            <div style={{ padding: '1rem', backgroundColor: '#1e293b', borderRadius: '0.5rem', border: '1px solid #334155' }}>
                                 <div style={{ color: '#94a3b8', fontSize: '0.875rem', marginBottom: '0.5rem' }}>Budget</div>
                                 <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#f8fafc' }}>
                                     ₩{status.budget?.toLocaleString()}
                                 </div>
                             </div>
-                        </div>
+                        </aside>
 
-                        <div>
+                        {/* Right Content: Controls, Chart, Tables */}
+                        <main style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', minWidth: 0 }}>
+                            {/* Control Panel */}
+                            <div style={{
+                                padding: '1rem',
+                                backgroundColor: 'rgba(30, 41, 59, 0.5)',
+                                borderRadius: '0.5rem',
+                                border: '1px solid #334155'
+                            }}>
+                                <div style={{
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center',
+                                    gap: '1.5rem'
+                                }}>
+                                    {/* Left: Bot Controls */}
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                        {!status.is_running ? (
+                                            <button className="btn btn-primary" onClick={handleStart} style={{
+                                                padding: '0.65rem 1.75rem',
+                                                fontSize: '0.95rem'
+                                            }}>
+                                                ▶ Start Bot
+                                            </button>
+                                        ) : (
+                                            <button className="btn btn-danger" onClick={handleStop} style={{
+                                                padding: '0.65rem 1.75rem',
+                                                fontSize: '0.95rem'
+                                            }}>
+                                                ⏸ Stop Bot
+                                            </button>
+                                        )}
+                                        <button className="btn btn-secondary" onClick={handleReset} style={{
+                                            padding: '0.65rem 1.75rem',
+                                            fontSize: '0.95rem'
+                                        }}>
+                                            🔄 Reset
+                                        </button>
+                                        <button className="btn btn-secondary" onClick={handleExport} style={{
+                                            padding: '0.65rem 1.75rem',
+                                            fontSize: '0.95rem',
+                                            backgroundColor: '#0f766e',
+                                            borderColor: '#0f766e'
+                                        }}>
+                                            ⬇ Export CSV
+                                        </button>
+                                    </div>
+
+                                    {/* Right: Delete & Exchange Link */}
+                                    <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                                        <button onClick={handleDeleteStrategy} style={{
+                                            padding: '0.65rem 1rem',
+                                            fontSize: '0.85rem',
+                                            backgroundColor: 'transparent',
+                                            border: '1px solid #ef4444',
+                                            color: '#ef4444',
+                                            borderRadius: '0.375rem',
+                                            cursor: 'pointer'
+                                        }}>
+                                            🗑 Delete Strategy
+                                        </button>
+
+                                        {portfolio.mode === "MOCK" && (
+                                            <a
+                                                href={`http://${window.location.hostname}:5001`}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                style={{
+                                                    padding: '0.6rem 1.25rem',
+                                                    backgroundColor: '#8b5cf6',
+                                                    color: 'white',
+                                                    borderRadius: '0.375rem',
+                                                    textDecoration: 'none',
+                                                    fontWeight: '600',
+                                                    fontSize: '0.9rem'
+                                                }}
+                                            >
+                                                🏦 Exchange UI
+                                            </a>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Price Chart */}
+                            <StrategyChart
+                                ticker={status.ticker}
+                                splits={status.splits}
+                                config={status.config}
+                                tradeHistory={status.trade_history}
+                            />
+
                             {/* Grid Status List */}
                             <div className="card" style={{ maxHeight: '600px', overflowY: 'auto' }}>
                                 <div className="card-header">
@@ -704,104 +722,101 @@ const Dashboard = () => {
                                     </tbody>
                                 </table>
                             </div>
-                        </div>
+
+                            {/* Recent Trades Section */}
+                            {status.trade_history && status.trade_history.length > 0 && (
+                                <div className="card">
+                                    <div className="card-header">
+                                        <span className="card-title">Recent Trades ({status.name})</span>
+                                    </div>
+                                    <div style={{ overflowX: 'auto' }}>
+                                        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                                            <thead>
+                                                <tr style={{ borderBottom: '2px solid #334155', color: '#94a3b8' }}>
+                                                    <th style={{ padding: '1rem' }}>Time</th>
+                                                    <th style={{ padding: '1rem' }}>Split</th>
+                                                    <th style={{ padding: '1rem', textAlign: 'right' }}>Buy Amount</th>
+                                                    <th style={{ padding: '1rem', textAlign: 'right' }}>Sell Amount</th>
+                                                    <th style={{ padding: '1rem', textAlign: 'right' }}>Gross Profit</th>
+                                                    <th style={{ padding: '1rem', textAlign: 'right' }}>Total Fee</th>
+                                                    <th style={{ padding: '1rem', textAlign: 'right' }}>Net Profit</th>
+                                                    <th style={{ padding: '1rem', textAlign: 'right' }}>Rate</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {status.trade_history.map((trade, index) => {
+                                                    const buyAmount = trade.buy_amount || 0;
+                                                    const sellAmount = trade.sell_amount || 0;
+                                                    const grossProfit = trade.gross_profit || (sellAmount - buyAmount);
+                                                    const totalFee = trade.total_fee || 0;
+                                                    const netProfit = trade.net_profit || (grossProfit - totalFee);
+                                                    const profitRate = trade.profit_rate || 0;
+
+                                                    return (
+                                                        <tr key={index} style={{ borderBottom: '1px solid #1e293b' }}>
+                                                            <td style={{ padding: '1rem', fontSize: '0.875rem' }}>
+                                                                {new Date(trade.timestamp).toLocaleString()}
+                                                            </td>
+                                                            <td style={{ padding: '1rem', fontWeight: 'bold' }}>#{trade.split_id}</td>
+                                                            <td style={{ padding: '1rem', textAlign: 'right' }}>
+                                                                <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>
+                                                                    ₩{Math.round(buyAmount).toLocaleString()}
+                                                                </div>
+                                                                <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                                                                    @₩{trade.buy_price?.toLocaleString()}
+                                                                </div>
+                                                            </td>
+                                                            <td style={{ padding: '1rem', textAlign: 'right' }}>
+                                                                <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>
+                                                                    ₩{Math.round(sellAmount).toLocaleString()}
+                                                                </div>
+                                                                <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                                                                    @₩{trade.sell_price?.toLocaleString()}
+                                                                </div>
+                                                            </td>
+                                                            <td style={{
+                                                                padding: '1rem',
+                                                                textAlign: 'right',
+                                                                color: grossProfit > 0 ? '#10b981' : grossProfit < 0 ? '#ef4444' : '#94a3b8',
+                                                                fontSize: '0.875rem'
+                                                            }}>
+                                                                {grossProfit > 0 ? '+' : ''}₩{Math.round(grossProfit).toLocaleString()}
+                                                            </td>
+                                                            <td style={{
+                                                                padding: '1rem',
+                                                                textAlign: 'right',
+                                                                color: '#ef4444',
+                                                                fontSize: '0.875rem'
+                                                            }}>
+                                                                -₩{Math.round(totalFee).toLocaleString()}
+                                                            </td>
+                                                            <td style={{
+                                                                padding: '1rem',
+                                                                textAlign: 'right',
+                                                                fontWeight: 'bold',
+                                                                fontSize: '0.95rem',
+                                                                color: netProfit > 0 ? '#10b981' : netProfit < 0 ? '#ef4444' : '#94a3b8'
+                                                            }}>
+                                                                {netProfit > 0 ? '+' : ''}₩{Math.round(netProfit).toLocaleString()}
+                                                            </td>
+                                                            <td style={{
+                                                                padding: '1rem',
+                                                                textAlign: 'right',
+                                                                color: profitRate > 0 ? '#10b981' : profitRate < 0 ? '#ef4444' : '#94a3b8',
+                                                                fontWeight: 'bold'
+                                                            }}>
+                                                                {profitRate.toFixed(2)}%
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            )}
+                        </main>
                     </div>
-
-                    {/* Recent Trades Section */}
-                    {
-                        status.trade_history && status.trade_history.length > 0 && (
-                            <div className="card" style={{ marginTop: '2rem' }}>
-                                <div className="card-header">
-                                    <span className="card-title">Recent Trades ({status.name})</span>
-                                </div>
-                                <div style={{ overflowX: 'auto' }}>
-                                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-                                        <thead>
-                                            <tr style={{ borderBottom: '2px solid #334155', color: '#94a3b8' }}>
-                                                <th style={{ padding: '1rem' }}>Time</th>
-                                                <th style={{ padding: '1rem' }}>Split</th>
-                                                <th style={{ padding: '1rem', textAlign: 'right' }}>Buy Amount</th>
-                                                <th style={{ padding: '1rem', textAlign: 'right' }}>Sell Amount</th>
-                                                <th style={{ padding: '1rem', textAlign: 'right' }}>Gross Profit</th>
-                                                <th style={{ padding: '1rem', textAlign: 'right' }}>Total Fee</th>
-                                                <th style={{ padding: '1rem', textAlign: 'right' }}>Net Profit</th>
-                                                <th style={{ padding: '1rem', textAlign: 'right' }}>Rate</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {status.trade_history.map((trade, index) => {
-                                                const buyAmount = trade.buy_amount || 0;
-                                                const sellAmount = trade.sell_amount || 0;
-                                                const grossProfit = trade.gross_profit || (sellAmount - buyAmount);
-                                                const totalFee = trade.total_fee || 0;
-                                                const netProfit = trade.net_profit || (grossProfit - totalFee);
-                                                const profitRate = trade.profit_rate || 0;
-
-                                                return (
-                                                    <tr key={index} style={{ borderBottom: '1px solid #1e293b' }}>
-                                                        <td style={{ padding: '1rem', fontSize: '0.875rem' }}>
-                                                            {new Date(trade.timestamp).toLocaleString()}
-                                                        </td>
-                                                        <td style={{ padding: '1rem', fontWeight: 'bold' }}>#{trade.split_id}</td>
-                                                        <td style={{ padding: '1rem', textAlign: 'right' }}>
-                                                            <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>
-                                                                ₩{Math.round(buyAmount).toLocaleString()}
-                                                            </div>
-                                                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                                                                @₩{trade.buy_price?.toLocaleString()}
-                                                            </div>
-                                                        </td>
-                                                        <td style={{ padding: '1rem', textAlign: 'right' }}>
-                                                            <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>
-                                                                ₩{Math.round(sellAmount).toLocaleString()}
-                                                            </div>
-                                                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                                                                @₩{trade.sell_price?.toLocaleString()}
-                                                            </div>
-                                                        </td>
-                                                        <td style={{
-                                                            padding: '1rem',
-                                                            textAlign: 'right',
-                                                            color: grossProfit > 0 ? '#10b981' : grossProfit < 0 ? '#ef4444' : '#94a3b8',
-                                                            fontSize: '0.875rem'
-                                                        }}>
-                                                            {grossProfit > 0 ? '+' : ''}₩{Math.round(grossProfit).toLocaleString()}
-                                                        </td>
-                                                        <td style={{
-                                                            padding: '1rem',
-                                                            textAlign: 'right',
-                                                            color: '#ef4444',
-                                                            fontSize: '0.875rem'
-                                                        }}>
-                                                            -₩{Math.round(totalFee).toLocaleString()}
-                                                        </td>
-                                                        <td style={{
-                                                            padding: '1rem',
-                                                            textAlign: 'right',
-                                                            fontWeight: 'bold',
-                                                            fontSize: '0.95rem',
-                                                            color: netProfit > 0 ? '#10b981' : netProfit < 0 ? '#ef4444' : '#94a3b8'
-                                                        }}>
-                                                            {netProfit > 0 ? '+' : ''}₩{Math.round(netProfit).toLocaleString()}
-                                                        </td>
-                                                        <td style={{
-                                                            padding: '1rem',
-                                                            textAlign: 'right',
-                                                            fontWeight: 'bold',
-                                                            fontSize: '0.95rem',
-                                                            color: profitRate > 0 ? '#10b981' : profitRate < 0 ? '#ef4444' : '#94a3b8'
-                                                        }}>
-                                                            {profitRate > 0 ? '+' : ''}{profitRate.toFixed(2)}%
-                                                        </td>
-                                                    </tr>
-                                                );
-                                            })}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        )
-                    }
                 </>
             )}
         </div>

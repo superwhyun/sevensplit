@@ -109,7 +109,10 @@ class UpbitExchange(Exchange):
                     if new_markets:
                         self.valid_markets = new_markets
                         self.last_markets_update = current_time
-                        logging.info(f"Refreshed valid markets: {len(self.valid_markets)} KRW pairs found")
+                        import os
+                        is_mock = "localhost" in self.server_url or "127.0.0.1" in self.server_url or os.getenv("MODE", "").upper() == "MOCK"
+                        if not is_mock:
+                            logging.info(f"Refreshed valid markets: {len(self.valid_markets)} KRW pairs found")
             except Exception as e:
                 logging.warning(f"Failed to fetch valid markets: {e}")
                 
@@ -140,6 +143,12 @@ class UpbitExchange(Exchange):
             token = self.jwt.encode(payload, self.secret_key, algorithm='HS256')
             headers = {'Authorization': f'Bearer {token}'}
         
+        # Log request only if NOT in mock mode
+        # import os
+        # is_mock = "localhost" in self.server_url or "127.0.0.1" in self.server_url or os.getenv("MODE", "").upper() == "MOCK"
+        # if not is_mock:
+        #     logging.info(f"🌐 Upbit API Request: {method} {url} {params or ''}")
+
         try:
             if method == 'GET':
                 resp = self.requests.get(url, params=params, headers=headers)
@@ -153,6 +162,14 @@ class UpbitExchange(Exchange):
                 logging.error(f"Upbit API Error: {resp.status_code} {resp.text}")
 
             resp.raise_for_status()
+            
+            # Log success only if NOT in mock mode (to reduce noise)
+            # We determine mock mode by checking if server_url contains localhost or 127.0.0.1
+            # import os
+            # is_mock = "localhost" in self.server_url or "127.0.0.1" in self.server_url or os.getenv("MODE", "").upper() == "MOCK"
+            # if not is_mock:
+            #     logging.info(f"✅ Upbit API Response: {len(resp) if isinstance(resp, list) else 1} items fetched")
+                
             return resp.json()
         except Exception as e:
             logging.error(f"Request failed: {e} for url: {url}")

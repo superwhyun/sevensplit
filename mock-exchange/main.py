@@ -284,11 +284,11 @@ class MockExchangeLogic:
         markets_param = ",".join(tickers)
         try:
             # Log who is calling this with full stack trace
-            import traceback
-            stack = traceback.extract_stack()
-            # Get last 5 callers
-            stack_trace = " <- ".join([f"{s.filename.split('/')[-1]}:{s.lineno}({s.name})" for s in stack[-5:-1]])
-            logging.info(f"🌐 Upbit API Request: GET {url}?markets={markets_param} [Stack: {stack_trace}]")
+            # import traceback
+            # stack = traceback.extract_stack()
+            # # Get last 5 callers
+            # stack_trace = " <- ".join([f"{s.filename.split('/')[-1]}:{s.lineno}({s.name})" for s in stack[-5:-1]])
+            # logging.info(f"🌐 Upbit API Request: GET {url}?markets={markets_param} [Stack: {stack_trace}]")
             
             resp = requests.get(url, params={"markets": markets_param}, timeout=3)
             resp.raise_for_status()
@@ -299,7 +299,7 @@ class MockExchangeLogic:
                     price = item.get("trade_price")
                     if market and price:
                         prices[market] = float(price)
-                logging.info(f"✅ Upbit API Response: {len(prices)} prices fetched")
+                # logging.info(f"✅ Upbit API Response: {len(prices)} prices fetched")
             if not prices:
                 logging.error(f"Live price batch parse error for {tickers}: {data}")
         except Exception as e:
