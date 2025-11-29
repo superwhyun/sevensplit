@@ -456,6 +456,14 @@ def reset_strategy(cmd: CommandRequest):
         # Clear splits and trades from database
         db.delete_all_splits(s_id)
         db.delete_all_trades(s_id)
+        
+        # Reset strategy state in DB (next_split_id, last_buy_price, etc.)
+        db.update_strategy_state(
+            s_id,
+            next_split_id=1,
+            last_buy_price=None,
+            last_sell_price=None
+        )
 
         # Recreate the strategy instance
         s_rec = db.get_strategy(s_id)
