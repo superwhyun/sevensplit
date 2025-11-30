@@ -183,7 +183,35 @@ class DatabaseManager:
         print(f"Using Database: {self.db_path}")
         self.engine = create_engine(f'sqlite:///{db_path}', echo=False)
         Base.metadata.create_all(self.engine)
+        self._migrate_schema()
         self.SessionLocal = sessionmaker(bind=self.engine)
+
+    def _migrate_schema(self):
+        """Check and update database schema for new columns"""
+        from sqlalchemy import text
+        
+        with self.engine.connect() as conn:
+            # 1. Check strategies.max_trades_per_day
+            try:
+                result = conn.execute(text("PRAGMA table_info(strategies)"))
+                columns = [row[1] for row in result.fetchall()]
+                if 'max_trades_per_day' not in columns:
+                    print("Migrating: Adding max_trades_per_day to strategies table")
+                    conn.execute(text("ALTER TABLE strategies ADD COLUMN max_trades_per_day INTEGER DEFAULT 100 NOT NULL"))
+                    conn.commit()
+            except Exception as e:
+                print(f"Migration warning (strategies): {e}")
+
+            # 2. Check trades.bought_at
+            try:
+                result = conn.execute(text("PRAGMA table_info(trades)"))
+                columns = [row[1] for row in result.fetchall()]
+                if 'bought_at' not in columns:
+                    print("Migrating: Adding bought_at to trades table")
+                    conn.execute(text("ALTER TABLE trades ADD COLUMN bought_at DATETIME"))
+                    conn.commit()
+            except Exception as e:
+                print(f"Migration warning (trades): {e}")
 
     def get_session(self) -> Session:
         """Get a new database session"""
