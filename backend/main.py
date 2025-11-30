@@ -94,16 +94,7 @@ def load_strategies():
     db_strategies = db.get_all_strategies()
     
     if not db_strategies:
-        # Create defaults
-        defaults = ["KRW-BTC", "KRW-ETH", "KRW-SOL", "KRW-XRP"]
-        logging.info("No strategies found in DB. Creating default strategies.")
-        for ticker in defaults:
-            s = db.create_strategy(
-                name=f"{ticker} Default", 
-                ticker=ticker, 
-                config=StrategyConfig().dict()
-            )
-            strategies[s.id] = SevenSplitStrategy(exchange, s.id, s.ticker, s.budget)
+        logging.info("No strategies found in DB. Please create one.")
     else:
         logging.info(f"Loading {len(db_strategies)} strategies from DB.")
         for s in db_strategies:
@@ -324,13 +315,16 @@ def get_full_snapshot() -> Dict[str, Any]:
     all_tickers = list(set(s.ticker for s in strategies.values()))
     
     # Batch fetch prices for all tickers ONCE
+    # Batch fetch prices for all tickers ONCE
+    # Note: This might hit rate limits if called too frequently.
+    # But since we removed rate limiting in exchange.py, we rely on Upbit's quota.
     try:
         if hasattr(exchange, "get_current_prices") and all_tickers:
             prices = exchange.get_current_prices(all_tickers)
         else:
             prices = {}
     except Exception as e:
-        logging.error(f"Failed to batch fetch prices: {e}")
+        # logging.error(f"Failed to batch fetch prices: {e}") # Reduce noise
         prices = {}
     
     # Fetch Accounts (Raw) ONCE
@@ -381,6 +375,21 @@ def get_accounts():
     except Exception as e:
         logging.error(f"Failed to fetch accounts: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch accounts")
+
+@app.get("/candles")
+def get_candles(market: str, count: int = 200):
+    """Proxy endpoint for fetching candles"""
+    try:
+        if hasattr(exchange, "get_candles"):
+            return exchange.get_candles(market, count)
+        else:
+            # Fallback for MockExchange if it doesn't implement get_candles
+            # But we should implement it there too if needed.
+            # For now, just return empty list or error
+            return []
+    except Exception as e:
+        logging.error(f"Failed to fetch candles: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch candles")
 
 class CommandRequest(BaseModel):
     strategy_id: int

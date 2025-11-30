@@ -20,7 +20,11 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             try {
                 // console.log(`[Chart] Fetching candles for ${ticker}...`);
 
-                const response = await axios.get(`https://api.upbit.com/v1/candles/minutes/5?market=${ticker}&count=200`);
+                // If running on Vite dev server (port 5173), point to backend port 8000.
+                const API_BASE_URL = window.location.port === '5173'
+                    ? `http://${window.location.hostname}:8000`
+                    : '';
+                const response = await axios.get(`${API_BASE_URL}/candles?market=${ticker}&count=200`);
 
                 const data = response.data.map(item => {
                     // UTC 시간을 파싱 (끝에 'Z' 붙여서)

@@ -50,10 +50,6 @@ class UpbitExchange(Exchange):
         self.uuid = uuid
         self.time = time
         
-        # Rate limiting
-        self.last_request_time = 0
-        self.min_request_interval = 0.1 # 10 requests per second max
-        
         # Cache for valid markets
         self.valid_markets = set()
         self.last_markets_update = 0
@@ -123,12 +119,6 @@ class UpbitExchange(Exchange):
         return self.valid_markets
 
     def _request(self, method, endpoint, params=None, data=None, auth=True):
-        # Rate limiting wait
-        elapsed = self.time.time() - self.last_request_time
-        if elapsed < self.min_request_interval:
-            self.time.sleep(self.min_request_interval - elapsed)
-        self.last_request_time = self.time.time()
-
         url = f"{self.server_url}{endpoint}"
         headers = {}
         
@@ -277,6 +267,14 @@ class UpbitExchange(Exchange):
         except Exception as e:
             logging.error(f"get_current_prices failed: {e}")
             return {}
+
+    def get_candles(self, ticker, count=200):
+        """Fetch candle data"""
+        try:
+            return self._request('GET', '/v1/candles/minutes/5', params={'market': ticker, 'count': count}, auth=False)
+        except Exception as e:
+            logging.error(f"get_candles failed: {e}")
+            return []
 
     def buy_market_order(self, ticker, amount):
         data = {
