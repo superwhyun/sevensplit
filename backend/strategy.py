@@ -198,7 +198,8 @@ class SevenSplitStrategy:
                 current_price = self.exchange.get_current_price(self.ticker)
             if current_price and not self.splits:
                 logging.info(f"Starting strategy {self.strategy_id} at current price: {current_price}")
-                self._create_buy_split(current_price)
+                # Use market order for initial entry to ensure execution
+                self._create_buy_split(current_price, use_market_order=True)
 
             self.is_running = True
             self.save_state()
@@ -306,7 +307,7 @@ class SevenSplitStrategy:
                     self.last_buy_price = None
                     self.save_state()
 
-    def _create_buy_split(self, target_price: float):
+    def _create_buy_split(self, target_price: float, use_market_order: bool = False):
         """Create a new buy split at the given target price."""
         if target_price < self.config.min_price:
             logging.warning(f"Target price {target_price} below min_price {self.config.min_price}. Skipping.")
@@ -340,23 +341,33 @@ class SevenSplitStrategy:
         import math
         volume = math.ceil((amount / target_price) * 100000000) / 100000000
 
-        logging.info(f"Attempting buy order: {self.ticker}, Price: {target_price}, Volume: {volume}, Total: {target_price * volume}")
+        logging.info(f"Attempting buy order: {self.ticker}, Price: {target_price}, Volume: {volume}, Total: {target_price * volume}, MarketOrder: {use_market_order}")
 
         try:
-            # Place limit buy order
-            result = self.exchange.buy_limit_order(self.ticker, target_price, volume)
+            result = None
+            if use_market_order:
+                # Place market buy order (price = amount in KRW)
+                result = self.exchange.buy_market_order(self.ticker, amount)
+            else:
+                # Place limit buy order
+                result = self.exchange.buy_limit_order(self.ticker, target_price, volume)
 
             if result:
                 split.buy_order_uuid = result.get('uuid')
                 split.buy_amount = amount
-                split.buy_volume = volume
+                
+                if use_market_order:
+                    # Estimate volume for now, will be updated when filled
+                    split.buy_volume = amount / target_price
+                else:
+                    split.buy_volume = volume
                 
                 # Prevent duplicate append
                 if not any(s.id == split.id for s in self.splits):
                     self.splits.append(split)
                     self.next_split_id += 1
                     self.last_buy_price = target_price
-                    logging.info(f"Created buy split {split.id} at {target_price} with order {split.buy_order_uuid}")
+                    logging.info(f"Created buy split {split.id} at {target_price} with order {split.buy_order_uuid} (Market: {use_market_order})")
                     self.save_state()
                 return split
         except Exception as e:
@@ -542,7 +553,8 @@ class SevenSplitStrategy:
                 # Strategy 1: Reset and start at current price
                 logging.info(f"All positions cleared. Resetting and starting at current price: {current_price}")
                 self.last_buy_price = None
-                self._create_buy_split(current_price)
+                # Use market order to ensure immediate re-entry
+                self._create_buy_split(current_price, use_market_order=True)
                 return
             elif self.config.rebuy_strategy == "last_sell_price":
                 # Strategy 2: Use last sell price as reference
@@ -558,7 +570,8 @@ class SevenSplitStrategy:
                 if current_price <= next_buy_price:
                     # Buy at current price (not at next_buy_price)
                     logging.info(f"Price dropped to {current_price} (trigger: {next_buy_price}), creating buy split at current price")
-                    self._create_buy_split(current_price)
+                    # Use market order to ensure immediate re-entry
+                    self._create_buy_split(current_price, use_market_order=True)
                 return
             # Strategy 3: "last_buy_price" - continue with existing logic below
 
