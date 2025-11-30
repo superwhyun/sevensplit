@@ -263,8 +263,7 @@ class SevenSplitStrategy:
                 return
 
             # Check all splits for order status updates
-            splits_to_remove = []
-
+            # Check all splits for order status updates
             for split in self.splits:
                 if split.status == "PENDING_BUY":
                     self._check_buy_order(split)
@@ -276,18 +275,36 @@ class SevenSplitStrategy:
                 elif split.status == "PENDING_SELL":
                     self._check_sell_order(split)
 
-                elif split.status == "SELL_FILLED":
-                    # Sell completed, mark for removal
-                    splits_to_remove.append(split)
-
             # Remove completed splits
-            for split in splits_to_remove:
-                logging.info(f"Removing completed split {split.id}")
-                self.splits.remove(split)
-                self.save_state()
+            self._cleanup_filled_splits()
 
             # Check if we need to create new buy split based on price drop
             self._check_create_new_buy_split(current_price)
+
+    def _cleanup_filled_splits(self):
+        """Remove SELL_FILLED splits and update state."""
+        splits_to_remove = [s for s in self.splits if s.status == "SELL_FILLED"]
+        
+        for split in splits_to_remove:
+            logging.info(f"Removing completed split {split.id}")
+            self.splits.remove(split)
+            self.save_state()
+
+        # Update last_buy_price to the lowest buy price of remaining splits
+        if splits_to_remove:
+            if self.splits:
+                # Find the split with the lowest buy_price
+                lowest_split = min(self.splits, key=lambda s: s.buy_price)
+                if self.last_buy_price != lowest_split.buy_price:
+                    logging.info(f"Adjusting last_buy_price from {self.last_buy_price} to {lowest_split.buy_price} (lowest active split)")
+                    self.last_buy_price = lowest_split.buy_price
+                    self.save_state()
+            else:
+                # If no splits remain, last_buy_price will be handled by the rebuy strategy in _check_create_new_buy_split
+                if self.last_buy_price is not None:
+                    logging.info(f"All splits cleared. Resetting last_buy_price to None.")
+                    self.last_buy_price = None
+                    self.save_state()
 
     def _create_buy_split(self, target_price: float):
         """Create a new buy split at the given target price."""
@@ -646,5 +663,6 @@ class SevenSplitStrategy:
                 "total_coin_volume": total_coin_volume,
                 "total_valuation": total_valuation,
                 "status_counts": status_counts,
+                "last_buy_price": self.last_buy_price,
                 "trade_history": self.trade_history[:10] # Return last 10 trades
             }

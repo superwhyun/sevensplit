@@ -2,12 +2,18 @@ import { useEffect, useRef, useState } from 'react';
 import { createChart, ColorType, CrosshairMode } from 'lightweight-charts';
 import axios from 'axios';
 
-const StrategyChart = ({ ticker, splits = [], tradeHistory = [] }) => {
+const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], isSimulating = false, simResult, onSimulationComplete }) => {
     const chartContainerRef = useRef();
     const chartRef = useRef();
     const candlestickSeriesRef = useRef();
     const volumeSeriesRef = useRef();
     const [candleData, setCandleData] = useState([]);
+    const [showResultPopup, setShowResultPopup] = useState(true);
+
+    // Reset popup visibility when simResult changes
+    useEffect(() => {
+        if (simResult) setShowResultPopup(true);
+    }, [simResult]);
 
     useEffect(() => {
         const fetchCandles = async () => {
@@ -117,11 +123,84 @@ const StrategyChart = ({ ticker, splits = [], tradeHistory = [] }) => {
 
         window.addEventListener('resize', handleResize);
 
+
+
         return () => {
             window.removeEventListener('resize', handleResize);
             chart.remove();
         };
     }, []);
+
+    // Ref to access latest isSimulating in event handler
+    const isSimulatingRef = useRef(isSimulating);
+    useEffect(() => { isSimulatingRef.current = isSimulating; }, [isSimulating]);
+
+    const candleDataRef = useRef(candleData);
+    useEffect(() => { candleDataRef.current = candleData; }, [candleData]);
+
+    const configRef = useRef(config);
+    useEffect(() => { configRef.current = config; }, [config]);
+
+    // Attach click handler separately to access refs
+    useEffect(() => {
+        if (!chartRef.current) return;
+
+        const clickHandler = async (param) => {
+            if (!isSimulatingRef.current || !param.time || !candleDataRef.current.length) return;
+
+            const clickTime = param.time;
+            const startIndex = candleDataRef.current.findIndex(c => c.time === clickTime);
+
+            if (startIndex === -1) return;
+
+            console.log(`Starting simulation from index ${startIndex} (${new Date(clickTime * 1000).toLocaleString()})`);
+
+            try {
+                const payload = {
+                    strategy_config: configRef.current,
+                    candles: candleDataRef.current,
+                    start_index: startIndex,
+                    ticker: ticker,
+                    budget: 1000000 // Default or from props
+                };
+
+                // If running on Vite dev server (port 5173), point to backend port 8000.
+                const API_BASE_URL = window.location.port === '5173'
+                    ? `http://${window.location.hostname}:8000`
+                    : '';
+
+                const response = await axios.post(`${API_BASE_URL}/simulate`, payload);
+                const result = response.data;
+
+                if (onSimulationComplete) onSimulationComplete(result);
+
+            } catch (error) {
+                console.error("Simulation error:", error);
+                alert("Simulation failed");
+            }
+        };
+
+        chartRef.current.subscribeClick(clickHandler);
+
+        return () => {
+            if (chartRef.current) {
+                try {
+                    chartRef.current.unsubscribeClick(clickHandler);
+                } catch (e) { /* ignore */ }
+            }
+        };
+    }, [ticker]); // Re-bind if ticker changes, but refs handle updates
+
+    // Clear sim state when exiting sim mode
+    // No local state to clear anymore
+    /*
+    useEffect(() => {
+        if (!isSimulating) {
+            setSimResult(null);
+            setSimMarkers([]);
+        }
+    }, [isSimulating]);
+    */
 
     useEffect(() => {
         if (candlestickSeriesRef.current && candleData.length > 0) {
@@ -144,82 +223,111 @@ const StrategyChart = ({ ticker, splits = [], tradeHistory = [] }) => {
         }
     }, [candleData]);
 
-    // Update markers when splits or tradeHistory change
+
+
+    // Combined Marker Effect
     useEffect(() => {
         if (!candlestickSeriesRef.current) return;
 
         const markers = [];
 
-        // 1. Active Splits (Buy Markers)
-        if (splits && splits.length > 0) {
-            splits.forEach(split => {
-                if (split.bought_at) {
-                    const timeStr = split.bought_at.endsWith('Z') ? split.bought_at : split.bought_at + 'Z';
-                    const time = Date.parse(timeStr) / 1000;
-
-                    if (!isNaN(time)) {
-                        markers.push({
-                            time: time,
-                            position: 'belowBar',
-                            color: split.status === 'PENDING_SELL' ? '#eab308' : '#10b981', // Yellow if Pending Sell, else Green
-                            shape: 'arrowUp',
-                            text: '', // No text
-                            size: 1,
-                        });
-                    }
-                }
+        if (isSimulating && simResult && simResult.trades) {
+            simResult.trades.forEach(t => {
+                // For simplicity, let's just mark the Sells (Red Arrows).
+                // In simulation.py, 'timestamp' is the SELL time.
+                markers.push({
+                    time: t.timestamp,
+                    position: 'aboveBar',
+                    color: '#ef4444',
+                    shape: 'arrowDown',
+                    text: `₩${Math.round(t.net_profit)}`,
+                    size: 2
+                });
             });
+        } else {
+            // 1. Active Splits (Buy Markers)
+            if (splits && splits.length > 0) {
+                splits.forEach(split => {
+                    if (split.bought_at) {
+                        let time;
+                        if (typeof split.bought_at === 'number') {
+                            time = split.bought_at;
+                        } else {
+                            const timeStr = split.bought_at.endsWith('Z') ? split.bought_at : split.bought_at + 'Z';
+                            time = Date.parse(timeStr) / 1000;
+                        }
+
+                        if (!isNaN(time)) {
+                            markers.push({
+                                time: time,
+                                position: 'belowBar',
+                                color: split.status === 'PENDING_SELL' ? '#eab308' : '#10b981', // Yellow if Pending Sell, else Green
+                                shape: 'arrowUp',
+                                text: '', // No text
+                                size: 1,
+                            });
+                        }
+                    }
+                });
+            }
+
+            // 2. Trade History
+            if (tradeHistory && tradeHistory.length > 0) {
+                tradeHistory.forEach(trade => {
+                    // Sell Marker
+                    if (trade.timestamp) {
+                        let time;
+                        if (typeof trade.timestamp === 'number') {
+                            time = trade.timestamp;
+                        } else {
+                            const timeStr = trade.timestamp.endsWith('Z') ? trade.timestamp : trade.timestamp + 'Z';
+                            time = Date.parse(timeStr) / 1000;
+                        }
+
+                        if (!isNaN(time)) {
+                            markers.push({
+                                time: time,
+                                position: 'aboveBar',
+                                color: '#ef4444', // Red
+                                shape: 'arrowDown',
+                                text: '', // No text
+                                size: 1,
+                            });
+                        }
+                    }
+
+                    // Buy Marker (if available)
+                    if (trade.bought_at) {
+                        let time;
+                        if (typeof trade.bought_at === 'number') {
+                            time = trade.bought_at;
+                        } else {
+                            const timeStr = trade.bought_at.endsWith('Z') ? trade.bought_at : trade.bought_at + 'Z';
+                            time = Date.parse(timeStr) / 1000;
+                        }
+
+                        if (!isNaN(time)) {
+                            markers.push({
+                                time: time,
+                                position: 'belowBar',
+                                color: '#10b981', // Green (Completed trade buy was just a normal buy)
+                                shape: 'arrowUp',
+                                text: '', // No text
+                                size: 1,
+                            });
+                        }
+                    }
+                });
+            }
         }
 
-        // 2. Trade History
-        if (tradeHistory && tradeHistory.length > 0) {
-            tradeHistory.forEach(trade => {
-                // Sell Marker
-                if (trade.timestamp) {
-                    const timeStr = trade.timestamp.endsWith('Z') ? trade.timestamp : trade.timestamp + 'Z';
-                    const time = Date.parse(timeStr) / 1000;
-
-                    if (!isNaN(time)) {
-                        markers.push({
-                            time: time,
-                            position: 'aboveBar',
-                            color: '#ef4444', // Red
-                            shape: 'arrowDown',
-                            text: '', // No text
-                            size: 1,
-                        });
-                    }
-                }
-
-                // Buy Marker (if available)
-                if (trade.bought_at) {
-                    const timeStr = trade.bought_at.endsWith('Z') ? trade.bought_at : trade.bought_at + 'Z';
-                    const time = Date.parse(timeStr) / 1000;
-
-                    if (!isNaN(time)) {
-                        markers.push({
-                            time: time,
-                            position: 'belowBar',
-                            color: '#10b981', // Green (Completed trade buy was just a normal buy)
-                            shape: 'arrowUp',
-                            text: '', // No text
-                            size: 1,
-                        });
-                    }
-                }
-            });
-        }
-
-        // Sort markers by time (required by lightweight-charts)
         markers.sort((a, b) => a.time - b.time);
-
         try {
             candlestickSeriesRef.current.setMarkers(markers);
         } catch (e) {
             console.error("Error setting markers:", e);
         }
-
-    }, [splits, tradeHistory, candleData]); // Re-run when data changes
+    }, [splits, tradeHistory, candleData, isSimulating, simResult]); // Re-run when data changes
 
     return (
         <div style={{
@@ -229,8 +337,62 @@ const StrategyChart = ({ ticker, splits = [], tradeHistory = [] }) => {
             borderRadius: '0.5rem',
             border: '1px solid #334155'
         }}>
-            <h3 style={{ margin: '0 0 1rem 0', color: '#f8fafc' }}>Price Chart</h3>
-            <div ref={chartContainerRef} style={{ position: 'relative', height: '400px', width: '100%' }} />
+            <h3 style={{ margin: '0 0 1rem 0', color: '#f8fafc' }}>Price Chart {isSimulating ? '(SIMULATION MODE)' : ''}</h3>
+            <div ref={chartContainerRef} style={{ position: 'relative', height: '400px', width: '100%' }}>
+                {simResult && showResultPopup && (
+                    <div style={{
+                        position: 'absolute',
+                        top: '10px',
+                        left: '10px',
+                        zIndex: 20,
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                        padding: '1rem',
+                        borderRadius: '0.5rem',
+                        border: '1px solid #eab308',
+                        color: 'white',
+                        boxShadow: '0 4px 6px rgba(0,0,0,0.3)'
+                    }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                            <h4 style={{ margin: 0, color: '#eab308' }}>Simulation Result</h4>
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation(); // Prevent chart click
+                                    // We can't clear simResult here because it's a prop.
+                                    // But we can hide this specific popup if we had local state, 
+                                    // or we can ask parent to clear.
+                                    // The user asked for a button to "remove" it.
+                                    // Since simResult drives the whole view, maybe just a local "visible" state for this popup?
+                                    // Or call onSimulationComplete(null)? No, that exits the mode.
+                                    // Let's use a local state to toggle visibility of this box.
+                                    setShowResultPopup(false);
+                                }}
+                                style={{
+                                    background: 'transparent',
+                                    border: 'none',
+                                    color: '#94a3b8',
+                                    cursor: 'pointer',
+                                    fontSize: '1.2rem',
+                                    padding: '0 0.5rem'
+                                }}
+                            >
+                                ×
+                            </button>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'auto auto', gap: '0.5rem 1rem', fontSize: '0.9rem' }}>
+                            <span style={{ color: '#94a3b8' }}>Total Profit:</span>
+                            <span style={{ fontWeight: 'bold', color: simResult.total_profit >= 0 ? '#10b981' : '#ef4444' }}>
+                                ₩{Math.round(simResult.total_profit).toLocaleString()}
+                            </span>
+
+                            <span style={{ color: '#94a3b8' }}>Trades:</span>
+                            <span>{simResult.trade_count}</span>
+
+                            <span style={{ color: '#94a3b8' }}>Final Balance:</span>
+                            <span>₩{Math.round(simResult.final_balance).toLocaleString()}</span>
+                        </div>
+                    </div>
+                )}
+            </div>
         </div>
     );
 };

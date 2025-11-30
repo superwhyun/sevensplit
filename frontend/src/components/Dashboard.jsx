@@ -93,6 +93,8 @@ const Dashboard = () => {
     const [loading, setLoading] = useState(true);
     const [selectedStrategyId, setSelectedStrategyId] = useState(null);
     const [isModalOpen, setIsModalOpen] = useState(false);
+    const [isSimulating, setIsSimulating] = useState(false);
+    const [simResult, setSimResult] = useState(null);
 
     const selectedStrategyIdRef = useRef(selectedStrategyId);
 
@@ -313,6 +315,80 @@ const Dashboard = () => {
 
     return (
         <div className="dashboard-container" style={{ position: 'relative' }}>
+            {isSimulating && (
+                <div style={{
+                    position: 'fixed',
+                    top: 0, left: 0, right: 0, bottom: 0,
+                    backgroundColor: 'rgba(0,0,0,0.8)',
+                    zIndex: 9999,
+                    pointerEvents: 'auto' // Block clicks on background
+                }}>
+                    <div style={{
+                        position: 'absolute',
+                        top: '10%',
+                        left: '50%',
+                        transform: 'translateX(-50%)',
+                        color: 'white',
+                        fontSize: '1.5rem',
+                        fontWeight: 'bold',
+                        textAlign: 'center'
+                    }}>
+                        <div>🧪 Simulation Mode</div>
+                        <div style={{ fontSize: '1rem', fontWeight: 'normal', marginTop: '0.5rem', color: '#cbd5e1' }}>
+                            Click any point on the chart to start simulation from that date.
+                        </div>
+                        <button
+                            onClick={() => setIsSimulating(false)}
+                            style={{
+                                marginTop: '1.5rem',
+                                padding: '0.75rem 2rem',
+                                fontSize: '1rem',
+                                fontWeight: 'bold',
+                                backgroundColor: '#ef4444',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '0.5rem',
+                                cursor: 'pointer',
+                                pointerEvents: 'auto'
+                            }}
+                        >
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* Simulation Result Banner */}
+            {simResult && (
+                <div style={{
+                    backgroundColor: '#eab308',
+                    color: '#000',
+                    padding: '0.75rem',
+                    textAlign: 'center',
+                    fontWeight: 'bold',
+                    display: 'flex',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    gap: '1rem'
+                }}>
+                    <span>🧪 VIEWING SIMULATION RESULTS</span>
+                    <button
+                        onClick={() => setSimResult(null)}
+                        style={{
+                            padding: '0.25rem 0.75rem',
+                            backgroundColor: '#000',
+                            color: '#eab308',
+                            border: 'none',
+                            borderRadius: '0.25rem',
+                            cursor: 'pointer',
+                            fontWeight: 'bold'
+                        }}
+                    >
+                        Exit Simulation View
+                    </button>
+                </div>
+            )}
+
             <AddStrategyModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} onAdd={handleAddStrategy} />
 
             {/* Mode Indicator - Fixed Top Right */}
@@ -599,6 +675,15 @@ const Dashboard = () => {
                                         }}>
                                             🔄 Reset
                                         </button>
+                                        <button className="btn btn-secondary" onClick={() => setIsSimulating(!isSimulating)} style={{
+                                            padding: '0.65rem 1.75rem',
+                                            fontSize: '0.95rem',
+                                            backgroundColor: isSimulating ? '#eab308' : '#6366f1',
+                                            borderColor: isSimulating ? '#eab308' : '#6366f1',
+                                            color: 'white'
+                                        }}>
+                                            {isSimulating ? '❌ Exit Sim' : '🧪 Simulate'}
+                                        </button>
                                         <button className="btn btn-secondary" onClick={handleExport} style={{
                                             padding: '0.65rem 1.75rem',
                                             fontSize: '0.95rem',
@@ -646,17 +731,34 @@ const Dashboard = () => {
                             </div>
 
                             {/* Price Chart */}
-                            <StrategyChart
-                                ticker={status.ticker}
-                                splits={status.splits}
-                                config={status.config}
-                                tradeHistory={status.trade_history}
-                            />
+                            <div style={{ position: 'relative', zIndex: isSimulating ? 10000 : 1 }}>
+                                <StrategyChart
+                                    ticker={status.ticker}
+                                    splits={simResult ? simResult.splits : status.splits}
+                                    config={simResult ? simResult.config : status.config}
+                                    tradeHistory={simResult ? simResult.trades : status.trade_history}
+                                    isSimulating={isSimulating}
+                                    simResult={simResult}
+                                    onSimulationComplete={(result) => {
+                                        setSimResult(result);
+                                        setIsSimulating(false);
+                                    }}
+                                />
+                            </div>
 
                             {/* Grid Status List */}
                             <div className="card" style={{ maxHeight: '600px', overflowY: 'auto' }}>
-                                <div className="card-header">
-                                    <span className="card-title">Grid Status ({status.splits.length} Lines)</span>
+                                <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <span className="card-title">
+                                        {simResult ? 'Simulated Grid Status' : 'Grid Status'} ({simResult ? simResult.splits.length : status.splits.length} Lines)
+                                    </span>
+                                    {!simResult && status.last_buy_price && (
+                                        <span style={{ fontSize: '0.9rem', color: '#94a3b8' }}>
+                                            Next Buy Target: <span style={{ color: '#3b82f6', fontWeight: 'bold' }}>
+                                                ₩{Math.floor(status.last_buy_price * (1 - status.config.buy_rate)).toLocaleString()}
+                                            </span>
+                                        </span>
+                                    )}
                                 </div>
                                 <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                                     <thead style={{ position: 'sticky', top: 0, backgroundColor: '#1e293b', zIndex: 10 }}>
@@ -669,15 +771,21 @@ const Dashboard = () => {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {status.splits.map(split => {
+                                        {(simResult ? simResult.splits : status.splits).map(split => {
                                             const isBought = split.status === "BUY_FILLED" || split.status === "PENDING_SELL";
+                                            // Use current price from status for calculation even in sim view for now, 
+                                            // or use the last close price from sim? 
+                                            // Sim result doesn't return "current_price" explicitly but we can use status.current_price for reference
+                                            // or better, use the last candle close from chart? 
+                                            // Let's use status.current_price for consistency with the view.
+
                                             const profitRate = isBought ? ((status.current_price - split.buy_price) / split.buy_price * 100) : 0;
 
                                             // Calculate rate vs current price
                                             const buyPriceRate = ((split.buy_price - status.current_price) / status.current_price * 100);
                                             const sellTargetPrice = split.target_sell_price > 0
                                                 ? split.target_sell_price
-                                                : split.buy_price * (1 + status.config.sell_rate);
+                                                : split.buy_price * (1 + (simResult ? simResult.config.sell_rate : status.config.sell_rate));
                                             const sellTargetRate = ((sellTargetPrice - status.current_price) / status.current_price * 100);
 
                                             return (
@@ -724,16 +832,19 @@ const Dashboard = () => {
                             </div>
 
                             {/* Recent Trades Section */}
-                            {status.trade_history && status.trade_history.length > 0 && (
+                            {(simResult ? simResult.trades : status.trade_history) && (simResult ? simResult.trades : status.trade_history).length > 0 && (
                                 <div className="card">
                                     <div className="card-header">
-                                        <span className="card-title">Recent Trades ({status.name})</span>
+                                        <span className="card-title">
+                                            {simResult ? 'Simulated Trades' : `Recent Trades (${status.name})`}
+                                        </span>
                                     </div>
                                     <div style={{ overflowX: 'auto' }}>
                                         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                                             <thead>
                                                 <tr style={{ borderBottom: '2px solid #334155', color: '#94a3b8' }}>
-                                                    <th style={{ padding: '1rem' }}>Time</th>
+                                                    <th style={{ padding: '1rem' }}>Buy Time</th>
+                                                    <th style={{ padding: '1rem' }}>Sell Time</th>
                                                     <th style={{ padding: '1rem' }}>Split</th>
                                                     <th style={{ padding: '1rem', textAlign: 'right' }}>Buy Amount</th>
                                                     <th style={{ padding: '1rem', textAlign: 'right' }}>Sell Amount</th>
@@ -744,7 +855,7 @@ const Dashboard = () => {
                                                 </tr>
                                             </thead>
                                             <tbody>
-                                                {status.trade_history.map((trade, index) => {
+                                                {(simResult ? simResult.trades : status.trade_history).map((trade, index) => {
                                                     const buyAmount = trade.buy_amount || 0;
                                                     const sellAmount = trade.sell_amount || 0;
                                                     const grossProfit = trade.gross_profit || (sellAmount - buyAmount);
@@ -752,10 +863,20 @@ const Dashboard = () => {
                                                     const netProfit = trade.net_profit || (grossProfit - totalFee);
                                                     const profitRate = trade.profit_rate || 0;
 
+                                                    // Helper to format time (handle both ISO string and unix timestamp)
+                                                    const formatTime = (t) => {
+                                                        if (!t) return '-';
+                                                        if (typeof t === 'number') return new Date(t * 1000).toLocaleString();
+                                                        return new Date(t).toLocaleString();
+                                                    };
+
                                                     return (
                                                         <tr key={index} style={{ borderBottom: '1px solid #1e293b' }}>
+                                                            <td style={{ padding: '1rem', fontSize: '0.875rem', color: '#94a3b8' }}>
+                                                                {formatTime(trade.bought_at)}
+                                                            </td>
                                                             <td style={{ padding: '1rem', fontSize: '0.875rem' }}>
-                                                                {new Date(trade.timestamp).toLocaleString()}
+                                                                {formatTime(trade.timestamp)}
                                                             </td>
                                                             <td style={{ padding: '1rem', fontWeight: 'bold' }}>#{trade.split_id}</td>
                                                             <td style={{ padding: '1rem', textAlign: 'right' }}>

@@ -15,6 +15,7 @@ import logging
 import io
 import csv
 from typing import Dict, Any, List, Optional
+from simulation import run_simulation, SimulationConfig
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -425,6 +426,16 @@ def update_config(req: ConfigRequest):
         strategies[req.strategy_id].budget = req.budget
     strategies[req.strategy_id].update_config(req.config)
     return {"status": "config updated", "strategy_id": req.strategy_id, "config": req.config, "budget": strategies[req.strategy_id].budget}
+
+@app.post("/simulate")
+def simulate_strategy(sim_config: SimulationConfig):
+    """Run a simulation based on provided config and candles"""
+    try:
+        result = run_simulation(sim_config)
+        return result
+    except Exception as e:
+        logging.error(f"Simulation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/reset")
 def reset_strategy(cmd: CommandRequest):
