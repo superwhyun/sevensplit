@@ -44,12 +44,17 @@ if __name__ == "__main__":
         for db_path in sys.argv[1:]:
             check_and_update_db(db_path)
     else:
-        # Default behavior: check standard files in the backend directory
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        
-        # Check both mock and real databases
-        mock_db = os.path.join(base_dir, "sevensplit_mock.db")
-        real_db = os.path.join(base_dir, "sevensplit_real.db")
-        
-        check_and_update_db(mock_db)
-        check_and_update_db(real_db)
+        # Check environment variable first
+        env_db_path = os.getenv("DB_PATH")
+        if env_db_path:
+            check_and_update_db(env_db_path)
+        else:
+            # Default behavior: check standard files in the backend directory
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            
+            # Check both mock and real databases
+            mock_db = os.path.join(base_dir, "sevensplit_mock.db")
+            real_db = os.path.join(base_dir, "sevensplit_real.db")
+            
+            check_and_update_db(mock_db)
+            check_and_update_db(real_db)

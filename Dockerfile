@@ -29,4 +29,4 @@ ENV PORT=8000
 EXPOSE 8000
 
 # Run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "python update_db_schema.py && uvicorn main:app --host 0.0.0.0 --port 8000"]
