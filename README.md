@@ -83,7 +83,15 @@ docker-compose build
 docker-compose up -d
 ```
 
-### 3. 멀티 유저 설정
+### 3. 이미지 업데이트 및 재실행
+
+이미지를 다시 빌드했거나 설정을 변경하여 컨테이너를 재생성해야 할 경우 `--force-recreate` 옵션을 사용합니다.
+
+```bash
+docker-compose up -d --force-recreate
+```
+
+### 4. 멀티 유저 설정
 
 `docker-compose.yml` 파일을 수정하여 사용자별로 봇을 추가할 수 있습니다.
 
