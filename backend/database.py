@@ -227,7 +227,7 @@ class DatabaseManager:
                 ticker=ticker,
                 budget=budget,
                 **config,
-                max_trades_per_day=100, # Added by instruction
+                # max_trades_per_day=100, # Removed to avoid duplicate argument error
                 is_running=False,
                 next_split_id=1
             )
