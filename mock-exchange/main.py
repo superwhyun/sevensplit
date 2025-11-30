@@ -667,7 +667,7 @@ def price_updater():
             # Prices are automatically cached in price_overrides
         except Exception as e:
             logging.error(f"Price updater error: {e}")
-        time.sleep(1)  # Update every second
+        time.sleep(3)  # Update every 3 seconds to avoid 429
 
 def order_matcher():
     while True:
@@ -678,6 +678,61 @@ def order_matcher():
         time.sleep(1)
 
 # Start background threads
+
+
+# --- Upbit API Endpoints ---
+
+@app.get("/v1/candles/minutes/{unit}")
+def candles_minutes(unit: int, market: str, to: Optional[str] = None, count: int = 200):
+    """Proxy /v1/candles/minutes/{unit} from real Upbit API with caching"""
+    if not mock_logic.live_api_base:
+        return []
+
+    # Simple in-memory cache key
+    cache_key = f"candles_{unit}_{market}_{to}_{count}"
+    current_time = time.time()
+    
+    # Check cache (valid for 60 seconds)
+    if hasattr(mock_logic, 'candle_cache') and cache_key in mock_logic.candle_cache:
+        cached_data, timestamp = mock_logic.candle_cache[cache_key]
+        if current_time - timestamp < 60:
+            return cached_data
+    
+    try:
+        url = f"{mock_logic.live_api_base}/v1/candles/minutes/{unit}"
+        params = {'market': market, 'count': count}
+        if to:
+            params['to'] = to
+            
+        resp = requests.get(url, params=params, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            
+            # Initialize cache if needed
+            if not hasattr(mock_logic, 'candle_cache'):
+                mock_logic.candle_cache = {}
+                
+            # Update cache
+            mock_logic.candle_cache[cache_key] = (data, current_time)
+            
+            # Clean old cache entries occasionally (simple approach: clear all if too big)
+            if len(mock_logic.candle_cache) > 100:
+                mock_logic.candle_cache = {}
+                
+            return data
+        elif resp.status_code == 429:
+             logging.warning(f"Upbit API Rate Limit (429) for candles. Returning cached if available.")
+             # Try to return stale cache if available
+             if hasattr(mock_logic, 'candle_cache') and cache_key in mock_logic.candle_cache:
+                 return mock_logic.candle_cache[cache_key][0]
+             raise HTTPException(status_code=429, detail="Upbit API Rate Limit")
+        else:
+            logging.error(f"Upbit API Error {resp.status_code}: {resp.text}")
+            raise HTTPException(status_code=resp.status_code, detail="Upbit API Error")
+            
+    except Exception as e:
+        logging.error(f"Failed to proxy candles: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # --- Upbit API Endpoints ---
