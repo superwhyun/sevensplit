@@ -576,10 +576,22 @@ class MockExchangeLogic:
                             self._persist_balance("KRW")
                             self._persist_balance(currency)
 
+                        # Create trade info
+                        trade = {
+                            "market": order["market"],
+                            "uuid": str(uuid.uuid4()),
+                            "price": str(price),
+                            "volume": str(vol),
+                            "funds": str(total),
+                            "side": order["side"],
+                            "created_at": datetime.now().isoformat()
+                        }
+                        
                         order["state"] = "done"
                         order["trades_count"] = 1
                         order["executed_volume"] = str(vol)
                         order["remaining_volume"] = "0"
+                        order["trades"] = [trade] # Add trades list
                         
                         # Update DB
                         try:

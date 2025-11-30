@@ -7,4 +7,4 @@ if [ -f .env ]; then
   export $(cat .env | xargs)
 fi
 export HOST=0.0.0.0
-python main.py
+uvicorn main:app --host 0.0.0.0 --port ${PORT:-5001} --reload --no-access-log
