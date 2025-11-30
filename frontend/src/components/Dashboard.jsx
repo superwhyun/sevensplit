@@ -262,7 +262,7 @@ const Dashboard = () => {
     };
 
     const handleReset = async () => {
-        if (!window.confirm(`Are you sure you want to reset this strategy? This will cancel all orders and delete all splits/trades.`)) {
+        if (!window.confirm(`Are you sure you want to reset this strategy?\n\nThis will:\n- Cancel all active orders for this strategy\n- Clear active splits (positions)\n- DELETE all trade history\n\n(Your wallet balance will NOT be reset)`)) {
             return;
         }
         try {

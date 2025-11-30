@@ -486,6 +486,8 @@ def reset_strategy(cmd: CommandRequest):
         logging.error(f"Failed to reset strategy {s_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to reset: {str(e)}")
 
+import requests
+
 @app.post("/reset-all")
 def reset_all_mock():
     """Reset all strategies and exchange (MOCK mode only)"""
@@ -503,18 +505,29 @@ def reset_all_mock():
         except Exception as e:
             print(f"Error stopping strategy {s_id}: {e}")
 
-    # Reset database
+    # Reset database (Trading data only, preserve strategies)
     from database import get_db
     db_local = get_db()
-    db_local.reset_all_data()
-    print("Database reset complete")
+    db_local.reset_trading_data()
+    print("Database trading data reset complete")
+
+    # Call Mock Server Reset Endpoint
+    try:
+        # server_url is global, e.g. http://localhost:5001
+        resp = requests.post(f"{server_url}/mock/reset", timeout=5)
+        if resp.status_code == 200:
+            print("Mock server reset successful")
+        else:
+            print(f"Mock server reset failed: {resp.text}")
+    except Exception as e:
+        print(f"Failed to call mock server reset: {e}")
 
     # Reinitialize exchange pointing to mock server
     access_key = env_access_key or "mock_access_key"
     secret_key = env_secret_key or "mock_secret_key"
     exchange = UpbitExchange(access_key, secret_key, server_url=server_url)
 
-    # Reload strategies (will be empty, then create defaults)
+    # Reload strategies (will load existing strategies from DB)
     load_strategies()
 
     return {"status": "mock reset", "message": "All strategies and database reset"}

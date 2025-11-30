@@ -15,6 +15,7 @@ class StrategyConfig(BaseModel):
     fee_rate: float = 0.0005 # 0.05% fee
     tick_interval: float = 1.0 # seconds - how often to check prices
     rebuy_strategy: str = "reset_on_clear" # Options: "last_buy_price", "last_sell_price", "reset_on_clear"
+    max_trades_per_day: int = 100 # Max trades allowed per 24 hours
 
 class SplitState(BaseModel):
     id: int
@@ -83,6 +84,7 @@ class SevenSplitStrategy:
                 fee_rate=config_dict['fee_rate'],
                 tick_interval=config_dict['tick_interval'],
                 rebuy_strategy=config_dict['rebuy_strategy'],
+                max_trades_per_day=config_dict['max_trades_per_day'],
                 is_running=self.is_running,
                 next_split_id=self.next_split_id,
                 last_buy_price=self.last_buy_price,
@@ -140,7 +142,8 @@ class SevenSplitStrategy:
                 sell_rate=state.sell_rate,
                 fee_rate=state.fee_rate,
                 tick_interval=state.tick_interval,
-                rebuy_strategy=state.rebuy_strategy
+                rebuy_strategy=state.rebuy_strategy,
+                max_trades_per_day=getattr(state, 'max_trades_per_day', 100) # Default 100 if missing
             )
 
             self.is_running = state.is_running
@@ -168,21 +171,23 @@ class SevenSplitStrategy:
                 )
                 self.splits.append(split)
 
-            # Load trade history
-            db_trades = self.db.get_trades(self.strategy_id, limit=100)
+            # Load recent trade history for limit checking (last 200 should be enough for 24h check)
+            trades = self.db.get_trades(self.strategy_id, limit=200)
             self.trade_history = []
-            for trade in db_trades:
+            for t in trades:
                 self.trade_history.append({
-                    'split_id': trade.split_id,
-                    'buy_price': trade.buy_price,
-                    'sell_price': trade.sell_price,
-                    'buy_amount': trade.buy_amount,
-                    'sell_amount': trade.sell_amount,
-                    'gross_profit': trade.gross_profit,
-                    'total_fee': trade.total_fee,
-                    'net_profit': trade.net_profit,
-                    'profit_rate': trade.profit_rate,
-                    'timestamp': trade.timestamp.isoformat()
+                    'split_id': t.split_id,
+                    'buy_price': t.buy_price,
+                    'sell_price': t.sell_price,
+                    'buy_amount': t.buy_amount,
+                    'sell_amount': t.sell_amount,
+                    'volume': t.coin_volume,
+                    'gross_profit': t.gross_profit,
+                    'total_fee': t.total_fee,
+                    'net_profit': t.net_profit,
+                    'profit_rate': t.profit_rate,
+                    'timestamp': t.timestamp.isoformat() if t.timestamp else None,
+                    'bought_at': t.created_at.isoformat() if t.created_at else None
                 })
 
             return True
@@ -239,6 +244,71 @@ class SevenSplitStrategy:
             self.config = config
             self.save_state()
 
+    def check_trade_limit(self) -> bool:
+        """Check if total trade actions (buys + sells) in last 24 hours is within limit"""
+        if self.config.max_trades_per_day <= 0:
+            return True # No limit
+            
+        now = datetime.now()
+        one_day_ago = now.timestamp() - 86400
+        recent_count = 0
+        
+        # 1. Count from completed trades history
+        for t in self.trade_history:
+            # Check Sell Time
+            ts = t.get('timestamp')
+            if ts:
+                try:
+                    if isinstance(ts, str):
+                        dt = datetime.fromisoformat(ts)
+                        ts_val = dt.timestamp()
+                    else:
+                        ts_val = float(ts)
+                    
+                    if ts_val > one_day_ago:
+                        recent_count += 1
+                except Exception:
+                    pass
+
+            # Check Buy Time
+            bought_at = t.get('bought_at')
+            if bought_at:
+                try:
+                    if isinstance(bought_at, str):
+                        dt = datetime.fromisoformat(bought_at)
+                        ba_val = dt.timestamp()
+                    else:
+                        ba_val = float(bought_at)
+                    
+                    if ba_val > one_day_ago:
+                        recent_count += 1
+                except Exception:
+                    pass
+        
+        # 2. Count from active splits (Buys that haven't been sold yet)
+        for split in self.splits:
+            # Only count if bought (BUY_FILLED or PENDING_SELL)
+            # PENDING_BUY hasn't happened yet.
+            if split.status in ["BUY_FILLED", "PENDING_SELL"] and split.bought_at:
+                try:
+                    if isinstance(split.bought_at, str):
+                        dt = datetime.fromisoformat(split.bought_at)
+                        ba_val = dt.timestamp()
+                    else:
+                        ba_val = float(split.bought_at)
+                    
+                    if ba_val > one_day_ago:
+                        recent_count += 1
+                except Exception:
+                    pass
+
+        if recent_count >= self.config.max_trades_per_day:
+            # Only log once per minute to avoid spam (TODO: Implement rate limiting for logs)
+            logging.warning(f"Trade limit reached ({recent_count}/{self.config.max_trades_per_day} actions in 24h). Skipping buy.")
+            return False
+            
+        return True
+
     def tick(self, current_price: float = None):
         """Main tick function called periodically to check and update splits."""
         with self.lock:
@@ -264,7 +334,6 @@ class SevenSplitStrategy:
                 return
 
             # Check all splits for order status updates
-            # Check all splits for order status updates
             for split in self.splits:
                 if split.status == "PENDING_BUY":
                     self._check_buy_order(split)
@@ -280,7 +349,8 @@ class SevenSplitStrategy:
             self._cleanup_filled_splits()
 
             # Check if we need to create new buy split based on price drop
-            self._check_create_new_buy_split(current_price)
+            if self.check_trade_limit():
+                self._check_create_new_buy_split(current_price)
 
     def _cleanup_filled_splits(self):
         """Remove SELL_FILLED splits and update state."""
@@ -405,12 +475,41 @@ class SevenSplitStrategy:
             if order and order.get('state') == 'done':
                 # Buy order filled
                 split.status = "BUY_FILLED"
-                split.actual_buy_price = float(order.get('price', split.buy_price))
                 split.bought_at = datetime.now().isoformat()
-                # Update volume with actual executed volume
-                executed_volume = float(order.get('executed_volume', split.buy_volume))
-                split.buy_volume = executed_volume
-                logging.info(f"Buy order filled for split {split.id} at {split.actual_buy_price}")
+                
+                # Calculate actual buy price and volume from trades
+                trades = order.get('trades', [])
+                if trades:
+                    total_funds = sum(float(t.get('funds', 0)) for t in trades)
+                    total_volume = sum(float(t.get('volume', 0)) for t in trades)
+                    if total_volume > 0:
+                        split.actual_buy_price = total_funds / total_volume
+                        split.buy_volume = total_volume
+                    else:
+                        # Fallback (shouldn't happen with valid trades)
+                        split.actual_buy_price = float(order.get('price', split.buy_price))
+                else:
+                    # No trades data (legacy or error)
+                    # For Market Buy ('price'), order['price'] is the AMOUNT, not unit price!
+                    if order.get('ord_type') == 'price':
+                        # Try to infer from executed volume if available
+                        executed_vol = float(order.get('executed_volume', 0))
+                        paid_amount = float(order.get('price', 0)) # This is the target amount
+                        # Note: In Upbit, 'price' for market buy is the budget. 
+                        # Actual spent might be slightly less due to fees? No, fees are deducted.
+                        # Best guess if no trades:
+                        if executed_vol > 0:
+                             split.actual_buy_price = paid_amount / executed_vol
+                             split.buy_volume = executed_vol
+                        else:
+                             logging.error(f"Market buy filled but no volume? {order}")
+                             split.actual_buy_price = split.buy_price # Fallback to target
+                    else:
+                        # Limit order
+                        split.actual_buy_price = float(order.get('price', split.buy_price))
+                        split.buy_volume = float(order.get('executed_volume', split.buy_volume))
+
+                logging.info(f"Buy order filled for split {split.id}. Price: {split.actual_buy_price}, Vol: {split.buy_volume}")
                 self.save_state()
         except Exception as e:
             # Handle 404 or "Order not found"
@@ -496,11 +595,12 @@ class SevenSplitStrategy:
                     "net_profit": net_profit,
                     "profit_rate": profit_rate,
                     "buy_order_id": split.buy_order_uuid,
-                    "sell_order_id": split.sell_order_uuid
+                    "sell_order_id": split.sell_order_uuid,
+                    "bought_at": datetime.fromisoformat(split.bought_at) if split.bought_at else None
                 }
                 self.db.add_trade(self.strategy_id, self.ticker, trade_data)
 
-                # Also keep in memory for quick access (limit to 50)
+                # Also keep in memory for quick access
                 self.trade_history.insert(0, {
                     "split_id": split.id,
                     "buy_price": split.actual_buy_price,
@@ -518,8 +618,9 @@ class SevenSplitStrategy:
                     "bought_at": split.bought_at
                 })
 
-                if len(self.trade_history) > 50:
-                    self.trade_history.pop()
+                # Removed cap of 50 to ensure trade limit check works correctly
+                # if len(self.trade_history) > 50:
+                #     self.trade_history.pop()
 
                 split.status = "SELL_FILLED"
                 self.last_sell_price = actual_sell_price

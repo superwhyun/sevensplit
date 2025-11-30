@@ -325,6 +325,31 @@ class DatabaseManager:
                 state.next_split_id = 1
                 state.last_buy_price = None
                 state.last_sell_price = None
+            session.query(MockOrder).delete()
+            session.commit()
+        finally:
+            session.close()
+
+    def reset_trading_data(self):
+        """Reset active trading state but preserve strategies and trade history (for soft reset)"""
+        session = self.get_session()
+        try:
+            # Delete all active splits
+            session.query(Split).delete()
+            
+            # Preserve Trade history
+            # session.query(Trade).delete()
+            
+            # Reset strategy state (but keep config)
+            # ... (StrategyState reset logic if needed, but mock exchange doesn't really manage this)
+            
+            # Reset mock accounts to defaults
+            session.query(MockAccount).delete()
+            session.add(MockAccount(currency="KRW", balance=10000000.0, avg_buy_price=0.0))
+            
+            # Reset mock orders
+            session.query(MockOrder).delete()
+            
             session.commit()
         finally:
             session.close()

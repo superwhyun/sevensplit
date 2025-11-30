@@ -183,10 +183,26 @@ class MockExchangeLogic:
 
     def _refresh_balances(self):
         try:
-            accounts = self.db.get_mock_accounts()
-            for acc in accounts:
-                self.balance[acc.currency] = acc.balance
-                self.avg_buy_prices[acc.currency] = acc.avg_buy_price
+            # Acquire lock to ensure consistency between DB read and memory update
+            # and to prevent race conditions with reset
+            with self.lock:
+                accounts = self.db.get_mock_accounts()
+                
+                # Track found currencies to identify removals
+                found_currencies = set()
+                
+                for acc in accounts:
+                    self.balance[acc.currency] = acc.balance
+                    self.avg_buy_prices[acc.currency] = acc.avg_buy_price
+                    found_currencies.add(acc.currency)
+                
+                # Remove currencies that are in memory but not in DB (e.g. after reset)
+                for currency in list(self.balance.keys()):
+                    if currency not in found_currencies:
+                        del self.balance[currency]
+                        if currency in self.avg_buy_prices:
+                            del self.avg_buy_prices[currency]
+                            
         except Exception as e:
             logging.error(f"Mock server: failed to refresh balances: {e}")
 
@@ -798,8 +814,39 @@ def mock_price(req: MockPriceRequest):
 @app.get("/mock/price")
 def get_mock_price(ticker: str):
     """Return the current mock price for a ticker (respects hold/override)."""
-    price = mock_logic.get_current_price(ticker)
-    return {"ticker": ticker, "price": price}
+    return {"ticker": ticker, "price": mock_logic.get_current_price(ticker)}
+
+@app.post("/mock/reset")
+def mock_reset():
+    """Reset mock exchange state (balances, orders, prices)"""
+    with mock_logic.lock:
+        # 1. Clear all orders first
+        mock_logic.orders = {}
+        
+        # Use the DB manager's reset method to clear DB tables
+        try:
+            mock_logic.db.reset_trading_data()
+        except Exception as e:
+            logging.error(f"Failed to reset DB data: {e}")
+
+        # 2. Reset Balances
+        mock_logic.balance = {"KRW": 10000000.0}
+        mock_logic.avg_buy_prices = {}
+        
+        # 3. Reset Prices
+        mock_logic.price_overrides = {}
+        mock_logic.price_held = {}
+
+        logging.info("Mock exchange reset to initial state")
+
+    # Re-initialize default prices
+    initialize_default_prices()
+    
+    return {
+        "status": "ok",
+        "message": "All balances and orders reset to initial state",
+        "accounts": mock_logic.get_accounts()
+    }
 
 class MockBalanceRequest(BaseModel):
     currency: str
@@ -818,39 +865,6 @@ def mock_balance(req: MockBalanceRequest):
         "status": "ok",
         "currency": req.currency,
         "balance": req.balance,
-        "accounts": mock_logic.get_accounts()
-    }
-
-@app.post("/mock/reset")
-def mock_reset():
-    """Reset all balances to initial state"""
-    with mock_logic.lock:
-        # First, get all currencies from the database
-        all_accounts = mock_logic.db.get_mock_accounts()
-        
-        # Reset all currencies in DB to 0
-        for acc in all_accounts:
-            if acc.currency != "KRW":
-                mock_logic.db.set_mock_balance(acc.currency, 0.0, 0.0)
-        
-        # Reset KRW to initial balance in DB
-        mock_logic.db.set_mock_balance("KRW", 10000000.0, 0.0)
-        
-        # Now refresh in-memory state from DB
-        mock_logic.balance = {"KRW": 10000000.0}
-        mock_logic.avg_buy_prices = {}
-        mock_logic._refresh_balances()
-        
-        # Cancel all pending orders
-        for order in list(mock_logic.orders.values()):
-            if order["state"] == "wait":
-                mock_logic.cancel_order(order["uuid"])
-        
-        logging.info("Mock exchange reset to initial state")
-        
-    return {
-        "status": "ok",
-        "message": "All balances reset to initial state",
         "accounts": mock_logic.get_accounts()
     }
 

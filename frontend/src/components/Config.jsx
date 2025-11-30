@@ -201,6 +201,28 @@ const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
                 </div>
 
                 <div className="input-group">
+                    <label>Max Trades Per Day (24h)</label>
+                    <input
+                        type="number"
+                        step="1"
+                        min="0"
+                        name="max_trades_per_day"
+                        value={formData.max_trades_per_day ?? 100}
+                        onChange={(e) => {
+                            setIsEditing(true);
+                            setFormData(prev => ({
+                                ...prev,
+                                max_trades_per_day: parseInt(e.target.value)
+                            }));
+                        }}
+                        placeholder="e.g. 100"
+                    />
+                    <small style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
+                        Max number of trades allowed in 24 hours (0 = unlimited)
+                    </small>
+                </div>
+
+                <div className="input-group">
                     <label>Rebuy Strategy (when all positions cleared)</label>
                     <select
                         name="rebuy_strategy"

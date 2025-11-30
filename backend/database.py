@@ -30,6 +30,7 @@ class Strategy(Base):
     fee_rate = Column(Float, nullable=False)
     tick_interval = Column(Float, nullable=False, default=1.0)
     rebuy_strategy = Column(String(50), nullable=False)
+    max_trades_per_day = Column(Integer, nullable=False, default=100)
 
     # Runtime state
     is_running = Column(Boolean, default=False)
@@ -102,6 +103,7 @@ class Trade(Base):
 
     # Timestamps
     timestamp = Column(DateTime, default=datetime.now)
+    bought_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.now)
 
     # Relationship
@@ -197,6 +199,7 @@ class DatabaseManager:
                 ticker=ticker,
                 budget=budget,
                 **config,
+                max_trades_per_day=100, # Added by instruction
                 is_running=False,
                 next_split_id=1
             )
@@ -364,6 +367,36 @@ class DatabaseManager:
             # Reset mock accounts to defaults
             session.query(MockAccount).delete()
             session.add(MockAccount(currency="KRW", balance=10000000.0, avg_buy_price=0.0))
+            session.query(MockOrder).delete()
+            session.commit()
+        finally:
+            session.close()
+
+    def reset_trading_data(self):
+        """Reset active trading state but preserve strategies and trade history (for soft reset)"""
+        session = self.get_session()
+        try:
+            # Delete all active splits (since assets are being reset)
+            session.query(Split).delete()
+            
+            # Note: We preserve Trade history so the user can see past performance
+            # session.query(Trade).delete() 
+            
+            # Reset strategy state (but keep config)
+            strategies = session.query(Strategy).all()
+            for s in strategies:
+                s.is_running = False
+                s.next_split_id = 1
+                s.last_buy_price = None
+                s.last_sell_price = None
+            
+            # Reset mock accounts to defaults
+            session.query(MockAccount).delete()
+            session.add(MockAccount(currency="KRW", balance=10000000.0, avg_buy_price=0.0))
+            
+            # Reset mock orders
+            session.query(MockOrder).delete()
+            
             session.commit()
         finally:
             session.close()

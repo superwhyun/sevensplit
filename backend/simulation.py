@@ -67,6 +67,9 @@ class MockExchange:
     def buy_limit_order(self, ticker, price, volume):
         return {'uuid': f'sim_buy_{datetime.now().timestamp()}'}
 
+    def buy_market_order(self, ticker, amount):
+        return {'uuid': f'sim_buy_market_{datetime.now().timestamp()}'}
+
     def sell_limit_order(self, ticker, price, volume):
         return {'uuid': f'sim_sell_{datetime.now().timestamp()}'}
     
@@ -101,6 +104,10 @@ class SimulationStrategy(SevenSplitStrategy):
         if self.config.min_price == 0.0:
             # We don't have current price yet, will set in run_simulation or first tick
             pass
+
+    def check_trade_limit(self) -> bool:
+        """Bypass trade limit for simulation"""
+        return True
 
     def save_state(self):
         pass # Do nothing
