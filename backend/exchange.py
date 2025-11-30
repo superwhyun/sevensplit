@@ -50,6 +50,10 @@ class UpbitExchange(Exchange):
         self.uuid = uuid
         self.time = time
         
+        # Rate limiting
+        self.last_request_time = 0
+        self.min_request_interval = 0.1 # 10 requests per second max
+        
         # Cache for valid markets
         self.valid_markets = set()
         self.last_markets_update = 0
@@ -119,6 +123,12 @@ class UpbitExchange(Exchange):
         return self.valid_markets
 
     def _request(self, method, endpoint, params=None, data=None, auth=True):
+        # Rate limiting wait
+        elapsed = self.time.time() - self.last_request_time
+        if elapsed < self.min_request_interval:
+            self.time.sleep(self.min_request_interval - elapsed)
+        self.last_request_time = self.time.time()
+
         url = f"{self.server_url}{endpoint}"
         headers = {}
         
@@ -195,17 +205,15 @@ class UpbitExchange(Exchange):
         try:
             accounts = self._request('GET', '/v1/accounts')
 
-            # Get valid markets to filter out delisted/invalid coins
-            valid_markets = self._get_valid_markets()
-
             # Collect tickers to batch-fetch prices
+            # LIMIT: Only fetch prices for BTC, ETH, SOL to avoid rate limits
+            target_coins = {"BTC", "ETH", "SOL"}
             tickers = []
             for account in accounts:
-                if account.get('currency') and account['currency'] != 'KRW':
-                    ticker = f"KRW-{account['currency']}"
-                    # Only fetch price if it's a valid market (or if we failed to fetch valid markets, try anyway)
-                    if not valid_markets or ticker in valid_markets:
-                        tickers.append(ticker)
+                currency = account.get('currency')
+                if currency and currency != 'KRW' and currency in target_coins:
+                    ticker = f"KRW-{currency}"
+                    tickers.append(ticker)
 
             prices = self.get_current_prices(tickers) if tickers else {}
 
