@@ -23,8 +23,8 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                 const response = await axios.get(`https://api.upbit.com/v1/candles/minutes/5?market=${ticker}&count=200`);
 
                 const data = response.data.map(item => {
-                    // KST 시간을 UTC로 파싱 (끝에 'Z' 붙여서)
-                    const timestamp = Date.parse(item.candle_date_time_kst + 'Z') / 1000;
+                    // UTC 시간을 파싱 (끝에 'Z' 붙여서)
+                    const timestamp = Date.parse(item.candle_date_time_utc + 'Z') / 1000;
 
                     return {
                         time: timestamp,
@@ -149,11 +149,15 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             if (!isSimulatingRef.current || !param.time || !candleDataRef.current.length) return;
 
             const clickTime = param.time;
-            const startIndex = candleDataRef.current.findIndex(c => c.time === clickTime);
+            // clickTime is KST (shifted), find original UTC candle
+            const KST_OFFSET = 9 * 60 * 60;
+            const startIndex = candleDataRef.current.findIndex(c => (c.time + KST_OFFSET) === clickTime);
 
             if (startIndex === -1) return;
 
-            console.log(`Starting simulation from index ${startIndex} (${new Date(clickTime * 1000).toLocaleString()})`);
+            // Convert clickTime back to UTC for logging
+            const utcTime = clickTime - KST_OFFSET;
+            console.log(`Starting simulation from index ${startIndex} (UTC: ${new Date(utcTime * 1000).toUTCString()}, KST: ${new Date(clickTime * 1000).toLocaleString()})`);
 
             try {
                 const payload = {
@@ -205,10 +209,17 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
     useEffect(() => {
         if (candlestickSeriesRef.current && candleData.length > 0) {
             try {
-                candlestickSeriesRef.current.setData(candleData);
+                // Shift to KST for display
+                const KST_OFFSET = 9 * 60 * 60;
+                const displayData = candleData.map(d => ({
+                    ...d,
+                    time: d.time + KST_OFFSET
+                }));
+
+                candlestickSeriesRef.current.setData(displayData);
 
                 if (volumeSeriesRef.current) {
-                    const volumeData = candleData.map(d => ({
+                    const volumeData = displayData.map(d => ({
                         time: d.time,
                         value: d.volume,
                         color: d.close >= d.open ? 'rgba(16, 185, 129, 0.5)' : 'rgba(239, 68, 68, 0.5)',
@@ -231,12 +242,20 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
 
         const markers = [];
 
+        const KST_OFFSET = 9 * 60 * 60;
+
         if (isSimulating && simResult && simResult.trades) {
             simResult.trades.forEach(t => {
                 // For simplicity, let's just mark the Sells (Red Arrows).
                 // In simulation.py, 'timestamp' is the SELL time.
+                let time = t.timestamp;
+                // Handle string timestamp if necessary
+                if (typeof time === 'string') {
+                    time = Date.parse(time.endsWith('Z') ? time : time + 'Z') / 1000;
+                }
+
                 markers.push({
-                    time: t.timestamp,
+                    time: time + KST_OFFSET,
                     position: 'aboveBar',
                     color: '#ef4444',
                     shape: 'arrowDown',
@@ -259,7 +278,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
 
                         if (!isNaN(time)) {
                             markers.push({
-                                time: time,
+                                time: time + KST_OFFSET,
                                 position: 'belowBar',
                                 color: split.status === 'PENDING_SELL' ? '#eab308' : '#10b981', // Yellow if Pending Sell, else Green
                                 shape: 'arrowUp',
@@ -286,7 +305,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
 
                         if (!isNaN(time)) {
                             markers.push({
-                                time: time,
+                                time: time + KST_OFFSET,
                                 position: 'aboveBar',
                                 color: '#ef4444', // Red
                                 shape: 'arrowDown',
@@ -308,7 +327,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
 
                         if (!isNaN(time)) {
                             markers.push({
-                                time: time,
+                                time: time + KST_OFFSET,
                                 position: 'belowBar',
                                 color: '#10b981', // Green (Completed trade buy was just a normal buy)
                                 shape: 'arrowUp',

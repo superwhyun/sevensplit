@@ -118,7 +118,16 @@ class SimulationStrategy(SevenSplitStrategy):
         if self.current_candle['low'] <= split.buy_price:
             split.status = "BUY_FILLED"
             split.actual_buy_price = split.buy_price # Assume filled at limit
-            split.bought_at = self.current_candle['timestamp'] # Use candle time
+            # Convert timestamp to ISO string for Pydantic model
+            # The timestamp from frontend is already in Unix seconds (UTC)
+            ts = self.current_candle['timestamp']
+            if isinstance(ts, (int, float)):
+                # Frontend sends Unix timestamp in seconds (UTC)
+                # Use utcfromtimestamp to ensure UTC interpretation
+                dt = datetime.utcfromtimestamp(ts)
+                split.bought_at = dt.isoformat()
+            else:
+                split.bought_at = str(ts)
             # Volume is already set
             # logging.info(f"SIM: Buy filled for split {split.id} at {split.actual_buy_price}")
 
@@ -142,6 +151,14 @@ class SimulationStrategy(SevenSplitStrategy):
             profit_rate = (net_profit / buy_total) * 100
             
             # Add to mock DB
+            # Convert timestamp to datetime object for consistency
+            ts = self.current_candle['timestamp']
+            if isinstance(ts, (int, float)):
+                # Frontend sends Unix timestamp in seconds (UTC)
+                sell_datetime = datetime.utcfromtimestamp(ts)
+            else:
+                sell_datetime = datetime.now()
+            
             self.db.add_trade(self.strategy_id, self.ticker, {
                 "split_id": split.id,
                 "buy_price": split.actual_buy_price,
@@ -153,7 +170,7 @@ class SimulationStrategy(SevenSplitStrategy):
                 "total_fee": total_fee,
                 "net_profit": net_profit,
                 "profit_rate": profit_rate,
-                "timestamp": self.current_candle['timestamp'],
+                "timestamp": sell_datetime,
                 "bought_at": split.bought_at
             })
             
