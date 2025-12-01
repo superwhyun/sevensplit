@@ -187,7 +187,7 @@ class SevenSplitStrategy:
                     'net_profit': t.net_profit,
                     'profit_rate': t.profit_rate,
                     'timestamp': t.timestamp.isoformat() if t.timestamp else None,
-                    'bought_at': t.created_at.isoformat() if t.created_at else None
+                    'bought_at': t.bought_at.isoformat() if t.bought_at else None
                 })
 
             return True
@@ -472,45 +472,66 @@ class SevenSplitStrategy:
 
         try:
             order = self.exchange.get_order(split.buy_order_uuid)
-            if order and order.get('state') == 'done':
-                # Buy order filled
-                split.status = "BUY_FILLED"
-                split.bought_at = datetime.now().isoformat()
-                
-                # Calculate actual buy price and volume from trades
-                trades = order.get('trades', [])
-                if trades:
-                    total_funds = sum(float(t.get('funds', 0)) for t in trades)
-                    total_volume = sum(float(t.get('volume', 0)) for t in trades)
-                    if total_volume > 0:
-                        split.actual_buy_price = total_funds / total_volume
-                        split.buy_volume = total_volume
-                    else:
-                        # Fallback (shouldn't happen with valid trades)
-                        split.actual_buy_price = float(order.get('price', split.buy_price))
-                else:
-                    # No trades data (legacy or error)
-                    # For Market Buy ('price'), order['price'] is the AMOUNT, not unit price!
-                    if order.get('ord_type') == 'price':
-                        # Try to infer from executed volume if available
-                        executed_vol = float(order.get('executed_volume', 0))
-                        paid_amount = float(order.get('price', 0)) # This is the target amount
-                        # Note: In Upbit, 'price' for market buy is the budget. 
-                        # Actual spent might be slightly less due to fees? No, fees are deducted.
-                        # Best guess if no trades:
-                        if executed_vol > 0:
-                             split.actual_buy_price = paid_amount / executed_vol
-                             split.buy_volume = executed_vol
-                        else:
-                             logging.error(f"Market buy filled but no volume? {order}")
-                             split.actual_buy_price = split.buy_price # Fallback to target
-                    else:
-                        # Limit order
-                        split.actual_buy_price = float(order.get('price', split.buy_price))
-                        split.buy_volume = float(order.get('executed_volume', split.buy_volume))
+            if not order:
+                return
 
-                logging.info(f"Buy order filled for split {split.id}. Price: {split.actual_buy_price}, Vol: {split.buy_volume}")
-                self.save_state()
+            state = order.get('state')
+            
+            # Handle 'done' (Filled) OR 'cancel' (Partial Fill or Cancelled)
+            if state == 'done' or state == 'cancel':
+                # Check executed volume
+                executed_vol = float(order.get('executed_volume', 0))
+                
+                if executed_vol > 0:
+                    # Filled or Partially Filled -> Treat as success
+                    split.status = "BUY_FILLED"
+                    split.bought_at = datetime.now().isoformat()
+                    
+                    # Calculate actual buy price and volume from trades
+                    trades = order.get('trades', [])
+                    if trades:
+                        total_funds = sum(float(t.get('funds', 0)) for t in trades)
+                        total_volume = sum(float(t.get('volume', 0)) for t in trades)
+                        if total_volume > 0:
+                            split.actual_buy_price = total_funds / total_volume
+                            split.buy_volume = total_volume
+                        else:
+                            split.actual_buy_price = float(order.get('price', split.buy_price))
+                    else:
+                        # No trades data (legacy or error or cancelled with partial fill but no trades info returned?)
+                        # For Market Buy ('price'), order['price'] is the AMOUNT, not unit price!
+                        if order.get('ord_type') == 'price':
+                            paid_amount = float(order.get('price', 0)) # Target amount
+                            # If cancelled, paid_amount might be the original target, but we only spent executed_vol * avg_price
+                            # But we don't have avg_price easily if no trades.
+                            # Try to use 'locked' or 'remaining_fee' to reverse calc? Too complex.
+                            # Fallback: Use current price or split.buy_price as estimate if we can't calc
+                            if executed_vol > 0:
+                                 # We don't have total funds spent if no trades. 
+                                 # But usually 'done' order has trades. 'cancel' might not?
+                                 # Let's try to trust order['price'] if it's not market order, but this IS market order.
+                                 # If we can't calculate, log warning and use target price.
+                                 logging.warning(f"Market buy {state} with vol {executed_vol} but no trades data. Using target price.")
+                                 split.actual_buy_price = split.buy_price 
+                                 split.buy_volume = executed_vol
+                            else:
+                                 # Should be caught by executed_vol > 0 check, but just in case
+                                 split.actual_buy_price = split.buy_price
+                        else:
+                            # Limit order
+                            split.actual_buy_price = float(order.get('price', split.buy_price))
+                            split.buy_volume = executed_vol
+
+                    logging.info(f"Buy order {state} for split {split.id}. Price: {split.actual_buy_price}, Vol: {split.buy_volume}")
+                    self.save_state()
+                
+                elif state == 'cancel':
+                    # Cancelled with 0 executed volume -> Failed
+                    logging.warning(f"Buy order {split.buy_order_uuid} was cancelled with 0 volume. Resetting split {split.id}.")
+                    split.buy_order_uuid = None
+                    split.status = "PENDING_BUY"
+                    self.save_state()
+
         except Exception as e:
             # Handle 404 or "Order not found"
             error_msg = str(e)
