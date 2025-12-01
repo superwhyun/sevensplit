@@ -1,0 +1,335 @@
+/* Dashboard.css */
+
+/* Global Layout */
+.dashboard-layout {
+  display: grid;
+  grid-template-columns: 350px 1fr;
+  gap: 1.5rem;
+  padding: 1.5rem;
+  align-items: start;
+}
+
+.dashboard-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.dashboard-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  min-width: 0;
+  /* Prevents grid blowout */
+}
+
+/* Header & Top Row */
+.header-top-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.mode-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: 9999px;
+  color: white;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  white-space: nowrap;
+  /* Prevent wrapping */
+}
+
+.mode-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: white;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.5;
+  }
+
+  100% {
+    opacity: 1;
+  }
+}
+
+
+/* Compact Portfolio Summary Card */
+.portfolio-summary-card {
+  background: linear-gradient(145deg, #1e293b, #0f172a);
+  border-radius: 1rem;
+  padding: 1.5rem;
+  border: 1px solid #334155;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  margin-bottom: 0;
+  /* Header handles spacing */
+  width: 100%;
+  box-sizing: border-box;
+  /* Ensure padding doesn't overflow width */
+}
+
+.portfolio-main-stats {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 1.25rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  flex-wrap: wrap;
+  /* Allow wrapping on very small screens */
+  gap: 1rem;
+}
+
+.total-value-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.total-value-section .label {
+  font-size: 0.875rem;
+  color: #94a3b8;
+  margin-bottom: 0.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.total-value-section .value {
+  font-size: 2rem;
+  font-weight: 800;
+  color: #f8fafc;
+  letter-spacing: -0.025em;
+  line-height: 1;
+  word-break: break-all;
+  /* Prevent overflow of long numbers */
+}
+
+.profit-section {
+  text-align: right;
+  flex-shrink: 0;
+  /* Don't shrink profit section */
+}
+
+.profit-section .label {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  display: block;
+  margin-bottom: 0.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.profit-section .value {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+/* Assets Container - Responsive Grid */
+.assets-scroll-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.asset-chip {
+  background-color: rgba(255, 255, 255, 0.03);
+  border-radius: 0.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  transition: background-color 0.2s;
+  min-width: 0;
+  /* Critical for preventing grid blowout */
+}
+
+.asset-chip:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.asset-chip.krw {
+  background-color: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.2);
+}
+
+.asset-chip .asset-name {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  white-space: nowrap;
+}
+
+.asset-chip .asset-value {
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: #f8fafc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Truncate long values */
+}
+
+.asset-chip .asset-amount {
+  font-size: 0.75rem;
+  color: #64748b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Strategy Stats (Top Row) */
+.strategy-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+}
+
+/* Control Panel */
+.controls-container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.bot-controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.action-controls {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+/* Mobile / Tablet Responsive Styles */
+@media (max-width: 1024px) {
+  .strategy-stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .dashboard-layout {
+    grid-template-columns: 1fr;
+    /* Stack vertically */
+    padding: 1rem;
+    gap: 1rem;
+  }
+
+  /* Reorder: Main content (Chart) first, then Sidebar (Config) */
+  .dashboard-main {
+    order: -1;
+    gap: 1rem;
+  }
+
+  .portfolio-summary-card {
+    padding: 1rem;
+  }
+
+  .portfolio-main-stats {
+    margin-bottom: 1rem;
+    padding-bottom: 1rem;
+  }
+
+  .total-value-section .value {
+    font-size: 1.5rem;
+  }
+
+  /* Force 2 columns on mobile for consistency */
+  .assets-scroll-container {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.5rem;
+  }
+
+  .asset-chip {
+    padding: 0.5rem 0.75rem;
+  }
+
+  .asset-chip .asset-value {
+    font-size: 1rem;
+  }
+
+  .strategy-stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+  }
+
+  .controls-container {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+
+  .bot-controls {
+    flex-direction: column;
+    /* Stack buttons */
+    width: 100%;
+    gap: 0.5rem;
+  }
+
+  .bot-controls button {
+    width: 100%;
+    justify-content: center;
+    padding: 0.75rem !important;
+  }
+
+  .action-controls {
+    flex-direction: column;
+    width: 100%;
+    gap: 0.5rem;
+  }
+
+  .action-controls button,
+  .action-controls a {
+    width: 100%;
+    text-align: center;
+    justify-content: center;
+    padding: 0.75rem !important;
+  }
+
+  /* Adjust header font sizes */
+  .header {
+    flex-direction: column;
+    align-items: stretch;
+    /* Stretch to fill width */
+    gap: 0.5rem;
+    padding: 1rem !important;
+  }
+
+  .header h1 {
+    font-size: 1.25rem !important;
+    /* Smaller logo text */
+  }
+
+  /* Tabs scrollable */
+  .tabs {
+    padding: 0 1rem !important;
+  }
+
+  .tab-btn {
+    padding: 0.75rem 1rem !important;
+    font-size: 0.85rem !important;
+  }
+}

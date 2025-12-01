@@ -278,6 +278,17 @@ class DatabaseManager:
         finally:
             session.close()
 
+    def update_strategy_name(self, strategy_id: int, name: str):
+        """Update strategy name"""
+        session = self.get_session()
+        try:
+            strategy = session.query(Strategy).filter_by(id=strategy_id).first()
+            if strategy:
+                strategy.name = name
+                session.commit()
+        finally:
+            session.close()
+
     # Split operations
     def get_splits(self, strategy_id: int):
         """Get all active splits for a strategy"""

@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import axios from 'axios';
 import StrategyChart from './StrategyChart';
 import Config from './Config';
+import './Dashboard.css';
 
 const AddStrategyModal = ({ isOpen, onClose, onAdd }) => {
     const [name, setName] = useState('');
@@ -86,6 +87,53 @@ const AddStrategyModal = ({ isOpen, onClose, onAdd }) => {
     );
 };
 
+const RenameStrategyModal = ({ isOpen, onClose, onRename, currentName }) => {
+    const [name, setName] = useState(currentName || '');
+
+    useEffect(() => {
+        setName(currentName || '');
+    }, [currentName]);
+
+    if (!isOpen) return null;
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        onRename(name);
+        onClose();
+    };
+
+    return (
+        <div style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000
+        }}>
+            <div style={{
+                backgroundColor: '#1e293b', padding: '2rem', borderRadius: '0.5rem', width: '400px',
+                border: '1px solid #334155', boxShadow: '0 10px 25px rgba(0,0,0,0.5)'
+            }}>
+                <h2 style={{ marginTop: 0, color: '#f8fafc' }}>Rename Strategy</h2>
+                <form onSubmit={handleSubmit}>
+                    <div style={{ marginBottom: '1rem' }}>
+                        <label style={{ display: 'block', color: '#94a3b8', marginBottom: '0.5rem' }}>New Name</label>
+                        <input
+                            type="text"
+                            value={name}
+                            onChange={(e) => setName(e.target.value)}
+                            autoFocus
+                            required
+                            style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #475569', backgroundColor: '#0f172a', color: 'white' }}
+                        />
+                    </div>
+                    <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
+                        <button type="button" onClick={onClose} style={{ padding: '0.5rem 1rem', borderRadius: '0.25rem', border: 'none', backgroundColor: '#475569', color: 'white', cursor: 'pointer' }}>Cancel</button>
+                        <button type="submit" style={{ padding: '0.5rem 1rem', borderRadius: '0.25rem', border: 'none', backgroundColor: '#3b82f6', color: 'white', cursor: 'pointer' }}>Save</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+};
+
 const Dashboard = () => {
     const [status, setStatus] = useState(null);
     const [portfolio, setPortfolio] = useState(null);
@@ -93,6 +141,7 @@ const Dashboard = () => {
     const [loading, setLoading] = useState(true);
     const [selectedStrategyId, setSelectedStrategyId] = useState(null);
     const [isModalOpen, setIsModalOpen] = useState(false);
+    const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
     const [isSimulating, setIsSimulating] = useState(false);
     const [simResult, setSimResult] = useState(null);
 
@@ -309,6 +358,28 @@ const Dashboard = () => {
         window.open(`${API_BASE_URL}/strategies/${selectedStrategyId}/export`, '_blank');
     };
 
+    const handleRenameStrategy = () => {
+        setIsRenameModalOpen(true);
+    };
+
+    const performRename = async (newName) => {
+        if (newName && newName.trim() !== "") {
+            try {
+                // If running on Vite dev server (port 5173), point to backend port 8000.
+                const API_BASE_URL = window.location.port === '5173'
+                    ? `http://${window.location.hostname}:8000`
+                    : '';
+
+                await axios.patch(`${API_BASE_URL}/strategies/${selectedStrategyId}`, { name: newName });
+                fetchStatus(); // Refresh current view
+                fetchStrategies(); // Refresh tab list
+            } catch (error) {
+                console.error("Failed to rename strategy:", error);
+                alert("Failed to rename strategy");
+            }
+        }
+    };
+
     if (loading && !status) return <div style={{ padding: '2rem', color: 'white' }}>Loading...</div>;
     if (!status && strategies.length > 0) return <div style={{ padding: '2rem', color: 'white' }}>Loading Strategy...</div>;
     if (!portfolio) return <div style={{ padding: '2rem', color: 'white' }}>Loading Portfolio...</div>;
@@ -390,94 +461,66 @@ const Dashboard = () => {
             )}
 
             <AddStrategyModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} onAdd={handleAddStrategy} />
-
-            {/* Mode Indicator - Fixed Top Right */}
-            <div
-                style={{
-                    position: 'fixed',
-                    top: '1rem',
-                    right: '1rem',
-                    zIndex: 9999,
-                    backgroundColor: portfolio.mode === "MOCK" ? '#f59e0b' : '#ef4444',
-                    color: '#fff',
-                    padding: '0.5rem 1rem',
-                    borderRadius: '0.5rem',
-                    fontSize: '0.875rem',
-                    fontWeight: 'bold',
-                    letterSpacing: '0.05em',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.5rem'
-                }}
-            >
-                <div style={{
-                    width: '8px',
-                    height: '8px',
-                    borderRadius: '50%',
-                    backgroundColor: 'white',
-                    animation: 'pulse 2s infinite'
-                }} />
-                {portfolio.mode === "MOCK" ? 'MOCK MODE' : 'REAL TRADING'}
-            </div>
+            <RenameStrategyModal
+                isOpen={isRenameModalOpen}
+                onClose={() => setIsRenameModalOpen(false)}
+                onRename={performRename}
+                currentName={status?.name}
+            />
 
             {/* Global Portfolio Header */}
             <header className="header" style={{
+                display: 'block',
                 padding: '1.5rem',
                 backgroundColor: 'rgba(15, 23, 42, 0.9)',
                 borderBottom: '2px solid #334155'
             }}>
-                <div style={{ marginBottom: '1rem' }}>
+                <div className="header-top-row">
                     <h1 className="logo" style={{ margin: 0, fontSize: '1.75rem' }}>Seven Split Bot</h1>
+
+                    {/* Mode Indicator */}
+                    <div className="mode-indicator" style={{
+                        backgroundColor: portfolio.mode === "MOCK" ? '#f59e0b' : '#ef4444',
+                    }}>
+                        <div className="mode-dot" />
+                        {portfolio.mode === "MOCK" ? 'MOCK MODE' : 'REAL TRADING'}
+                    </div>
                 </div>
 
-                {/* Overall Portfolio Stats */}
-                <div style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(6, 1fr)',
-                    gap: '1rem',
-                    padding: '1.25rem',
-                    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-                    borderRadius: '0.5rem',
-                    border: '1px solid #334155'
-                }}>
-                    <div style={{ textAlign: 'center', padding: '0.5rem' }}>
-                        <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>Available KRW</div>
-                        <div style={{ fontSize: '1.25rem', color: '#3b82f6', fontWeight: 'bold' }}>
-                            ₩{portfolio.balance_krw?.toLocaleString()}
+                {/* Overall Portfolio Stats - Compact Card */}
+                <div className="portfolio-summary-card">
+                    <div className="portfolio-main-stats">
+                        <div className="total-value-section">
+                            <span className="label">Total Assets</span>
+                            <span className="value">₩{Math.round(portfolio.total_value)?.toLocaleString()}</span>
+                        </div>
+                        <div className="profit-section">
+                            <span className="label">Realized Profit</span>
+                            <span className="value" style={{ color: (portfolio.total_realized_profit || 0) >= 0 ? '#10b981' : '#ef4444' }}>
+                                {new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(portfolio.total_realized_profit || 0)}
+                            </span>
                         </div>
                     </div>
-                    {/* Dynamic Coin Stats (Top 3 by value) */}
-                    {Object.entries(portfolio.coins)
-                        .sort(([, a], [, b]) => b.value - a.value)
-                        .slice(0, 3)
-                        .map(([coin, data]) => (
-                            <div key={coin} style={{ textAlign: 'center', padding: '0.5rem' }}>
-                                <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>Held {coin}</div>
-                                <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#f8fafc' }}>
-                                    ₩{Math.round(data.value || 0)?.toLocaleString()}
-                                </div>
-                                <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.25rem' }}>
-                                    {data.balance?.toFixed(4)} {coin}
-                                </div>
-                            </div>
-                        ))}
 
-                    <div style={{ textAlign: 'center', padding: '0.5rem' }}>
-                        <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>Total Value</div>
-                        <div style={{ fontSize: '1.25rem', color: '#10b981', fontWeight: 'bold' }}>
-                            ₩{Math.round(portfolio.total_value)?.toLocaleString()}
+                    <div className="assets-scroll-container">
+                        {/* KRW Chip */}
+                        <div className="asset-chip krw">
+                            <span className="asset-name">🇰🇷 KRW</span>
+                            <span className="asset-value">₩{Math.round(portfolio.balance_krw || 0).toLocaleString()}</span>
+                            <span className="asset-amount">Cash</span>
                         </div>
-                    </div>
-                    <div style={{ textAlign: 'center', padding: '0.5rem' }}>
-                        <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>Total Realized Profit</div>
-                        <div style={{
-                            fontSize: '1.25rem',
-                            fontWeight: 'bold',
-                            color: (portfolio.total_realized_profit || 0) >= 0 ? '#10b981' : '#ef4444'
-                        }}>
-                            {new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(portfolio.total_realized_profit || 0)}
-                        </div>
+
+                        {/* Coin Chips */}
+                        {Object.entries(portfolio.coins)
+                            .sort(([, a], [, b]) => b.value - a.value)
+                            .slice(0, 3)
+                            .map(([coin, data]) => (
+                                <div key={coin} className="asset-chip">
+                                    <span className="asset-name">{coin}</span>
+                                    <span className="asset-value">₩{Math.round(data.value || 0).toLocaleString()}</span>
+                                    <span className="asset-amount">{data.balance?.toFixed(4)} {coin}</span>
+                                </div>
+                            ))}
                     </div>
                 </div>
             </header>
@@ -486,48 +529,75 @@ const Dashboard = () => {
             <div className="tabs" style={{
                 display: 'flex',
                 gap: '0.5rem',
-                padding: '1rem 1.5rem 0',
+                overflowX: 'auto',
+                padding: '0 1.5rem',
                 borderBottom: '1px solid #334155',
-                overflowX: 'auto'
+                backgroundColor: 'rgba(15, 23, 42, 0.8)'
             }}>
-                {strategies.map(strategy => (
+                {strategies.map(s => (
                     <button
-                        key={strategy.id}
-                        className={`tab-btn`}
+                        key={s.id}
+                        className={`tab-btn ${selectedStrategyId === s.id ? 'active' : ''}`}
                         onClick={() => {
                             setLoading(true);
-                            setSelectedStrategyId(strategy.id);
+                            setSelectedStrategyId(s.id);
                         }}
                         style={{
-                            padding: '0.75rem 1.5rem',
-                            borderRadius: '0.5rem 0.5rem 0 0',
+                            padding: '0.75rem 1.25rem',
+                            backgroundColor: selectedStrategyId === s.id ? '#3b82f6' : 'transparent',
+                            color: selectedStrategyId === s.id ? 'white' : '#94a3b8',
                             border: 'none',
+                            borderTopLeftRadius: '0.5rem',
+                            borderTopRightRadius: '0.5rem',
                             cursor: 'pointer',
-                            fontWeight: '600',
-                            fontSize: '0.9rem',
-                            backgroundColor: selectedStrategyId === strategy.id ? '#1e293b' : 'transparent',
-                            color: selectedStrategyId === strategy.id ? 'white' : '#94a3b8',
-                            transition: 'all 0.2s',
-                            borderBottom: selectedStrategyId === strategy.id ? '2px solid #3b82f6' : '2px solid transparent',
-                            whiteSpace: 'nowrap'
+                            fontWeight: selectedStrategyId === s.id ? 'bold' : 'normal',
+                            whiteSpace: 'nowrap',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            gap: '0.1rem',
+                            minWidth: '100px'
                         }}
                     >
-                        {strategy.name} <span style={{ fontSize: '0.8em', opacity: 0.7 }}>({strategy.ticker})</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <span style={{ fontSize: '0.9rem' }}>{s.name}</span>
+                            {selectedStrategyId === s.id && (
+                                <span
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleRenameStrategy();
+                                    }}
+                                    style={{
+                                        cursor: 'pointer',
+                                        opacity: 0.6,
+                                        fontSize: '0.8rem',
+                                        padding: '0 0.2rem',
+                                        color: 'white'
+                                    }}
+                                    title="Rename Strategy"
+                                >
+                                    ✎
+                                </span>
+                            )}
+                        </div>
+                        <span style={{ fontSize: '0.7rem', opacity: 0.8 }}>{s.ticker}</span>
                     </button>
                 ))}
                 <button
                     onClick={() => setIsModalOpen(true)}
                     style={{
                         padding: '0.75rem 1rem',
-                        borderRadius: '0.5rem 0.5rem 0 0',
+                        backgroundColor: 'transparent',
+                        color: '#3b82f6',
                         border: 'none',
                         cursor: 'pointer',
-                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                        color: '#3b82f6',
-                        fontWeight: 'bold'
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        fontSize: '0.9rem'
                     }}
                 >
-                    + New Strategy
+                    + New
                 </button>
             </div>
 
@@ -539,11 +609,7 @@ const Dashboard = () => {
                         backgroundColor: 'rgba(15, 23, 42, 0.7)',
                         borderBottom: '1px solid #334155'
                     }}>
-                        <div style={{
-                            display: 'grid',
-                            gridTemplateColumns: 'repeat(4, 1fr)',
-                            gap: '1rem'
-                        }}>
+                        <div className="strategy-stats-grid">
                             <div style={{
                                 padding: '1rem',
                                 backgroundColor: 'rgba(59, 130, 246, 0.1)',
@@ -613,15 +679,9 @@ const Dashboard = () => {
                     </div>
 
                     {/* Main Content Grid */}
-                    <div style={{
-                        display: 'grid',
-                        gridTemplateColumns: '350px 1fr',
-                        gap: '1.5rem',
-                        padding: '1.5rem',
-                        alignItems: 'start'
-                    }}>
+                    <div className="dashboard-layout">
                         {/* Left Sidebar: Config */}
-                        <aside style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                        <aside className="dashboard-sidebar">
                             <Config
                                 config={status.config}
                                 onUpdate={fetchStatus}
@@ -638,7 +698,7 @@ const Dashboard = () => {
                         </aside>
 
                         {/* Right Content: Controls, Chart, Tables */}
-                        <main style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', minWidth: 0 }}>
+                        <main className="dashboard-main">
                             {/* Control Panel */}
                             <div style={{
                                 padding: '1rem',
@@ -646,14 +706,9 @@ const Dashboard = () => {
                                 borderRadius: '0.5rem',
                                 border: '1px solid #334155'
                             }}>
-                                <div style={{
-                                    display: 'flex',
-                                    justifyContent: 'space-between',
-                                    alignItems: 'center',
-                                    gap: '1.5rem'
-                                }}>
+                                <div className="controls-container">
                                     {/* Left: Bot Controls */}
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                    <div className="bot-controls">
                                         {!status.is_running ? (
                                             <button className="btn btn-primary" onClick={handleStart} style={{
                                                 padding: '0.65rem 1.75rem',
@@ -695,7 +750,7 @@ const Dashboard = () => {
                                     </div>
 
                                     {/* Right: Delete & Exchange Link */}
-                                    <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                                    <div className="action-controls">
                                         <button onClick={handleDeleteStrategy} style={{
                                             padding: '0.65rem 1rem',
                                             fontSize: '0.85rem',
@@ -747,7 +802,7 @@ const Dashboard = () => {
                             </div>
 
                             {/* Grid Status List */}
-                            <div className="card" style={{ maxHeight: '600px', overflowY: 'auto' }}>
+                            <div className="card" style={{ maxHeight: '600px', overflowY: 'auto', overflowX: 'auto' }}>
                                 <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                     <span className="card-title">
                                         {simResult ? 'Simulated Grid Status' : 'Grid Status'} ({simResult ? simResult.splits.length : status.splits.length} Lines)

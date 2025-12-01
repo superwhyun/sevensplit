@@ -436,6 +436,23 @@ def update_config(req: ConfigRequest):
     strategies[req.strategy_id].update_config(req.config)
     return {"status": "config updated", "strategy_id": req.strategy_id, "config": req.config, "budget": strategies[req.strategy_id].budget}
 
+class UpdateNameRequest(BaseModel):
+    name: str
+
+@app.patch("/strategies/{strategy_id}")
+def update_strategy_name(strategy_id: int, req: UpdateNameRequest):
+    if strategy_id not in strategies:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    
+    # Update in memory
+    strategies[strategy_id].name = req.name
+    
+    # Update in DB
+    db.update_strategy_name(strategy_id, req.name)
+    
+    return {"status": "success", "strategy_id": strategy_id, "name": req.name}
+
+
 @app.post("/simulate")
 def simulate_strategy(sim_config: SimulationConfig):
     """Run a simulation based on provided config and candles"""
