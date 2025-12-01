@@ -131,6 +131,9 @@ class UpbitExchange(Exchange):
             query_params = params or {}
             if data:
                 query_params.update(data)
+            
+            # Filter out None values from query_params for hash calculation
+            query_params = {k: v for k, v in query_params.items() if v is not None}
 
             if query_params:
                 query_string = self.urlencode(query_params)
@@ -153,7 +156,7 @@ class UpbitExchange(Exchange):
             if method == 'GET':
                 resp = self.requests.get(url, params=params, headers=headers)
             elif method == 'POST':
-                resp = self.requests.post(url, json=data, headers=headers)
+                resp = self.requests.post(url, json=data, params=params, headers=headers)
             elif method == 'DELETE':
                 resp = self.requests.delete(url, params=params, headers=headers)
             
@@ -280,7 +283,6 @@ class UpbitExchange(Exchange):
         data = {
             'market': ticker,
             'side': 'bid',
-            'volume': None,
             'price': str(amount),
             'ord_type': 'price'
         }
@@ -291,7 +293,6 @@ class UpbitExchange(Exchange):
             'market': ticker,
             'side': 'ask',
             'volume': str(volume),
-            'price': None,
             'ord_type': 'market'
         }
         return self._request('POST', '/v1/orders', data=data)
