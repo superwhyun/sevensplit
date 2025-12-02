@@ -470,6 +470,33 @@ class SevenSplitStrategy:
         if not split.buy_order_uuid:
             return
 
+        # Timeout Logic: If pending for > 30 minutes (1800s), switch to market order
+        if split.status == "PENDING_BUY" and split.created_at:
+            try:
+                created_dt = datetime.fromisoformat(split.created_at)
+                elapsed = (datetime.now() - created_dt).total_seconds()
+                if elapsed > 1800:  # 30 minutes timeout
+                    current_price = self.exchange.get_current_price(self.ticker)
+                    # Check if current price is within max_price (if set)
+                    if current_price and (self.config.max_price <= 0 or current_price <= self.config.max_price):
+                        logging.info(f"Buy order {split.buy_order_uuid} timed out ({elapsed:.1f}s). Switching to Market Order.")
+                        try:
+                            # Attempt to cancel existing limit order
+                            self.exchange.cancel_order(split.buy_order_uuid)
+                            
+                            # Place market buy order
+                            res = self.exchange.buy_market_order(self.ticker, split.buy_amount)
+                            if res:
+                                split.buy_order_uuid = res.get('uuid')
+                                split.created_at = datetime.now().isoformat()  # Reset timer
+                                logging.info(f"Placed market order {split.buy_order_uuid} for split {split.id}")
+                                self.save_state()
+                                return
+                        except Exception as e:
+                            logging.warning(f"Failed to switch to market order (cancel failed?): {e}")
+            except Exception as e:
+                logging.error(f"Error in buy timeout check: {e}")
+
         try:
             order = self.exchange.get_order(split.buy_order_uuid)
             if not order:
