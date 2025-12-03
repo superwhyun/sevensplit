@@ -334,16 +334,30 @@ class SevenSplitStrategy:
                 return
 
             # Check all splits for order status updates
-            for split in self.splits:
+            # Create a copy of the list to safely modify self.splits during iteration if needed
+            for split in list(self.splits):
                 if split.status == "PENDING_BUY":
-                    self._check_buy_order(split)
+                    if split.buy_order_uuid:
+                        self._check_buy_order(split)
+                    else:
+                        # Zombie split (PENDING_BUY with no UUID). Remove it to allow recreation.
+                        logging.info(f"Found zombie split {split.id} (PENDING_BUY with no UUID). Removing to reset.")
+                        self.splits.remove(split)
+                        self.save_state()
 
                 elif split.status == "BUY_FILLED":
                     # Buy filled, create sell order
                     self._create_sell_order(split)
 
                 elif split.status == "PENDING_SELL":
-                    self._check_sell_order(split)
+                    if split.sell_order_uuid:
+                        self._check_sell_order(split)
+                    else:
+                        # Zombie split (PENDING_SELL with no UUID). Revert to BUY_FILLED to recreate sell order.
+                        logging.info(f"Found zombie split {split.id} (PENDING_SELL with no UUID). Reverting to BUY_FILLED.")
+                        split.status = "BUY_FILLED"
+                        self.save_state()
+                        # It will be picked up in the next tick as BUY_FILLED
 
             # Remove completed splits
             self._cleanup_filled_splits()
