@@ -112,61 +112,78 @@ def run_strategies():
     
     while True:
         try:
-            current_time = time.time()
+            loop_start_time = time.time()
             
-            # Refresh strategy list keys in case of additions/deletions
+            # Refresh strategy list keys
             current_strategy_ids = list(strategies.keys())
             
-            # Determine which strategies need to be ticked
-            strategies_to_tick = []
+            # 1. Collect all tickers (Running + Stopped)
             tickers_to_fetch = set()
-            
             for s_id in current_strategy_ids:
-                if s_id not in strategies: continue # Handle deletion race condition
+                if s_id in strategies:
+                    tickers_to_fetch.add(strategies[s_id].ticker)
+            
+            # 2. Fetch Data (Prices + Orders) - ALWAYS run once per loop
+            prices = {}
+            all_open_orders = []
+            
+            # Fetch Prices
+            if tickers_to_fetch:
+                ticker_list = list(tickers_to_fetch)
+                if hasattr(exchange, "get_current_prices"):
+                    try:
+                        prices = exchange.get_current_prices(ticker_list)
+                    except Exception as e:
+                        logging.error(f"Failed to fetch prices: {e}")
+                else:
+                    for ticker in ticker_list:
+                        try:
+                            price = exchange.get_current_price(ticker)
+                            if price:
+                                prices[ticker] = price
+                        except Exception as e:
+                            logging.error(f"Failed to fetch price for {ticker}: {e}")
+
+            # Update Shared Cache
+            global shared_prices
+            if 'shared_prices' not in globals():
+                shared_prices = {}
+            shared_prices.update(prices)
+
+            # Fetch Orders
+            try:
+                if hasattr(exchange, "get_orders"):
+                    all_open_orders = exchange.get_orders(state='wait')
+            except Exception as e:
+                logging.error(f"Failed to fetch open orders: {e}")
+                all_open_orders = None
+
+            # 3. Tick Strategies
+            current_time = time.time()
+            for s_id in current_strategy_ids:
+                if s_id not in strategies: continue
                 strategy = strategies[s_id]
                 
                 if s_id not in last_tick_time:
                     last_tick_time[s_id] = 0.0
                 
+                # Only tick if running AND interval passed
                 if strategy.is_running:
                     tick_interval = strategy.config.tick_interval
                     if current_time - last_tick_time[s_id] >= tick_interval:
-                        strategies_to_tick.append(strategy)
-                        tickers_to_fetch.add(strategy.ticker)
-            
-            if strategies_to_tick:
-                # Batch fetch prices for all unique tickers needed
-                prices = {}
-                ticker_list = list(tickers_to_fetch)
-                
-                if ticker_list:
-                    # Use exchange's get_current_prices method if available
-                    if hasattr(exchange, "get_current_prices"):
-                        prices = exchange.get_current_prices(ticker_list)
-                    else:
-                        # Fallback to individual price fetches
-                        for ticker in ticker_list:
-                            try:
-                                price = exchange.get_current_price(ticker)
-                                if price:
-                                    prices[ticker] = price
-                            except Exception as e:
-                                logging.error(f"Failed to fetch price for {ticker}: {e}")
+                        price = prices.get(strategy.ticker)
+                        if price:
+                            strategy.tick(current_price=price, open_orders=all_open_orders)
+                            last_tick_time[s_id] = current_time
 
-                # Tick strategies
-                for strategy in strategies_to_tick:
-                    price = prices.get(strategy.ticker)
-                    if price:
-                        strategy.tick(current_price=price)
-                        last_tick_time[strategy.strategy_id] = current_time
-                        
         except Exception as e:
             logging.error(f"Error in strategy loop: {e}")
-            # Sleep longer on error to prevent rapid-fire logging/retries
-            time.sleep(2.0)
+            time.sleep(1.0)
         
-        # Sleep for a short interval to avoid busy waiting
-        time.sleep(0.1)
+        # Enforce fixed 1-second loop duration
+        elapsed = time.time() - loop_start_time
+        sleep_time = max(0.1, 1.0 - elapsed)
+        time.sleep(sleep_time)
 
 thread = threading.Thread(target=run_strategies, daemon=True)
 thread.start()
@@ -314,25 +331,64 @@ def get_full_snapshot() -> Dict[str, Any]:
     # Collect all tickers needed
     all_tickers = list(set(s.ticker for s in strategies.values()))
     
-    # Batch fetch prices for all tickers ONCE
-    # Batch fetch prices for all tickers ONCE
-    # Note: This might hit rate limits if called too frequently.
-    # But since we removed rate limiting in exchange.py, we rely on Upbit's quota.
-    try:
-        if hasattr(exchange, "get_current_prices") and all_tickers:
-            prices = exchange.get_current_prices(all_tickers)
-        else:
-            prices = {}
-    except Exception as e:
-        # logging.error(f"Failed to batch fetch prices: {e}") # Reduce noise
-        prices = {}
+    # Use shared prices from the strategy loop
+    # This eliminates redundant API calls for UI updates
+    global shared_prices
+    if 'shared_prices' not in globals():
+        shared_prices = {}
+        
+    # If we have shared prices, use them. 
+    # If shared_prices is empty (bot just started), we might want to fetch once or just wait.
+    # Let's fetch if empty to ensure UI shows something immediately.
+    prices = shared_prices.copy()
     
-    # Fetch Accounts (Raw) ONCE
+    # Check for missing tickers (e.g. stopped strategies)
+    missing_tickers = [t for t in all_tickers if t not in prices]
+    
+    if missing_tickers:
+        # Fetch missing tickers with 1s Caching
+        global supplementary_price_cache
+        current_time = time.time()
+        
+        if 'supplementary_price_cache' not in globals():
+            supplementary_price_cache = {'data': {}, 'timestamp': 0}
+            
+        try:
+            # Check if we need to refresh cache (older than 1s)
+            if current_time - supplementary_price_cache['timestamp'] > 1.0:
+                if hasattr(exchange, "get_current_prices"):
+                    # Batch fetch missing tickers
+                    supp_prices = exchange.get_current_prices(missing_tickers)
+                    supplementary_price_cache['data'] = supp_prices
+                    supplementary_price_cache['timestamp'] = current_time
+            
+            # Merge cached supplementary prices
+            prices.update(supplementary_price_cache['data'])
+            
+        except Exception as e:
+            logging.error(f"Failed to fetch supplementary prices: {e}")
+
+    # Fetch Accounts (Raw) with 10s Caching
+    global accounts_cache
+    current_time = time.time()
+    
+    # Initialize cache if not exists
+    if 'accounts_cache' not in globals():
+        accounts_cache = {'data': [], 'timestamp': 0}
+        
     try:
-        accounts_raw = exchange._request('GET', '/v1/accounts') if hasattr(exchange, '_request') else []
+        if current_time - accounts_cache['timestamp'] > 10:
+            # Cache expired or empty, fetch new data
+            accounts_raw = exchange._request('GET', '/v1/accounts') if hasattr(exchange, '_request') else []
+            accounts_cache['data'] = accounts_raw
+            accounts_cache['timestamp'] = current_time
+        else:
+            # Use cached data
+            accounts_raw = accounts_cache['data']
     except Exception as e:
         logging.error(f"Failed to fetch accounts: {e}")
-        accounts_raw = []
+        # On error, try to use cached data if available, else empty
+        accounts_raw = accounts_cache.get('data', [])
 
     # Create Balance Map
     balance_map = {acc['currency']: float(acc['balance']) for acc in accounts_raw}

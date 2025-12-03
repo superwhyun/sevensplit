@@ -309,7 +309,7 @@ class SevenSplitStrategy:
             
         return True
 
-    def tick(self, current_price: float = None):
+    def tick(self, current_price: float = None, open_orders: list = None):
         """Main tick function called periodically to check and update splits."""
         with self.lock:
             if not self.is_running:
@@ -333,12 +333,46 @@ class SevenSplitStrategy:
             if not current_price:
                 return
 
+            # 1. Prepare open orders list
+            open_order_uuids = set()
+            try:
+                if open_orders is not None:
+                    # Use provided global list, filtering for this ticker
+                    # Note: Upbit order objects usually have 'market' field (e.g. 'KRW-BTC')
+                    # We only care about orders for THIS ticker.
+                    # But wait, we only need UUIDs to check against our splits.
+                    # If we pass ALL orders, checking uuid in set is fast.
+                    # However, to be safe, we can filter by market if needed, but UUID is unique anyway.
+                    # Let's just put ALL UUIDs in the set. It's faster than filtering by string.
+                    open_order_uuids = {order['uuid'] for order in open_orders}
+                else:
+                    # Fallback: Fetch 'wait' (unfilled) orders for this ticker
+                    fetched_orders = self.exchange.get_orders(ticker=self.ticker, state='wait')
+                    if fetched_orders:
+                        open_order_uuids = {order['uuid'] for order in fetched_orders}
+            except Exception as e:
+                logging.error(f"Failed to process open orders: {e}")
+                return
+
             # Check all splits for order status updates
             # Create a copy of the list to safely modify self.splits during iteration if needed
             for split in list(self.splits):
                 if split.status == "PENDING_BUY":
                     if split.buy_order_uuid:
-                        self._check_buy_order(split)
+                        # Check for timeout first (Local check)
+                        is_timeout = False
+                        if split.created_at:
+                            try:
+                                created_dt = datetime.fromisoformat(split.created_at)
+                                elapsed = (datetime.now() - created_dt).total_seconds()
+                                if elapsed > 1800: # 30 minutes
+                                    is_timeout = True
+                            except:
+                                pass
+                        
+                        # If timed out OR order is not in open list (meaning it's done/cancelled), check details
+                        if is_timeout or split.buy_order_uuid not in open_order_uuids:
+                            self._check_buy_order(split)
                     else:
                         # Zombie split (PENDING_BUY with no UUID). Remove it to allow recreation.
                         logging.info(f"Found zombie split {split.id} (PENDING_BUY with no UUID). Removing to reset.")
@@ -351,7 +385,9 @@ class SevenSplitStrategy:
 
                 elif split.status == "PENDING_SELL":
                     if split.sell_order_uuid:
-                        self._check_sell_order(split)
+                        # Only check if order is NOT in open list (meaning it's done/cancelled)
+                        if split.sell_order_uuid not in open_order_uuids:
+                            self._check_sell_order(split)
                     else:
                         # Zombie split (PENDING_SELL with no UUID). Revert to BUY_FILLED to recreate sell order.
                         logging.info(f"Found zombie split {split.id} (PENDING_SELL with no UUID). Reverting to BUY_FILLED.")

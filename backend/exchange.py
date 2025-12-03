@@ -147,10 +147,10 @@ class UpbitExchange(Exchange):
             headers = {'Authorization': f'Bearer {token}'}
         
         # Log request only if NOT in mock mode
-        # import os
+        import os
         # is_mock = "localhost" in self.server_url or "127.0.0.1" in self.server_url or os.getenv("MODE", "").upper() == "MOCK"
         # if not is_mock:
-        #     logging.info(f"🌐 Upbit API Request: {method} {url} {params or ''}")
+        logging.info(f"🌐 Upbit API Request: {method} {url} {params or ''}")
 
         try:
             if method == 'GET':
@@ -320,6 +320,18 @@ class UpbitExchange(Exchange):
             'ord_type': 'limit'
         }
         return self._request('POST', '/v1/orders', data=data)
+
+    def get_orders(self, ticker=None, state='wait', page=1, limit=100):
+        """Fetch orders with filtering"""
+        params = {
+            'state': state,
+            'page': page,
+            'limit': limit,
+            'order_by': 'desc'
+        }
+        if ticker:
+            params['market'] = ticker
+        return self._request('GET', '/v1/orders', params=params)
 
     def get_order(self, uuid):
         return self._request('GET', '/v1/order', params={'uuid': uuid})
