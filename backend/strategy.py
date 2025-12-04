@@ -3,32 +3,11 @@ from typing import List, Optional
 import logging
 import json
 import threading
+import time
 from datetime import datetime
 from database import get_db
 
-class StrategyConfig(BaseModel):
-    investment_per_split: float = 100000.0 # KRW per split
-    min_price: float = 0.0 # Min Price (0.0 means uninitialized)
-    max_price: float = 0.0 # Max Price (0.0 means uninitialized)
-    buy_rate: float = 0.005 # 0.5% - price drop rate to trigger next buy
-    sell_rate: float = 0.005 # 0.5% - profit rate for sell order
-    fee_rate: float = 0.0005 # 0.05% fee
-    tick_interval: float = 1.0 # seconds - how often to check prices
-    rebuy_strategy: str = "reset_on_clear" # Options: "last_buy_price", "last_sell_price", "reset_on_clear"
-    max_trades_per_day: int = 100 # Max trades allowed per 24 hours
-
-class SplitState(BaseModel):
-    id: int
-    status: str = "PENDING_BUY" # PENDING_BUY, BUY_FILLED, PENDING_SELL, SELL_FILLED
-    buy_order_uuid: Optional[str] = None
-    sell_order_uuid: Optional[str] = None
-    buy_price: float = 0.0 # Target buy price
-    actual_buy_price: float = 0.0 # Actual filled price
-    buy_amount: float = 0.0 # KRW amount
-    buy_volume: float = 0.0 # Coin volume
-    target_sell_price: float = 0.0 # Target sell price
-    created_at: Optional[str] = None
-    bought_at: Optional[str] = None
+from strategies import StrategyConfig, SplitState, PriceStrategyLogic, RSIStrategyLogic
 
 class SevenSplitStrategy:
     def __init__(self, exchange, strategy_id: int, ticker: str, budget: float = 1000000.0):
@@ -45,7 +24,12 @@ class SevenSplitStrategy:
         self.next_split_id = 1
         self.last_buy_price = None # Track the last buy price for creating next split
         self.last_sell_price = None # Track the last sell price for rebuy strategy
-
+        self.budget = 0.0
+        
+        # Logic Modules
+        self.price_logic = PriceStrategyLogic(self)
+        self.rsi_logic = RSIStrategyLogic(self)
+        
         # Load state first to see if we have existing config
         state_loaded = self.load_state()
 
@@ -85,6 +69,25 @@ class SevenSplitStrategy:
                 tick_interval=config_dict['tick_interval'],
                 rebuy_strategy=config_dict['rebuy_strategy'],
                 max_trades_per_day=config_dict['max_trades_per_day'],
+                
+                # RSI Config
+                strategy_mode=config_dict['strategy_mode'],
+                rsi_period=config_dict['rsi_period'],
+                rsi_timeframe=config_dict['rsi_timeframe'],
+                rsi_buy_max=config_dict['rsi_buy_max'],
+                rsi_buy_first_threshold=config_dict['rsi_buy_first_threshold'],
+                rsi_buy_first_amount=config_dict['rsi_buy_first_amount'],
+                rsi_buy_next_threshold=config_dict['rsi_buy_next_threshold'],
+                rsi_buy_next_amount=config_dict['rsi_buy_next_amount'],
+                rsi_sell_min=config_dict['rsi_sell_min'],
+                rsi_sell_first_threshold=config_dict['rsi_sell_first_threshold'],
+                rsi_sell_first_amount=config_dict['rsi_sell_first_amount'],
+                rsi_sell_next_threshold=config_dict['rsi_sell_next_threshold'],
+                rsi_sell_next_amount=config_dict['rsi_sell_next_amount'],
+                
+                stop_loss=config_dict['stop_loss'],
+                max_holdings=config_dict['max_holdings'],
+
                 is_running=self.is_running,
                 next_split_id=self.next_split_id,
                 last_buy_price=self.last_buy_price,
@@ -143,7 +146,25 @@ class SevenSplitStrategy:
                 fee_rate=state.fee_rate,
                 tick_interval=state.tick_interval,
                 rebuy_strategy=state.rebuy_strategy,
-                max_trades_per_day=getattr(state, 'max_trades_per_day', 100) # Default 100 if missing
+                max_trades_per_day=getattr(state, 'max_trades_per_day', 100), # Default 100 if missing
+                
+                # RSI Config
+                strategy_mode=getattr(state, 'strategy_mode', "PRICE"),
+                rsi_period=getattr(state, 'rsi_period', 14),
+                rsi_timeframe=getattr(state, 'rsi_timeframe', "minutes/60"),
+                rsi_buy_max=getattr(state, 'rsi_buy_max', 30.0),
+                rsi_buy_first_threshold=getattr(state, 'rsi_buy_first_threshold', 5.0),
+                rsi_buy_first_amount=getattr(state, 'rsi_buy_first_amount', 1),
+                rsi_buy_next_threshold=getattr(state, 'rsi_buy_next_threshold', 1.0),
+                rsi_buy_next_amount=getattr(state, 'rsi_buy_next_amount', 1),
+                rsi_sell_min=getattr(state, 'rsi_sell_min', 70.0),
+                rsi_sell_first_threshold=getattr(state, 'rsi_sell_first_threshold', 5.0),
+                rsi_sell_first_amount=getattr(state, 'rsi_sell_first_amount', 1),
+                rsi_sell_next_threshold=getattr(state, 'rsi_sell_next_threshold', 1.0),
+                rsi_sell_next_amount=getattr(state, 'rsi_sell_next_amount', 1),
+                
+                stop_loss=getattr(state, 'stop_loss', -10.0),
+                max_holdings=getattr(state, 'max_holdings', 20)
             )
 
             self.is_running = state.is_running
@@ -202,9 +223,14 @@ class SevenSplitStrategy:
             if current_price is None:
                 current_price = self.exchange.get_current_price(self.ticker)
             if current_price and not self.splits:
-                logging.info(f"Starting strategy {self.strategy_id} at current price: {current_price}")
-                # Use market order for initial entry to ensure execution
-                self._create_buy_split(current_price, use_market_order=True)
+                # RSI Mode: Wait for signal (Don't buy immediately)
+                if self.config.strategy_mode == "RSI":
+                    logging.info(f"Starting strategy {self.strategy_id} in RSI Mode. Waiting for signal (Current Price: {current_price})")
+                else:
+                    # Classic Mode: Buy immediately if no splits
+                    logging.info(f"Starting strategy {self.strategy_id} at current price: {current_price}")
+                    # Use market order for initial entry to ensure execution
+                    self._create_buy_split(current_price, use_market_order=True)
 
             self.is_running = True
             self.save_state()
@@ -309,6 +335,78 @@ class SevenSplitStrategy:
             
         return True
 
+    def calculate_rsi(self):
+        """Calculate RSI based on configured timeframe."""
+        try:
+            # Fetch candles
+            # Count: 14 (period) + 1 (for delta) + buffer. 200 is safe.
+            candles = self.exchange.get_candles(self.ticker, count=200, interval=self.config.rsi_timeframe)
+            if not candles or len(candles) < self.config.rsi_period + 1:
+                logging.warning(f"Not enough candles for RSI calculation: {len(candles) if candles else 0}")
+                return
+
+            # Sort by timestamp ascending (oldest first)
+            candles.sort(key=lambda x: x['candle_date_time_kst'])
+            
+            # Extract closing prices
+            closes = [float(c['trade_price']) for c in candles]
+            
+            # Calculate RSI
+            import pandas as pd
+            series = pd.Series(closes)
+            delta = series.diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=self.config.rsi_period).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=self.config.rsi_period).mean()
+            
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs))
+            
+            # Calculate RSI (Short - Period 4)
+            gain_short = (delta.where(delta > 0, 0)).rolling(window=4).mean()
+            loss_short = (-delta.where(delta < 0, 0)).rolling(window=4).mean()
+            rs_short = gain_short / loss_short
+            rsi_short = 100 - (100 / (1 + rs_short))
+
+            # Get latest RSI
+            current_rsi = rsi.iloc[-1]
+            current_rsi_short = rsi_short.iloc[-1]
+            
+            # Update state
+            self.rsi_logic.prev_rsi = self.rsi_logic.current_rsi # Save previous before updating
+            self.rsi_logic.current_rsi = float(current_rsi)
+            
+            self.rsi_logic.prev_rsi_short = self.rsi_logic.current_rsi_short
+            self.rsi_logic.current_rsi_short = float(current_rsi_short)
+            
+            # --- Calculate Daily RSI ---
+            daily_candles = self.exchange.get_candles(self.ticker, count=200, interval="days")
+            if daily_candles and len(daily_candles) >= self.config.rsi_period + 1:
+                daily_candles.sort(key=lambda x: x['candle_date_time_kst'])
+                daily_closes = [float(c['trade_price']) for c in daily_candles]
+                
+                series_d = pd.Series(daily_closes)
+                delta_d = series_d.diff()
+                
+                # Daily RSI (14)
+                gain_d = (delta_d.where(delta_d > 0, 0)).rolling(window=self.config.rsi_period).mean()
+                loss_d = (-delta_d.where(delta_d < 0, 0)).rolling(window=self.config.rsi_period).mean()
+                rs_d = gain_d / loss_d
+                rsi_d = 100 - (100 / (1 + rs_d))
+                
+                # Daily RSI (4)
+                gain_d_short = (delta_d.where(delta_d > 0, 0)).rolling(window=4).mean()
+                loss_d_short = (-delta_d.where(delta_d < 0, 0)).rolling(window=4).mean()
+                rs_d_short = gain_d_short / loss_d_short
+                rsi_d_short = 100 - (100 / (1 + rs_d_short))
+                
+                self.rsi_logic.current_rsi_daily = float(rsi_d.iloc[-1])
+                self.rsi_logic.current_rsi_daily_short = float(rsi_d_short.iloc[-1])
+            
+            logging.info(f"RSI Updated: {self.rsi_logic.current_rsi:.2f} (Prev: {self.rsi_logic.prev_rsi}), Short: {self.rsi_logic.current_rsi_short:.2f}, Daily: {self.rsi_logic.current_rsi_daily}, DailyShort: {self.rsi_logic.current_rsi_daily_short}")
+            
+        except Exception as e:
+            logging.error(f"Failed to calculate RSI: {e}")
+
     def tick(self, current_price: float = None, open_orders: list = None):
         """Main tick function called periodically to check and update splits."""
         with self.lock:
@@ -333,20 +431,18 @@ class SevenSplitStrategy:
             if not current_price:
                 return
 
-            # 1. Prepare open orders list
+            # Update RSI every 60 seconds (Common for both strategies)
+            current_time = time.time()
+            if current_time - self.rsi_logic.last_rsi_update >= 60:
+                self.calculate_rsi()
+                self.rsi_logic.last_rsi_update = current_time
+
+            # Prepare open orders list (Common)
             open_order_uuids = set()
             try:
                 if open_orders is not None:
-                    # Use provided global list, filtering for this ticker
-                    # Note: Upbit order objects usually have 'market' field (e.g. 'KRW-BTC')
-                    # We only care about orders for THIS ticker.
-                    # But wait, we only need UUIDs to check against our splits.
-                    # If we pass ALL orders, checking uuid in set is fast.
-                    # However, to be safe, we can filter by market if needed, but UUID is unique anyway.
-                    # Let's just put ALL UUIDs in the set. It's faster than filtering by string.
                     open_order_uuids = {order['uuid'] for order in open_orders}
                 else:
-                    # Fallback: Fetch 'wait' (unfilled) orders for this ticker
                     fetched_orders = self.exchange.get_orders(ticker=self.ticker, state='wait')
                     if fetched_orders:
                         open_order_uuids = {order['uuid'] for order in fetched_orders}
@@ -354,53 +450,59 @@ class SevenSplitStrategy:
                 logging.error(f"Failed to process open orders: {e}")
                 return
 
-            # Check all splits for order status updates
-            # Create a copy of the list to safely modify self.splits during iteration if needed
-            for split in list(self.splits):
-                if split.status == "PENDING_BUY":
-                    if split.buy_order_uuid:
-                        # Check for timeout first (Local check)
-                        is_timeout = False
-                        if split.created_at:
-                            try:
-                                created_dt = datetime.fromisoformat(split.created_at)
-                                elapsed = (datetime.now() - created_dt).total_seconds()
-                                if elapsed > 1800: # 30 minutes
-                                    is_timeout = True
-                            except:
-                                pass
-                        
-                        # If timed out OR order is not in open list (meaning it's done/cancelled), check details
-                        if is_timeout or split.buy_order_uuid not in open_order_uuids:
-                            self._check_buy_order(split)
-                    else:
-                        # Zombie split (PENDING_BUY with no UUID). Remove it to allow recreation.
-                        logging.info(f"Found zombie split {split.id} (PENDING_BUY with no UUID). Removing to reset.")
-                        self.splits.remove(split)
-                        self.save_state()
+            # Dispatch based on strategy mode
+            if self.config.strategy_mode == "RSI":
+                self.rsi_logic.tick(current_price, open_order_uuids)
+            else:
+                self.price_logic.tick(current_price, open_order_uuids)
 
-                elif split.status == "BUY_FILLED":
-                    # Buy filled, create sell order
+    def _manage_orders(self, open_order_uuids: set):
+        """Common order management logic (Check fills, timeouts, cleanup)."""
+        # Check all splits for order status updates
+        for split in list(self.splits):
+            if split.status == "PENDING_BUY":
+                if split.buy_order_uuid:
+                    # Check for timeout first (Local check)
+                    is_timeout = False
+                    if split.created_at:
+                        try:
+                            created_dt = datetime.fromisoformat(split.created_at)
+                            elapsed = (datetime.now() - created_dt).total_seconds()
+                            if elapsed > 1800: # 30 minutes
+                                is_timeout = True
+                        except:
+                            pass
+                    
+                    # If timed out OR order is not in open list (meaning it's done/cancelled), check details
+                    if is_timeout or split.buy_order_uuid not in open_order_uuids:
+                        self._check_buy_order(split)
+                else:
+                    # Zombie split (PENDING_BUY with no UUID). Remove it to allow recreation.
+                    logging.info(f"Found zombie split {split.id} (PENDING_BUY with no UUID). Removing to reset.")
+                    self.splits.remove(split)
+                    self.save_state()
+
+            elif split.status == "BUY_FILLED":
+                # Buy filled, create sell order ONLY if NOT in RSI mode
+                # In RSI mode, we hold until RSI sell signal
+                if self.config.strategy_mode != "RSI":
                     self._create_sell_order(split)
 
-                elif split.status == "PENDING_SELL":
-                    if split.sell_order_uuid:
-                        # Only check if order is NOT in open list (meaning it's done/cancelled)
-                        if split.sell_order_uuid not in open_order_uuids:
-                            self._check_sell_order(split)
-                    else:
-                        # Zombie split (PENDING_SELL with no UUID). Revert to BUY_FILLED to recreate sell order.
-                        logging.info(f"Found zombie split {split.id} (PENDING_SELL with no UUID). Reverting to BUY_FILLED.")
-                        split.status = "BUY_FILLED"
-                        self.save_state()
-                        # It will be picked up in the next tick as BUY_FILLED
+            elif split.status == "PENDING_SELL":
+                if split.sell_order_uuid:
+                    # Only check if order is NOT in open list (meaning it's done/cancelled)
+                    if split.sell_order_uuid not in open_order_uuids:
+                        self._check_sell_order(split)
+                else:
+                    # Zombie split (PENDING_SELL with no UUID). Revert to BUY_FILLED to recreate sell order.
+                    logging.info(f"Found zombie split {split.id} (PENDING_SELL with no UUID). Reverting to BUY_FILLED.")
+                    split.status = "BUY_FILLED"
+                    self.save_state()
 
-            # Remove completed splits
-            self._cleanup_filled_splits()
+        # Remove completed splits
+        self._cleanup_filled_splits()
 
-            # Check if we need to create new buy split based on price drop
-            if self.check_trade_limit():
-                self._check_create_new_buy_split(current_price)
+    # tick_price and tick_rsi methods removed (moved to logic modules)
 
     def _cleanup_filled_splits(self):
         """Remove SELL_FILLED splits and update state."""
@@ -824,6 +926,8 @@ class SevenSplitStrategy:
                     break
                 logging.info(f"Created buy split {i+1}/{levels_crossed} at {current_price}")
 
+
+
     def get_state(self, current_price=None):
         with self.lock:
             if current_price is None:
@@ -845,7 +949,6 @@ class SevenSplitStrategy:
 
             total_profit_amount = total_valuation - total_invested
             total_profit_rate = (total_profit_amount / total_invested * 100) if total_invested > 0 else 0.0
-
             # Count splits by status
             status_counts = {
                 "pending_buy": sum(1 for s in self.splits if s.status == "PENDING_BUY"),
@@ -876,5 +979,9 @@ class SevenSplitStrategy:
                 "total_valuation": total_valuation,
                 "status_counts": status_counts,
                 "last_buy_price": self.last_buy_price,
-                "trade_history": self.trade_history[:10] # Return last 10 trades
+                "trade_history": self.trade_history[:10], # Return last 10 trades
+                "rsi": self.rsi_logic.current_rsi,  # Expose RSI
+                "rsi_short": self.rsi_logic.current_rsi_short, # Expose Short RSI
+                "rsi_daily": self.rsi_logic.current_rsi_daily, # Expose Daily RSI
+                "rsi_daily_short": self.rsi_logic.current_rsi_daily_short # Expose Daily Short RSI
             }

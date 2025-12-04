@@ -150,7 +150,7 @@ class UpbitExchange(Exchange):
         import os
         # is_mock = "localhost" in self.server_url or "127.0.0.1" in self.server_url or os.getenv("MODE", "").upper() == "MOCK"
         # if not is_mock:
-        logging.info(f"🌐 Upbit API Request: {method} {url} {params or ''}")
+        # logging.info(f"🌐 Upbit API Request: {method} {url} {params or ''}")
 
         try:
             if method == 'GET':
@@ -271,10 +271,10 @@ class UpbitExchange(Exchange):
             logging.error(f"get_current_prices failed: {e}")
             return {}
 
-    def get_candles(self, ticker, count=200):
+    def get_candles(self, ticker, count=200, interval="minutes/5"):
         """Fetch candle data"""
         try:
-            return self._request('GET', '/v1/candles/minutes/5', params={'market': ticker, 'count': count}, auth=False)
+            return self._request('GET', f'/v1/candles/{interval}', params={'market': ticker, 'count': count}, auth=False)
         except Exception as e:
             logging.error(f"get_candles failed: {e}")
             return []

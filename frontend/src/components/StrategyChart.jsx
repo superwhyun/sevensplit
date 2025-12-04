@@ -2,12 +2,21 @@ import { useEffect, useRef, useState } from 'react';
 import { createChart, ColorType, CrosshairMode } from 'lightweight-charts';
 import axios from 'axios';
 
-const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], isSimulating = false, simResult, onSimulationComplete }) => {
+const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], isSimulating = false, simResult, onSimulationComplete, onChartClick }) => {
     const chartContainerRef = useRef();
     const chartRef = useRef();
+    const onChartClickRef = useRef(onChartClick);
+
+    // Update ref when prop changes
+    useEffect(() => {
+        onChartClickRef.current = onChartClick;
+    }, [onChartClick]);
     const candlestickSeriesRef = useRef();
     const volumeSeriesRef = useRef();
+    const rsiSeries14Ref = useRef();
+    const rsiSeries4Ref = useRef();
     const [candleData, setCandleData] = useState([]);
+    const [volumeData, setVolumeData] = useState([]);
     const [showResultPopup, setShowResultPopup] = useState(true);
 
     // Reset popup visibility when simResult changes
@@ -15,34 +24,67 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
         if (simResult) setShowResultPopup(true);
     }, [simResult]);
 
+    // Helper to parse KST ISO string to UTC timestamp (seconds)
+    const parseKSTISO = (isoString) => {
+        if (!isoString) return null;
+        // Append +09:00 if missing to treat it as KST
+        const timeStr = isoString.endsWith('Z') || isoString.includes('+') ? isoString : isoString + '+09:00';
+        return new Date(timeStr).getTime() / 1000;
+    };
+
+    // Helper to parse UTC ISO string to UTC timestamp (seconds)
+    const parseUTCISO = (isoString) => {
+        if (!isoString) return null;
+        // Append Z if missing to treat it as UTC
+        const timeStr = isoString.endsWith('Z') || isoString.includes('+') ? isoString : isoString + 'Z';
+        return new Date(timeStr).getTime() / 1000;
+    };
+
     useEffect(() => {
         const fetchCandles = async () => {
+            // Determine interval based on strategy mode
+            // Default to 'minutes/5' for PRICE mode, 'days' for RSI mode
+            const interval = config?.strategy_mode?.toUpperCase() === 'RSI' ? 'days' : 'minutes/5';
+
+            // console.log(`[Chart] Fetching candles for ${ticker} (Mode: ${config?.strategy_mode}, Interval: ${interval})...`);
+
+            // If running on Vite dev server (port 5173), point to backend port 8000.
+            const API_BASE_URL = window.location.port === '5173'
+                ? `http://${window.location.hostname}:8000`
+                : '';
+
             try {
-                // console.log(`[Chart] Fetching candles for ${ticker}...`);
+                const response = await axios.get(`${API_BASE_URL}/candles`, {
+                    params: {
+                        market: ticker,
+                        count: 200,
+                        interval: interval
+                    }
+                });
+                const data = response.data;
 
-                // If running on Vite dev server (port 5173), point to backend port 8000.
-                const API_BASE_URL = window.location.port === '5173'
-                    ? `http://${window.location.hostname}:8000`
-                    : '';
-                const response = await axios.get(`${API_BASE_URL}/candles?market=${ticker}&count=200`);
+                // Sort by timestamp ascending
+                data.sort((a, b) => new Date(a.candle_date_time_kst) - new Date(b.candle_date_time_kst));
 
-                const data = response.data.map(item => {
-                    // UTC 시간을 파싱 (끝에 'Z' 붙여서)
-                    const timestamp = Date.parse(item.candle_date_time_utc + 'Z') / 1000;
+                const candleData = data.map(d => ({
+                    // Use KST time with explicit +09:00 offset to ensure correct UTC timestamp
+                    time: parseKSTISO(d.candle_date_time_kst),
+                    open: d.opening_price,
+                    high: d.high_price,
+                    low: d.low_price,
+                    close: d.trade_price,
+                }));
 
-                    return {
-                        time: timestamp,
-                        open: item.opening_price,
-                        high: item.high_price,
-                        low: item.low_price,
-                        close: item.trade_price,
-                        volume: item.candle_acc_trade_volume,
-                    };
-                }).sort((a, b) => a.time - b.time);
+                const volumeData = data.map(d => ({
+                    time: parseKSTISO(d.candle_date_time_kst),
+                    value: d.candle_acc_trade_volume,
+                    color: d.trade_price >= d.opening_price ? 'rgba(38, 166, 154, 0.5)' : 'rgba(239, 83, 80, 0.5)',
+                }));
 
-                setCandleData(data);
+                setCandleData(candleData);
+                setVolumeData(volumeData);
             } catch (error) {
-                console.error("[Chart] Error:", error);
+                console.error("Error fetching candles:", error);
             }
         };
 
@@ -51,8 +93,105 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             const interval = setInterval(fetchCandles, 60000);
             return () => clearInterval(interval);
         }
-    }, [ticker]);
+    }, [ticker, config.strategy_mode]); // Re-fetch when ticker or strategy mode changes
 
+    // Calculate RSI (Dual: 14 and 4)
+    const calculateDualRSI = (data) => {
+        // Helper to calculate RSI for a specific period using SMA (to match Backend)
+        const calcRSI = (period) => {
+            const results = [];
+
+            for (let i = 0; i < data.length; i++) {
+                if (i < period) {
+                    continue;
+                }
+
+                // Calculate average gain/loss for the window
+                let sumGain = 0;
+                let sumLoss = 0;
+                for (let j = 0; j < period; j++) {
+                    const change = data[i - j].close - data[i - j - 1].close;
+                    if (change > 0) sumGain += change;
+                    else sumLoss -= change;
+                }
+
+                const avgGain = sumGain / period;
+                const avgLoss = sumLoss / period;
+
+                const rs = avgLoss === 0 ? (avgGain === 0 ? 0 : 100) : avgGain / avgLoss;
+                const rsi = 100 - (100 / (1 + rs));
+
+                results.push({ time: data[i].time, value: rsi });
+            }
+            return results;
+        };
+
+        return {
+            rsi14: calcRSI(14),
+            rsi4: calcRSI(4)
+        };
+    };
+
+
+    // Update chart data when candleData changes
+    useEffect(() => {
+        if (!chartRef.current || !candlestickSeriesRef.current) return;
+
+        if (candleData.length > 0) {
+            try {
+                candlestickSeriesRef.current.setData(candleData);
+
+                if (volumeSeriesRef.current && volumeData.length > 0) {
+                    const displayVolumeData = volumeData.map(d => ({
+                        ...d,
+                        color: d.value > 0 ? d.color : 'rgba(0,0,0,0)' // Hide zero volume?
+                    }));
+                    volumeSeriesRef.current.setData(displayVolumeData);
+                }
+
+                // Update RSI (Dual) - Only if in RSI mode
+                if (config?.strategy_mode?.toUpperCase() === 'RSI' && rsiSeries14Ref.current && rsiSeries4Ref.current) {
+                    const { rsi14, rsi4 } = calculateDualRSI(candleData);
+
+                    // No offset needed if candleData.time is already UTC
+                    const rsi14DisplayData = rsi14.map(d => ({
+                        time: d.time,
+                        value: d.value
+                    }));
+                    const rsi4DisplayData = rsi4.map(d => ({
+                        time: d.time,
+                        value: d.value
+                    }));
+
+                    rsiSeries14Ref.current.setData(rsi14DisplayData);
+                    rsiSeries4Ref.current.setData(rsi4DisplayData);
+
+                    // Force re-apply RSI scale options to ensure visibility
+                    chartRef.current.priceScale('rsi').applyOptions({
+                        autoScale: false,
+                        minValue: 0,
+                        maxValue: 100,
+                        scaleMargins: {
+                            top: 0.7,
+                            bottom: 0,
+                        },
+                        visible: true,
+                        borderColor: '#ef4444', // Red border for debugging
+                    });
+                } else if (config?.strategy_mode?.toUpperCase() !== 'RSI') {
+                    // Clear RSI data if not in RSI mode
+                    if (rsiSeries14Ref.current) rsiSeries14Ref.current.setData([]);
+                    if (rsiSeries4Ref.current) rsiSeries4Ref.current.setData([]);
+                }
+
+                chartRef.current.timeScale().fitContent();
+            } catch (error) {
+                console.error("[Chart] Error setting data:", error);
+            }
+        }
+    }, [candleData, volumeData, config.strategy_mode]);
+
+    // Initialize Chart
     useEffect(() => {
         if (!chartContainerRef.current) return;
 
@@ -72,8 +211,8 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                 borderColor: '#334155',
                 autoScale: true,
                 scaleMargins: {
-                    top: 0.1,
-                    bottom: 0.15,
+                    top: 0.05,
+                    bottom: 0.3, // Leave space for RSI
                 },
             },
             timeScale: {
@@ -86,6 +225,66 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             },
             width: chartContainerRef.current.clientWidth,
             height: 400,
+        });
+
+        // Create Legend
+        const legend = document.createElement('div');
+        legend.style.position = 'absolute';
+        legend.style.left = '12px';
+        legend.style.top = '12px';
+        legend.style.zIndex = '1';
+        legend.style.fontSize = '14px';
+        legend.style.fontFamily = 'sans-serif';
+        legend.style.lineHeight = '18px';
+        legend.style.fontWeight = '300';
+        legend.style.color = '#cbd5e1';
+        chartContainerRef.current.appendChild(legend);
+
+        chart.subscribeCrosshairMove(param => {
+            if (
+                param.point === undefined ||
+                !param.time ||
+                param.point.x < 0 ||
+                param.point.x > chartContainerRef.current.clientWidth ||
+                param.point.y < 0 ||
+                param.point.y > chartContainerRef.current.clientHeight
+            ) {
+                return;
+            }
+
+            let rsi14Val = '';
+            let rsi4Val = '';
+
+            if (rsiSeries14Ref.current) {
+                const data = param.seriesData.get(rsiSeries14Ref.current);
+                if (data && data.value !== undefined) rsi14Val = data.value.toFixed(2);
+            }
+            if (rsiSeries4Ref.current) {
+                const data = param.seriesData.get(rsiSeries4Ref.current);
+                if (data && data.value !== undefined) rsi4Val = data.value.toFixed(2);
+            }
+
+            if (rsi14Val || rsi4Val) {
+                legend.innerHTML = `
+                    <div style="display: flex; gap: 12px;">
+                        ${rsi14Val ? `<div style="color: #8b5cf6">RSI(14): <strong>${rsi14Val}</strong></div>` : ''}
+                        ${rsi4Val ? `<div style="color: #f59e0b">RSI(4): <strong>${rsi4Val}</strong></div>` : ''}
+                    </div>
+                `;
+            } else {
+                legend.innerHTML = '';
+            }
+        });
+
+        // Click Handler for Simulation
+        chart.subscribeClick(param => {
+            console.log("[StrategyChart] Click param:", param);
+            if (onChartClickRef.current && param.time) {
+                console.log("[StrategyChart] Calling onChartClick with time:", param.time);
+                onChartClickRef.current(param.time);
+            } else {
+                console.log("[StrategyChart] Click ignored (no time or handler)");
+            }
         });
 
         chartRef.current = chart;
@@ -116,9 +315,52 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
 
         chart.priceScale('volume').applyOptions({
             scaleMargins: {
-                top: 0.9,
-                bottom: 0,
+                top: 0.5, // Start at 50% height
+                bottom: 0.3, // End at 70% height (aligned with price chart bottom)
             },
+        });
+
+        // Add RSI Series (Dual)
+        const rsiSeries14 = chart.addLineSeries({
+            color: '#8b5cf6', // Purple
+            lineWidth: 2,
+            priceScaleId: 'rsi',
+            title: 'RSI(14)',
+            priceFormat: {
+                type: 'price',
+                precision: 1,
+                minMove: 0.1,
+            },
+        });
+        rsiSeries14Ref.current = rsiSeries14;
+
+        const rsiSeries4 = chart.addLineSeries({
+            color: '#f59e0b', // Yellow/Orange
+            lineWidth: 1,
+            priceScaleId: 'rsi',
+            title: 'RSI(4)',
+            priceFormat: {
+                type: 'price',
+                precision: 1,
+                minMove: 0.1,
+            },
+        });
+        rsiSeries4Ref.current = rsiSeries4;
+
+        // Add Threshold Lines to RSI Series
+        rsiSeries14.createPriceLine({
+            price: 70.0,
+            color: '#ef4444',
+            lineWidth: 1,
+            lineStyle: 2, // Dashed
+            axisLabelVisible: false,
+        });
+        rsiSeries14.createPriceLine({
+            price: 30.0,
+            color: '#10b981',
+            lineWidth: 1,
+            lineStyle: 2, // Dashed
+            axisLabelVisible: false,
         });
 
         const handleResize = () => {
@@ -127,118 +369,11 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
 
         window.addEventListener('resize', handleResize);
 
-
-
         return () => {
             window.removeEventListener('resize', handleResize);
             chart.remove();
         };
     }, []);
-
-    // Ref to access latest isSimulating in event handler
-    const isSimulatingRef = useRef(isSimulating);
-    useEffect(() => { isSimulatingRef.current = isSimulating; }, [isSimulating]);
-
-    const candleDataRef = useRef(candleData);
-    useEffect(() => { candleDataRef.current = candleData; }, [candleData]);
-
-    const configRef = useRef(config);
-    useEffect(() => { configRef.current = config; }, [config]);
-
-    // Attach click handler separately to access refs
-    useEffect(() => {
-        if (!chartRef.current) return;
-
-        const clickHandler = async (param) => {
-            if (!isSimulatingRef.current || !param.time || !candleDataRef.current.length) return;
-
-            const clickTime = param.time;
-            // clickTime is KST (shifted), find original UTC candle
-            const KST_OFFSET = 9 * 60 * 60;
-            const startIndex = candleDataRef.current.findIndex(c => (c.time + KST_OFFSET) === clickTime);
-
-            if (startIndex === -1) return;
-
-            // Convert clickTime back to UTC for logging
-            const utcTime = clickTime - KST_OFFSET;
-            console.log(`Starting simulation from index ${startIndex} (UTC: ${new Date(utcTime * 1000).toUTCString()}, KST: ${new Date(clickTime * 1000).toLocaleString()})`);
-
-            try {
-                const payload = {
-                    strategy_config: configRef.current,
-                    candles: candleDataRef.current,
-                    start_index: startIndex,
-                    ticker: ticker,
-                    budget: 1000000 // Default or from props
-                };
-
-                // If running on Vite dev server (port 5173), point to backend port 8000.
-                const API_BASE_URL = window.location.port === '5173'
-                    ? `http://${window.location.hostname}:8000`
-                    : '';
-
-                const response = await axios.post(`${API_BASE_URL}/simulate`, payload);
-                const result = response.data;
-
-                if (onSimulationComplete) onSimulationComplete(result);
-
-            } catch (error) {
-                console.error("Simulation error:", error);
-                alert("Simulation failed");
-            }
-        };
-
-        chartRef.current.subscribeClick(clickHandler);
-
-        return () => {
-            if (chartRef.current) {
-                try {
-                    chartRef.current.unsubscribeClick(clickHandler);
-                } catch (e) { /* ignore */ }
-            }
-        };
-    }, [ticker]); // Re-bind if ticker changes, but refs handle updates
-
-    // Clear sim state when exiting sim mode
-    // No local state to clear anymore
-    /*
-    useEffect(() => {
-        if (!isSimulating) {
-            setSimResult(null);
-            setSimMarkers([]);
-        }
-    }, [isSimulating]);
-    */
-
-    useEffect(() => {
-        if (candlestickSeriesRef.current && candleData.length > 0) {
-            try {
-                // Shift to KST for display
-                const KST_OFFSET = 9 * 60 * 60;
-                const displayData = candleData.map(d => ({
-                    ...d,
-                    time: d.time + KST_OFFSET
-                }));
-
-                candlestickSeriesRef.current.setData(displayData);
-
-                if (volumeSeriesRef.current) {
-                    const volumeData = displayData.map(d => ({
-                        time: d.time,
-                        value: d.volume,
-                        color: d.close >= d.open ? 'rgba(16, 185, 129, 0.5)' : 'rgba(239, 68, 68, 0.5)',
-                    }));
-                    volumeSeriesRef.current.setData(volumeData);
-                }
-
-                chartRef.current.timeScale().fitContent();
-            } catch (error) {
-                console.error("[Chart] Error setting data:", error);
-            }
-        }
-    }, [candleData]);
-
-
 
     // Combined Marker Effect
     useEffect(() => {
@@ -246,47 +381,61 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
 
         const markers = [];
 
-        const KST_OFFSET = 9 * 60 * 60;
+        if (isSimulating) {
+            if (simResult && simResult.trades) {
+                simResult.trades.forEach(t => {
+                    // Buy Marker
+                    if (t.bought_at) {
+                        // Simulation returns UTC naive strings, so use parseUTCISO
+                        const buyTime = parseUTCISO(t.bought_at);
+                        if (buyTime) {
+                            markers.push({
+                                time: buyTime,
+                                position: 'belowBar',
+                                color: '#10b981', // Green
+                                shape: 'arrowUp',
+                                text: '',
+                                size: 1
+                            });
+                        }
+                    }
 
-        if (isSimulating && simResult && simResult.trades) {
-            simResult.trades.forEach(t => {
-                // For simplicity, let's just mark the Sells (Red Arrows).
-                // In simulation.py, 'timestamp' is the SELL time.
-                let time = t.timestamp;
-                // Handle string timestamp if necessary
-                if (typeof time === 'string') {
-                    time = Date.parse(time.endsWith('Z') ? time : time + 'Z') / 1000;
-                }
+                    // Sell Marker
+                    if (t.timestamp) {
+                        let sellTime = t.timestamp;
+                        if (typeof sellTime === 'string') {
+                            // Simulation returns UTC naive strings
+                            sellTime = parseUTCISO(sellTime);
+                        } else if (typeof sellTime === 'number') {
+                            // If it's a number, assume it's already UTC seconds.
+                            // No parsing needed, just assign.
+                        }
 
-                markers.push({
-                    time: time + KST_OFFSET,
-                    position: 'aboveBar',
-                    color: '#ef4444',
-                    shape: 'arrowDown',
-                    text: `₩${Math.round(t.net_profit)}`,
-                    size: 2
+                        if (sellTime) {
+                            markers.push({
+                                time: sellTime,
+                                position: 'aboveBar',
+                                color: '#ef4444', // Red
+                                shape: 'arrowDown',
+                                text: '',
+                                size: 1
+                            });
+                        }
+                    }
                 });
-            });
+            }
         } else {
-            // 1. Active Splits (Buy Markers)
             if (splits && splits.length > 0) {
                 splits.forEach(split => {
                     if (split.bought_at) {
-                        let time;
-                        if (typeof split.bought_at === 'number') {
-                            time = split.bought_at;
-                        } else {
-                            const timeStr = split.bought_at.endsWith('Z') ? split.bought_at : split.bought_at + 'Z';
-                            time = Date.parse(timeStr) / 1000;
-                        }
-
-                        if (!isNaN(time)) {
+                        const time = parseKSTISO(split.bought_at);
+                        if (time) {
                             markers.push({
-                                time: time + KST_OFFSET,
+                                time: time,
                                 position: 'belowBar',
-                                color: split.status === 'PENDING_SELL' ? '#eab308' : '#10b981', // Yellow if Pending Sell, else Green
+                                color: split.status === 'PENDING_SELL' ? '#eab308' : '#10b981',
                                 shape: 'arrowUp',
-                                text: '', // No text
+                                text: '',
                                 size: 1,
                             });
                         }
@@ -294,48 +443,31 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                 });
             }
 
-            // 2. Trade History
             if (tradeHistory && tradeHistory.length > 0) {
                 tradeHistory.forEach(trade => {
-                    // Sell Marker
                     if (trade.timestamp) {
-                        let time;
-                        if (typeof trade.timestamp === 'number') {
-                            time = trade.timestamp;
-                        } else {
-                            const timeStr = trade.timestamp.endsWith('Z') ? trade.timestamp : trade.timestamp + 'Z';
-                            time = Date.parse(timeStr) / 1000;
-                        }
-
-                        if (!isNaN(time)) {
+                        const time = parseKSTISO(trade.timestamp);
+                        if (time) {
                             markers.push({
-                                time: time + KST_OFFSET,
+                                time: time,
                                 position: 'aboveBar',
-                                color: '#ef4444', // Red
+                                color: '#ef4444',
                                 shape: 'arrowDown',
-                                text: '', // No text
+                                text: '',
                                 size: 1,
                             });
                         }
                     }
 
-                    // Buy Marker (if available)
                     if (trade.bought_at) {
-                        let time;
-                        if (typeof trade.bought_at === 'number') {
-                            time = trade.bought_at;
-                        } else {
-                            const timeStr = trade.bought_at.endsWith('Z') ? trade.bought_at : trade.bought_at + 'Z';
-                            time = Date.parse(timeStr) / 1000;
-                        }
-
-                        if (!isNaN(time)) {
+                        const time = parseKSTISO(trade.bought_at);
+                        if (time) {
                             markers.push({
-                                time: time + KST_OFFSET,
+                                time: time,
                                 position: 'belowBar',
-                                color: '#10b981', // Green (Completed trade buy was just a normal buy)
+                                color: '#10b981',
                                 shape: 'arrowUp',
-                                text: '', // No text
+                                text: '',
                                 size: 1,
                             });
                         }
@@ -350,7 +482,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
         } catch (e) {
             console.error("Error setting markers:", e);
         }
-    }, [splits, tradeHistory, candleData, isSimulating, simResult]); // Re-run when data changes
+    }, [splits, tradeHistory, candleData, isSimulating, simResult]);
 
     return (
         <div style={{

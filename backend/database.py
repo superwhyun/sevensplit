@@ -32,6 +32,30 @@ class Strategy(Base):
     rebuy_strategy = Column(String(50), nullable=False)
     max_trades_per_day = Column(Integer, nullable=False, default=100)
 
+    # RSI Strategy Configuration
+    strategy_mode = Column(String(20), nullable=False, default="PRICE") # PRICE or RSI
+    rsi_period = Column(Integer, nullable=False, default=14)
+    rsi_timeframe = Column(String(20), nullable=False, default="minutes/60")
+    
+    # RSI Buying (Accumulation)
+    rsi_buy_max = Column(Float, nullable=False, default=30.0)
+    rsi_buy_first_threshold = Column(Float, nullable=False, default=5.0)
+    rsi_buy_first_amount = Column(Integer, nullable=False, default=1)
+    rsi_buy_next_threshold = Column(Float, nullable=False, default=1.0)
+    rsi_buy_next_amount = Column(Integer, nullable=False, default=1)
+
+    # RSI Selling (Distribution)
+    rsi_sell_min = Column(Float, nullable=False, default=70.0)
+    rsi_sell_first_threshold = Column(Float, nullable=False, default=5.0)
+    rsi_sell_first_amount = Column(Integer, nullable=False, default=1)
+    rsi_sell_next_threshold = Column(Float, nullable=False, default=1.0)
+    rsi_sell_next_threshold = Column(Float, nullable=False, default=1.0)
+    rsi_sell_next_amount = Column(Integer, nullable=False, default=1)
+
+    # Risk Management
+    stop_loss = Column(Float, nullable=False, default=-10.0) # Percentage (e.g. -10.0)
+    max_holdings = Column(Integer, nullable=False, default=20)
+
     # Runtime state
     is_running = Column(Boolean, default=False)
     next_split_id = Column(Integer, default=1)
@@ -212,6 +236,39 @@ class DatabaseManager:
                     conn.commit()
             except Exception as e:
                 print(f"Migration warning (trades): {e}")
+
+            # 3. Check strategies.strategy_mode (RSI Migration)
+            try:
+                result = conn.execute(text("PRAGMA table_info(strategies)"))
+                columns = [row[1] for row in result.fetchall()]
+                
+                # List of new columns to check and add
+                new_columns = [
+                    ('strategy_mode', "VARCHAR(20) DEFAULT 'PRICE' NOT NULL"),
+                    ('rsi_period', "INTEGER DEFAULT 14 NOT NULL"),
+                    ('rsi_timeframe', "VARCHAR(20) DEFAULT 'minutes/60' NOT NULL"),
+                    ('rsi_buy_max', "FLOAT DEFAULT 30.0 NOT NULL"),
+                    ('rsi_buy_first_threshold', "FLOAT DEFAULT 5.0 NOT NULL"),
+                    ('rsi_buy_first_amount', "INTEGER DEFAULT 1 NOT NULL"),
+                    ('rsi_buy_next_threshold', "FLOAT DEFAULT 1.0 NOT NULL"),
+                    ('rsi_buy_next_amount', "INTEGER DEFAULT 1 NOT NULL"),
+                    ('rsi_sell_min', "FLOAT DEFAULT 70.0 NOT NULL"),
+                    ('rsi_sell_first_threshold', "FLOAT DEFAULT 5.0 NOT NULL"),
+                    ('rsi_sell_first_amount', "INTEGER DEFAULT 1 NOT NULL"),
+                    ('rsi_sell_next_threshold', "FLOAT DEFAULT 1.0 NOT NULL"),
+                    ('rsi_sell_next_amount', "INTEGER DEFAULT 1 NOT NULL"),
+                    ('stop_loss', "FLOAT DEFAULT -10.0 NOT NULL"),
+                    ('max_holdings', "INTEGER DEFAULT 20 NOT NULL")
+                ]
+
+                for col_name, col_def in new_columns:
+                    if col_name not in columns:
+                        print(f"Migrating: Adding {col_name} to strategies table")
+                        conn.execute(text(f"ALTER TABLE strategies ADD COLUMN {col_name} {col_def}"))
+                
+                conn.commit()
+            except Exception as e:
+                print(f"Migration warning (strategies RSI): {e}")
 
     def get_session(self) -> Session:
         """Get a new database session"""

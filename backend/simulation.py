@@ -2,7 +2,8 @@ from typing import List, Dict, Any
 from datetime import datetime
 import logging
 import threading
-from strategy import SevenSplitStrategy, SplitState, StrategyConfig
+from strategy import SevenSplitStrategy
+from strategies import SplitState, StrategyConfig, PriceStrategyLogic, RSIStrategyLogic
 from pydantic import BaseModel
 
 class SimulationConfig(BaseModel):
@@ -50,11 +51,16 @@ class MockDB:
         return [MockSplitObj(**s) for s in self.splits]
 
 class MockExchange:
-    def __init__(self):
-        pass
+    def __init__(self, strategy=None):
+        self.strategy = strategy
+        self.orders = {} # uuid -> order_dict
+        self.balance_krw = 100000000.0 # Default large balance for sim
+        self.balance_coin = 0.0
     
     def get_current_price(self, ticker):
-        return 0 # Should not be called directly in sim if we push price
+        if self.strategy and self.strategy.current_candle:
+            return self.strategy.current_candle.get('trade_price', 0)
+        return 0
     
     def normalize_price(self, price):
         # Simple mock normalization (e.g. 1000 KRW unit for Bitcoin is too rough, use 100 or 10)
@@ -65,28 +71,160 @@ class MockExchange:
         return 1000 # Dummy
 
     def buy_limit_order(self, ticker, price, volume):
-        return {'uuid': f'sim_buy_{datetime.now().timestamp()}'}
+        uuid = f'sim_buy_{datetime.now().timestamp()}_{len(self.orders)}'
+        self.orders[uuid] = {
+            'uuid': uuid,
+            'side': 'bid',
+            'ord_type': 'limit',
+            'price': price,
+            'volume': volume,
+            'state': 'wait',
+            'created_at': datetime.now().isoformat(),
+            'trades': []
+        }
+        return {'uuid': uuid}
 
     def buy_market_order(self, ticker, amount):
-        return {'uuid': f'sim_buy_market_{datetime.now().timestamp()}'}
+        uuid = f'sim_buy_market_{datetime.now().timestamp()}_{len(self.orders)}'
+        # Market order fills immediately at current close price (approximation)
+        price = self.get_current_price(ticker)
+        volume = amount / price if price > 0 else 0
+        
+        self.orders[uuid] = {
+            'uuid': uuid,
+            'side': 'bid',
+            'ord_type': 'price', # Upbit market buy type
+            'price': amount, # For market buy, price is the amount in KRW
+            'volume': volume,
+            'state': 'done',
+            'created_at': datetime.now().isoformat(),
+            'trades': [{'funds': amount, 'volume': volume, 'price': price}]
+        }
+        return {'uuid': uuid}
 
     def sell_limit_order(self, ticker, price, volume):
-        return {'uuid': f'sim_sell_{datetime.now().timestamp()}'}
+        uuid = f'sim_sell_{datetime.now().timestamp()}_{len(self.orders)}'
+        self.orders[uuid] = {
+            'uuid': uuid,
+            'side': 'ask',
+            'ord_type': 'limit',
+            'price': price,
+            'volume': volume,
+            'state': 'wait',
+            'created_at': datetime.now().isoformat(),
+            'trades': []
+        }
+        return {'uuid': uuid}
+    
+    def sell_market_order(self, ticker, volume):
+        uuid = f'sim_sell_market_{datetime.now().timestamp()}_{len(self.orders)}'
+        price = self.get_current_price(ticker)
+        funds = price * volume
+        
+        self.orders[uuid] = {
+            'uuid': uuid,
+            'side': 'ask',
+            'ord_type': 'market',
+            'price': price,
+            'volume': volume,
+            'state': 'done',
+            'created_at': datetime.now().isoformat(),
+            'trades': [{'funds': funds, 'volume': volume, 'price': price}]
+        }
+        return {'uuid': uuid}
     
     def cancel_order(self, uuid):
-        pass
+        if uuid in self.orders:
+            self.orders[uuid]['state'] = 'cancel'
     
     def get_order(self, uuid):
-        return {'state': 'wait'} # Default
+        if uuid not in self.orders:
+            return {'uuid': uuid, 'state': 'cancel', 'trades': []} # Not found
+            
+        order = self.orders[uuid]
+        
+        # If already done or cancel, return as is
+        if order['state'] in ['done', 'cancel']:
+            return order
+            
+        # Check if limit order can be filled based on current candle
+        if self.strategy and self.strategy.current_candle:
+            candle = self.strategy.current_candle
+            low = candle.get('low_price')
+            high = candle.get('high_price')
+            
+            if order['ord_type'] == 'limit':
+                if order['side'] == 'bid':
+                    # Buy Limit: Fill if Low <= Limit Price
+                    if low <= order['price']:
+                        order['state'] = 'done'
+                        # Assume filled at limit price (or better? conservative: limit price)
+                        order['trades'] = [{'funds': order['price'] * order['volume'], 'volume': order['volume'], 'price': order['price']}]
+                elif order['side'] == 'ask':
+                    # Sell Limit: Fill if High >= Limit Price
+                    if high >= order['price']:
+                        order['state'] = 'done'
+                        order['trades'] = [{'funds': order['price'] * order['volume'], 'volume': order['volume'], 'price': order['price']}]
+        
+        return order
+
+    def get_orders(self, ticker=None, state='wait', page=1, limit=100):
+        """Mock get_orders"""
+        return [o for o in self.orders.values() if o['state'] == state]
+
+    def get_candles(self, ticker, count=200, interval="minutes/5"):
+        """Return candles from the simulation history up to the current time."""
+        if not self.strategy or not self.strategy.candles or not self.strategy.current_candle:
+            return []
+            
+        current_ts = self.strategy.current_candle.get('timestamp')
+        if not current_ts:
+            return []
+            
+        # Filter candles: timestamp <= current_ts
+        # Assuming candles are sorted by timestamp
+        # We can just iterate or slice if we knew the index.
+        # But get_candles might request a different count or interval?
+        # For RSI simulation, we assume the interval matches the simulation interval.
+        
+        # Filter
+        filtered = []
+        for c in self.strategy.candles:
+            # Try to get timestamp in order of preference: timestamp, time, candle_date_time_kst
+            c_ts = c.get('timestamp') or c.get('time') or c.get('candle_date_time_kst')
+            
+            # Ensure we are comparing same types. 
+            # current_ts is likely from current_candle['timestamp'] or 'candle_date_time_kst'
+            # If current_ts is string, c_ts should be string.
+            
+            if not c_ts or not current_ts:
+                continue
+                
+            # If types mismatch, try to convert to string
+            if type(c_ts) != type(current_ts):
+                c_ts = str(c_ts)
+                current_ts = str(current_ts)
+                
+            if c_ts <= current_ts:
+                filtered.append(c)
+            else:
+                # Since sorted, we can break early? 
+                # Be careful if not sorted. But main.py sorts them.
+                break
+                
+        # Return last 'count' candles
+        return filtered[-count:]
+
 
 class SimulationStrategy(SevenSplitStrategy):
-    def __init__(self, config: StrategyConfig, budget: float):
+    def __init__(self, config: StrategyConfig, budget: float, candles: List[Dict[str, Any]]):
         # Bypass super().__init__ to avoid DB/Exchange setup
         self.strategy_id = 9999
         self.ticker = "SIM-TEST"
         self.budget = budget
+        self.candles = candles
         self.db = MockDB()
-        self.exchange = MockExchange()
+        self.exchange = MockExchange(strategy=self)
         self.config = config
         self.lock = threading.RLock() # Lock needed for parent class methods
         self.splits: List[SplitState] = []
@@ -99,6 +237,10 @@ class SimulationStrategy(SevenSplitStrategy):
         
         # Sim specific
         self.current_candle = None
+        
+        # Logic Modules
+        self.price_logic = PriceStrategyLogic(self)
+        self.rsi_logic = RSIStrategyLogic(self)
         
         # Initialize defaults if needed (similar to SevenSplitStrategy)
         if self.config.min_price == 0.0:
@@ -127,10 +269,12 @@ class SimulationStrategy(SevenSplitStrategy):
             split.actual_buy_price = split.buy_price # Assume filled at limit
             # Convert timestamp to ISO string for Pydantic model
             # The timestamp from frontend is already in Unix seconds (UTC)
-            ts = self.current_candle['timestamp']
+            ts = self.current_candle.get('timestamp')
             if isinstance(ts, (int, float)):
                 # Frontend sends Unix timestamp in seconds (UTC)
-                # Use utcfromtimestamp to ensure UTC interpretation
+                # Upbit API sends timestamp in milliseconds
+                if ts > 10000000000: # Heuristic for milliseconds (year 2286)
+                    ts = ts / 1000.0
                 dt = datetime.utcfromtimestamp(ts)
                 split.bought_at = dt.isoformat()
             else:
@@ -159,9 +303,13 @@ class SimulationStrategy(SevenSplitStrategy):
             
             # Add to mock DB
             # Convert timestamp to datetime object for consistency
-            ts = self.current_candle['timestamp']
+            # Convert timestamp to datetime object for consistency
+            ts = self.current_candle.get('timestamp')
             if isinstance(ts, (int, float)):
                 # Frontend sends Unix timestamp in seconds (UTC)
+                # Upbit API sends timestamp in milliseconds
+                if ts > 10000000000: # Heuristic for milliseconds
+                    ts = ts / 1000.0
                 sell_datetime = datetime.utcfromtimestamp(ts)
             else:
                 sell_datetime = datetime.now()
@@ -186,8 +334,8 @@ class SimulationStrategy(SevenSplitStrategy):
             # logging.info(f"SIM: Sell filled for split {split.id} at {actual_sell_price}")
 
 
-def run_simulation(sim_config: SimulationConfig):
-    strategy = SimulationStrategy(sim_config.strategy_config, sim_config.budget)
+def run_simulation(sim_config: SimulationConfig):    # Initialize Strategy
+    strategy = SimulationStrategy(sim_config.strategy_config, sim_config.budget, sim_config.candles)
     
     candles = sim_config.candles
     start_idx = sim_config.start_index
@@ -196,11 +344,22 @@ def run_simulation(sim_config: SimulationConfig):
         return {"error": "Invalid start index"}
 
     # Initialize strategy config if needed using the start price
+    sim_logs = []
     start_price = candles[start_idx].get('close') or candles[start_idx].get('trade_price')
+    msg = f"SIM: Start Price: {start_price}, Start Index: {start_idx}/{len(candles)}"
+    logging.info(msg)
+    sim_logs.append(msg)
+    
     if strategy.config.min_price == 0.0 and start_price:
         strategy.config.min_price = start_price * 0.5 # Wide range for sim
         strategy.config.max_price = start_price * 1.5
-        logging.info(f"SIM: Initialized config with min={strategy.config.min_price}, max={strategy.config.max_price}")
+        msg = f"SIM: Initialized config with min={strategy.config.min_price}, max={strategy.config.max_price}"
+        logging.info(msg)
+        sim_logs.append(msg)
+    else:
+        msg = f"SIM: Config min={strategy.config.min_price}, max={strategy.config.max_price}, mode={strategy.config.strategy_mode}"
+        logging.info(msg)
+        sim_logs.append(msg)
 
     # Run simulation loop
     # We iterate from start_idx to the end
@@ -214,26 +373,18 @@ def run_simulation(sim_config: SimulationConfig):
         if 'time' in candle and 'timestamp' not in candle:
             candle['timestamp'] = candle['time']
             
+        # Normalize Upbit keys to standard keys
+        if 'opening_price' in candle:
+            candle['open'] = candle['opening_price']
+        if 'high_price' in candle:
+            candle['high'] = candle['high_price']
+        if 'low_price' in candle:
+            candle['low'] = candle['low_price']
+        if 'trade_price' in candle:
+            candle['close'] = candle['trade_price']
+            
         strategy.current_candle = candle
         
-        # 1. Tick with Low price to catch buy triggers (dips)
-        # We use Low because the strategy buys when price drops.
-        # If we used Close, we might miss a dip that happened during the candle.
-        
-        # IMPORTANT: We must check fills BEFORE creating new orders?
-        # Or check fills, then tick (create orders), then check fills again?
-        # Standard backtest:
-        # 1. Check if pending orders match this candle's H/L
-        # 2. Run strategy logic with Close price (to place new orders for NEXT candle)
-        
-        # Check fills first
-        # We need to iterate a copy because splits might be removed
-        # Check fills first
-        # We REMOVED the manual loop here because strategy.tick() handles it.
-        # The manual loop was bypassing the logic in strategy.tick() that updates
-        # last_buy_price when splits are removed.
-        # By relying on strategy.tick(), we ensure consistent behavior with the real bot.
-
         # Run strategy tick
         # We disable the internal _check_buy/sell calls in tick by overriding?
         # Actually SevenSplitStrategy.tick calls _check_buy_order etc.
@@ -303,5 +454,6 @@ def run_simulation(sim_config: SimulationConfig):
         "trade_count": trade_count,
         "final_balance": strategy.budget + total_profit, # Simple approx
         "splits": [s.dict() for s in strategy.splits], # Return final splits
-        "config": strategy.config.dict() # Return used config
+        "config": strategy.config.dict(), # Return used config
+        "debug_logs": sim_logs
     }

@@ -32,30 +32,39 @@ const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
         setIsEditing(true);
         const { name, value } = e.target;
 
-        // For fee_rate, keep as standard number input (small decimal)
-        if (name === 'fee_rate') {
-            setFormData(prev => ({
-                ...prev,
-                [name]: parseFloat(value)
-            }));
-            return;
-        }
+        // Fields that should be treated as floats/ints directly
+        const floatFields = [
+            'fee_rate', 'buy_rate', 'sell_rate', 'tick_interval',
+            'rsi_buy_max', 'rsi_buy_first_threshold', 'rsi_buy_next_threshold',
+            'rsi_sell_min', 'rsi_sell_first_threshold', 'rsi_sell_next_threshold',
+            'stop_loss'
+        ];
 
-        // For other fields, parse comma string
-        const numValue = parseNumber(value);
-        if (!isNaN(numValue)) {
-            setFormData(prev => ({
-                ...prev,
-                [name]: numValue
-            }));
+        const intFields = [
+            'max_trades_per_day', 'rsi_period',
+            'rsi_buy_first_amount', 'rsi_buy_next_amount',
+            'rsi_sell_first_amount', 'rsi_sell_next_amount',
+            'max_holdings'
+        ];
+
+        if (floatFields.includes(name)) {
+            setFormData(prev => ({ ...prev, [name]: parseFloat(value) }));
+        } else if (intFields.includes(name)) {
+            setFormData(prev => ({ ...prev, [name]: parseInt(value) }));
+        } else if (name === 'strategy_mode' || name === 'rsi_timeframe' || name === 'rebuy_strategy') {
+            setFormData(prev => ({ ...prev, [name]: value }));
+        } else {
+            // Comma separated number fields
+            const numValue = parseNumber(value);
+            if (!isNaN(numValue)) {
+                setFormData(prev => ({ ...prev, [name]: numValue }));
+            }
         }
     };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
         try {
-            // If running on Vite dev server (port 5173), point to backend port 8000.
-            // Otherwise (Docker/Production), use relative path (same origin).
             const API_BASE_URL = window.location.port === '5173'
                 ? `http://${window.location.hostname}:8000`
                 : '';
@@ -66,7 +75,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
                 config: configData,
                 budget: newBudget
             });
-            setIsEditing(false); // Done editing
+            setIsEditing(false);
             onUpdate();
             alert(`Configuration updated!`);
         } catch (error) {
@@ -75,12 +84,219 @@ const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
         }
     };
 
+    const renderClassicConfig = () => (
+        <>
+            <div className="input-group">
+                <label>Min Price (KRW)</label>
+                <input
+                    type="text"
+                    name="min_price"
+                    value={formatNumber(formData.min_price)}
+                    onChange={handleChange}
+                    placeholder="e.g. 50,000,000"
+                />
+            </div>
+            <div className="input-group">
+                <label>Max Price (KRW)</label>
+                <input
+                    type="text"
+                    name="max_price"
+                    value={formatNumber(formData.max_price)}
+                    onChange={handleChange}
+                    placeholder="e.g. 100,000,000"
+                />
+            </div>
+            <div className="input-group">
+                <label>Buy Rate (% price drop to buy)</label>
+                <input
+                    type="number"
+                    step="0.001"
+                    name="buy_rate"
+                    value={formData.buy_rate ?? 0.005}
+                    onChange={handleChange}
+                />
+                <small style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
+                    {((formData.buy_rate ?? 0.005) * 100).toFixed(2)}% drop triggers buy
+                </small>
+            </div>
+            <div className="input-group">
+                <label>Sell Rate (% profit to sell)</label>
+                <input
+                    type="number"
+                    step="0.001"
+                    name="sell_rate"
+                    value={formData.sell_rate ?? 0.005}
+                    onChange={handleChange}
+                />
+                <small style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
+                    {((formData.sell_rate ?? 0.005) * 100).toFixed(2)}% profit triggers sell
+                </small>
+            </div>
+            <div className="input-group">
+                <label>Rebuy Strategy</label>
+                <select
+                    name="rebuy_strategy"
+                    value={formData.rebuy_strategy || 'reset_on_clear'}
+                    onChange={handleChange}
+                    className="form-select"
+                    style={{
+                        width: '100%',
+                        padding: '0.5rem',
+                        borderRadius: '0.375rem',
+                        border: '1px solid #334155',
+                        backgroundColor: '#1e293b',
+                        color: '#e2e8f0'
+                    }}
+                >
+                    <option value="reset_on_clear">Reset & Start at Current</option>
+                    <option value="last_sell_price">Continue from Last Sell</option>
+                    <option value="last_buy_price">Continue from Last Buy</option>
+                </select>
+            </div>
+        </>
+    );
+
+    const renderRSIConfig = () => (
+        <>
+            {/* Indicator Settings */}
+            <div style={{ marginTop: '1rem', marginBottom: '0.5rem', fontWeight: 'bold', color: '#60a5fa' }}>Indicator Settings</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <div className="input-group">
+                    <label>Timeframe</label>
+                    <select
+                        name="rsi_timeframe"
+                        value={formData.rsi_timeframe || 'minutes/60'}
+                        onChange={handleChange}
+                        style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', border: '1px solid #334155', backgroundColor: '#1e293b', color: '#e2e8f0' }}
+                    >
+                        <option value="minutes/60">1 Hour</option>
+                        <option value="minutes/240">4 Hours</option>
+                        <option value="days">1 Day</option>
+                    </select>
+                </div>
+                <div className="input-group">
+                    <label>Period</label>
+                    <select
+                        name="rsi_period"
+                        value={formData.rsi_period || 14}
+                        onChange={handleChange}
+                        style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', border: '1px solid #334155', backgroundColor: '#1e293b', color: '#e2e8f0' }}
+                    >
+                        <option value={14}>14</option>
+                        <option value={7}>7</option>
+                        <option value={4}>4</option>
+                    </select>
+                </div>
+            </div>
+
+            {/* Buying Conditions */}
+            <div style={{ marginTop: '1rem', marginBottom: '0.5rem', fontWeight: 'bold', color: '#4ade80' }}>Buying (Accumulation)</div>
+            <div className="input-group">
+                <label>Max Buy RSI (Underground)</label>
+                <input type="number" name="rsi_buy_max" value={formData.rsi_buy_max ?? 30} onChange={handleChange} />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <div className="input-group">
+                    <label>First Rebound (+)</label>
+                    <input type="number" name="rsi_buy_first_threshold" value={formData.rsi_buy_first_threshold ?? 5} onChange={handleChange} />
+                </div>
+                <div className="input-group">
+                    <label>Amount (Splits)</label>
+                    <input type="number" name="rsi_buy_first_amount" value={formData.rsi_buy_first_amount ?? 1} onChange={handleChange} />
+                </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <div className="input-group">
+                    <label>Next Step (+)</label>
+                    <input type="number" name="rsi_buy_next_threshold" value={formData.rsi_buy_next_threshold ?? 1} onChange={handleChange} />
+                </div>
+                <div className="input-group">
+                    <label>Amount (Splits)</label>
+                    <input type="number" name="rsi_buy_next_amount" value={formData.rsi_buy_next_amount ?? 1} onChange={handleChange} />
+                </div>
+            </div>
+
+            {/* Selling Conditions */}
+            <div style={{ marginTop: '1rem', marginBottom: '0.5rem', fontWeight: 'bold', color: '#f87171' }}>Selling (Distribution)</div>
+            <div className="input-group">
+                <label>Min Sell RSI (Overbought)</label>
+                <input type="number" name="rsi_sell_min" value={formData.rsi_sell_min ?? 70} onChange={handleChange} />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <div className="input-group">
+                    <label>First Drop (-)</label>
+                    <input type="number" name="rsi_sell_first_threshold" value={formData.rsi_sell_first_threshold ?? 5} onChange={handleChange} />
+                </div>
+                <div className="input-group">
+                    <label>Amount (Splits)</label>
+                    <input type="number" name="rsi_sell_first_amount" value={formData.rsi_sell_first_amount ?? 1} onChange={handleChange} />
+                </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <div className="input-group">
+                    <label>Next Step (-)</label>
+                    <input type="number" name="rsi_sell_next_threshold" value={formData.rsi_sell_next_threshold ?? 1} onChange={handleChange} />
+                </div>
+                <div className="input-group">
+                    <label>Amount (Splits)</label>
+                    <input type="number" name="rsi_sell_next_amount" value={formData.rsi_sell_next_amount ?? 1} onChange={handleChange} />
+                </div>
+            </div>
+
+            {/* Risk Management */}
+            <div style={{ marginTop: '1rem', marginBottom: '0.5rem', fontWeight: 'bold', color: '#fbbf24' }}>Risk Management</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <div className="input-group">
+                    <label>Min Profit (%)</label>
+                    <input type="number" step="0.1" name="sell_rate" value={((formData.sell_rate ?? 0.005) * 100).toFixed(1)}
+                        onChange={(e) => handleChange({ target: { name: 'sell_rate', value: parseFloat(e.target.value) / 100 } })}
+                    />
+                </div>
+                <div className="input-group">
+                    <label>Stop Loss (%)</label>
+                    <input type="number" step="0.1" name="stop_loss" value={formData.stop_loss ?? -10} onChange={handleChange} />
+                </div>
+            </div>
+            <div className="input-group">
+                <label>Max Holdings (Splits)</label>
+                <input type="number" name="max_holdings" value={formData.max_holdings ?? 20} onChange={handleChange} />
+            </div>
+        </>
+    );
+
     return (
         <div className="card">
             <div className="card-header">
                 <span className="card-title">Strategy Configuration</span>
             </div>
             <form onSubmit={handleSubmit}>
+                {/* Strategy Mode Toggle */}
+                <div style={{ marginBottom: '1.5rem', display: 'flex', gap: '1rem', padding: '0.5rem', background: '#1e293b', borderRadius: '0.5rem' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer', color: formData.strategy_mode === 'PRICE' ? '#60a5fa' : '#94a3b8' }}>
+                        <input
+                            type="radio"
+                            name="strategy_mode"
+                            value="PRICE"
+                            checked={formData.strategy_mode !== 'RSI'}
+                            onChange={handleChange}
+                        />
+                        Classic (Price Grid)
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer', color: formData.strategy_mode === 'RSI' ? '#60a5fa' : '#94a3b8' }}>
+                        <input
+                            type="radio"
+                            name="strategy_mode"
+                            value="RSI"
+                            checked={formData.strategy_mode === 'RSI'}
+                            onChange={handleChange}
+                        />
+                        RSI Reversal
+                    </label>
+                </div>
+
+                {/* Common Settings */}
                 <div className="input-group">
                     <label>Total Budget (KRW)</label>
                     <input
@@ -101,160 +317,47 @@ const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
                         placeholder="e.g. 100,000"
                     />
                 </div>
-                <div className="input-group">
-                    <label>Min Price (KRW)</label>
-                    <input
-                        type="text"
-                        name="min_price"
-                        value={formatNumber(formData.min_price)}
-                        onChange={handleChange}
-                        placeholder="e.g. 50,000,000"
-                    />
-                </div>
-                <div className="input-group">
-                    <label>Max Price (KRW - Reference Only)</label>
-                    <input
-                        type="text"
-                        name="max_price"
-                        value={formatNumber(formData.max_price)}
-                        onChange={handleChange}
-                        placeholder="e.g. 100,000,000"
-                    />
-                </div>
-                <div className="input-group">
-                    <label>Buy Rate (% price drop to buy)</label>
-                    <input
-                        type="number"
-                        step="0.001"
-                        name="buy_rate"
-                        value={formData.buy_rate ?? 0.005}
-                        onChange={(e) => {
-                            setIsEditing(true);
-                            setFormData(prev => ({
-                                ...prev,
-                                buy_rate: parseFloat(e.target.value)
-                            }));
-                        }}
-                        placeholder="e.g. 0.005 = 0.5%"
-                    />
-                    <small style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
-                        {((formData.buy_rate ?? 0.005) * 100).toFixed(2)}% price drop triggers next buy
-                    </small>
+
+                {/* Conditional Settings */}
+                {formData.strategy_mode === 'RSI' ? renderRSIConfig() : renderClassicConfig()}
+
+                {/* Common Footer Settings */}
+                <hr style={{ borderColor: '#334155', margin: '1.5rem 0' }} />
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                    <div className="input-group">
+                        <label>Tick Interval (s)</label>
+                        <input
+                            type="number"
+                            step="0.1"
+                            name="tick_interval"
+                            value={formData.tick_interval ?? 1.0}
+                            onChange={handleChange}
+                        />
+                    </div>
+                    <div className="input-group">
+                        <label>Max Trades/Day</label>
+                        <input
+                            type="number"
+                            name="max_trades_per_day"
+                            value={formData.max_trades_per_day ?? 100}
+                            onChange={handleChange}
+                        />
+                    </div>
+                    <div className="input-group" style={{ gridColumn: 'span 2' }}>
+                        <label>Fee Rate</label>
+                        <input
+                            type="number"
+                            step="0.0001"
+                            name="fee_rate"
+                            value={formData.fee_rate || 0.0005}
+                            onChange={handleChange}
+                            placeholder="0.0005"
+                        />
+                    </div>
                 </div>
 
-                <div className="input-group">
-                    <label>Sell Rate (% profit to sell)</label>
-                    <input
-                        type="number"
-                        step="0.001"
-                        name="sell_rate"
-                        value={formData.sell_rate ?? 0.005}
-                        onChange={(e) => {
-                            setIsEditing(true);
-                            setFormData(prev => ({
-                                ...prev,
-                                sell_rate: parseFloat(e.target.value)
-                            }));
-                        }}
-                        placeholder="e.g. 0.005 = 0.5%"
-                    />
-                    <small style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
-                        {((formData.sell_rate ?? 0.005) * 100).toFixed(2)}% profit triggers sell
-                    </small>
-                </div>
-
-                <div className="input-group">
-                    <label>Tick Interval (seconds)</label>
-                    <input
-                        type="number"
-                        step="0.1"
-                        min="0.1"
-                        name="tick_interval"
-                        value={formData.tick_interval ?? 1.0}
-                        onChange={(e) => {
-                            setIsEditing(true);
-                            setFormData(prev => ({
-                                ...prev,
-                                tick_interval: parseFloat(e.target.value)
-                            }));
-                        }}
-                        placeholder="e.g. 1.0"
-                    />
-                    <small style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
-                        How often the bot checks prices (default: 1 second)
-                    </small>
-                </div>
-
-                <div className="input-group">
-                    <label>Exchange Fee Rate</label>
-                    <input
-                        type="number"
-                        step="0.0001"
-                        name="fee_rate"
-                        value={formData.fee_rate || 0.0005}
-                        onChange={handleChange}
-                        placeholder="e.g. 0.0005 = 0.05%"
-                    />
-                    <small style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
-                        {((formData.fee_rate || 0.0005) * 100).toFixed(3)}% per trade
-                    </small>
-                </div>
-
-                <div className="input-group">
-                    <label>Max Trades Per Day (24h)</label>
-                    <input
-                        type="number"
-                        step="1"
-                        min="0"
-                        name="max_trades_per_day"
-                        value={formData.max_trades_per_day ?? 100}
-                        onChange={(e) => {
-                            setIsEditing(true);
-                            setFormData(prev => ({
-                                ...prev,
-                                max_trades_per_day: parseInt(e.target.value)
-                            }));
-                        }}
-                        placeholder="e.g. 100"
-                    />
-                    <small style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
-                        Max number of trades allowed in 24 hours (0 = unlimited)
-                    </small>
-                </div>
-
-                <div className="input-group">
-                    <label>Rebuy Strategy (when all positions cleared)</label>
-                    <select
-                        name="rebuy_strategy"
-                        value={formData.rebuy_strategy || 'reset_on_clear'}
-                        onChange={(e) => {
-                            setIsEditing(true);
-                            setFormData(prev => ({
-                                ...prev,
-                                rebuy_strategy: e.target.value
-                            }));
-                        }}
-                        style={{
-                            padding: '0.5rem',
-                            borderRadius: '0.375rem',
-                            border: '1px solid #334155',
-                            backgroundColor: '#1e293b',
-                            color: '#e2e8f0',
-                            fontSize: '0.875rem'
-                        }}
-                    >
-                        <option value="reset_on_clear">Reset & Start at Current Price</option>
-                        <option value="last_sell_price">Continue from Last Sell Price</option>
-                        <option value="last_buy_price">Continue from Last Buy Price (Lowest)</option>
-                    </select>
-                    <small style={{ color: '#94a3b8', fontSize: '0.75rem', marginTop: '0.25rem', display: 'block' }}>
-                        {formData.rebuy_strategy === 'reset_on_clear' && '✓ Catches rising trends - buys at current price'}
-                        {formData.rebuy_strategy === 'last_sell_price' && '✓ Balanced - waits for drop from last sell price'}
-                        {formData.rebuy_strategy === 'last_buy_price' && '⚠ Conservative - only buys below previous lowest'}
-                    </small>
-                </div>
-
-                <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>
+                <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '1rem' }}>
                     Save Configuration
                 </button>
             </form>

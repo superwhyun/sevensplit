@@ -162,8 +162,15 @@ const Dashboard = () => {
         try {
             const response = await axios.get(`${API_BASE_URL}/strategies`);
             setStrategies(response.data);
-            if (response.data.length > 0 && !selectedStrategyId) {
-                setSelectedStrategyId(response.data[0].id);
+
+            // Try to restore selection from localStorage
+            const savedId = localStorage.getItem('selectedStrategyId');
+            if (response.data.length > 0) {
+                if (savedId && response.data.find(s => s.id === parseInt(savedId))) {
+                    setSelectedStrategyId(parseInt(savedId));
+                } else if (!selectedStrategyId) {
+                    setSelectedStrategyId(response.data[0].id);
+                }
             }
         } catch (error) {
             console.error('Error fetching strategies:', error);
@@ -285,9 +292,10 @@ const Dashboard = () => {
         };
     }, []);
 
-    // When strategy changes, fetch the new status
+    // When strategy changes, fetch the new status and save to localStorage
     useEffect(() => {
         if (selectedStrategyId) {
+            localStorage.setItem('selectedStrategyId', selectedStrategyId);
             fetchStatus();
         }
     }, [selectedStrategyId]);
@@ -377,6 +385,39 @@ const Dashboard = () => {
                 console.error("Failed to rename strategy:", error);
                 alert("Failed to rename strategy");
             }
+        }
+    };
+
+    const handleChartClick = async (time) => {
+        if (!isSimulating) return;
+
+        console.log("[Dashboard] handleChartClick received time:", time);
+
+        // time is in seconds (UNIX timestamp)
+        // Convert to ISO string for backend
+        const date = new Date(time * 1000);
+        const startTime = date.toISOString();
+        console.log("[Dashboard] Converted to startTime:", startTime);
+
+        try {
+            // Show loading state or toast?
+            // For now, let's just run it.
+            const response = await axios.post(`${API_BASE_URL}/strategies/${selectedStrategyId}/simulate`, {
+                start_time: startTime
+            });
+
+            if (response.data.debug_logs) {
+                console.log("Simulation Logs:", response.data.debug_logs.join('\n'));
+            }
+
+            if (response.data.trades && response.data.trades.length === 0) {
+                alert(`Simulation finished with 0 trades.\nCheck console for logs.\n\nLogs:\n${response.data.debug_logs ? response.data.debug_logs.join('\n') : 'No logs'}`);
+            }
+
+            setSimResult(response.data);
+        } catch (error) {
+            console.error("Simulation failed:", error);
+            alert("Simulation failed. Check console for details.");
         }
     };
 
@@ -620,6 +661,49 @@ const Dashboard = () => {
                                 <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#3b82f6' }}>
                                     ₩{status.current_price?.toLocaleString()}
                                 </div>
+                                <div style={{
+                                    marginTop: '0.5rem',
+                                    paddingTop: '0.5rem',
+                                    borderTop: '1px solid rgba(59, 130, 246, 0.2)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    fontSize: '0.85rem'
+                                }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', width: '100%' }}>
+                                        {/* Hourly RSI */}
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem' }}>
+                                                <span style={{ color: '#94a3b8' }}>RSI(14)/H</span>
+                                                <span style={{ fontWeight: 'bold', color: status.rsi >= 70 ? '#ef4444' : status.rsi <= 30 ? '#10b981' : '#f59e0b' }}>
+                                                    {status.rsi !== undefined ? Math.round(status.rsi) : '-'}
+                                                </span>
+                                            </div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem' }}>
+                                                <span style={{ color: '#94a3b8' }}>RSI(4)/H</span>
+                                                <span style={{ fontWeight: 'bold', color: status.rsi_short >= 70 ? '#ef4444' : status.rsi_short <= 30 ? '#10b981' : '#f59e0b' }}>
+                                                    {status.rsi_short !== undefined ? Math.round(status.rsi_short) : '-'}
+                                                </span>
+                                            </div>
+                                        </div>
+
+                                        {/* Daily RSI */}
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem', borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: '0.5rem' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem' }}>
+                                                <span style={{ color: '#94a3b8' }}>RSI(14)/D</span>
+                                                <span style={{ fontWeight: 'bold', color: status.rsi_daily >= 70 ? '#ef4444' : status.rsi_daily <= 30 ? '#10b981' : '#f59e0b' }}>
+                                                    {status.rsi_daily !== undefined ? Math.round(status.rsi_daily) : '-'}
+                                                </span>
+                                            </div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem' }}>
+                                                <span style={{ color: '#94a3b8' }}>RSI(4)/D</span>
+                                                <span style={{ fontWeight: 'bold', color: status.rsi_daily_short >= 70 ? '#ef4444' : status.rsi_daily_short <= 30 ? '#10b981' : '#f59e0b' }}>
+                                                    {status.rsi_daily_short !== undefined ? Math.round(status.rsi_daily_short) : '-'}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                             <div style={{
                                 padding: '1rem',
@@ -700,88 +784,164 @@ const Dashboard = () => {
                         {/* Right Content: Controls, Chart, Tables */}
                         <main className="dashboard-main">
                             {/* Control Panel */}
+                            {/* Control Panel */}
                             <div style={{
                                 padding: '1rem',
                                 backgroundColor: 'rgba(30, 41, 59, 0.5)',
                                 borderRadius: '0.5rem',
                                 border: '1px solid #334155'
                             }}>
-                                <div className="controls-container">
-                                    {/* Left: Bot Controls */}
-                                    <div className="bot-controls">
-                                        {!status.is_running ? (
-                                            <button className="btn btn-primary" onClick={handleStart} style={{
-                                                padding: '0.65rem 1.75rem',
-                                                fontSize: '0.95rem'
-                                            }}>
-                                                ▶ Start Bot
-                                            </button>
-                                        ) : (
-                                            <button className="btn btn-danger" onClick={handleStop} style={{
-                                                padding: '0.65rem 1.75rem',
-                                                fontSize: '0.95rem'
-                                            }}>
-                                                ⏸ Stop Bot
-                                            </button>
-                                        )}
-                                        <button className="btn btn-secondary" onClick={handleReset} style={{
-                                            padding: '0.65rem 1.75rem',
-                                            fontSize: '0.95rem'
-                                        }}>
-                                            🔄 Reset
-                                        </button>
-                                        <button className="btn btn-secondary" onClick={() => setIsSimulating(!isSimulating)} style={{
-                                            padding: '0.65rem 1.75rem',
+                                <div className="controls-container" style={{
+                                    display: 'grid',
+                                    gridTemplateColumns: portfolio.mode === "MOCK" ? 'repeat(6, 1fr)' : 'repeat(5, 1fr)',
+                                    gap: '0.75rem',
+                                    alignItems: 'stretch'
+                                }}>
+                                    {/* 1. Start/Stop Bot */}
+                                    {!status.is_running ? (
+                                        <button className="btn btn-primary" onClick={handleStart} style={{
+                                            padding: '0',
+                                            height: '60px',
                                             fontSize: '0.95rem',
-                                            backgroundColor: isSimulating ? '#eab308' : '#6366f1',
-                                            borderColor: isSimulating ? '#eab308' : '#6366f1',
-                                            color: 'white'
+                                            width: '100%',
+                                            display: 'flex',
+                                            flexDirection: 'column',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            gap: '0.25rem'
                                         }}>
-                                            {isSimulating ? '❌ Exit Sim' : '🧪 Simulate'}
+                                            <span style={{ fontSize: '1.2rem' }}>▶</span>
+                                            <span>Start Bot</span>
                                         </button>
-                                        <button className="btn btn-secondary" onClick={handleExport} style={{
-                                            padding: '0.65rem 1.75rem',
+                                    ) : (
+                                        <button className="btn btn-danger" onClick={handleStop} style={{
+                                            padding: '0',
+                                            height: '60px',
                                             fontSize: '0.95rem',
-                                            backgroundColor: '#0f766e',
-                                            borderColor: '#0f766e'
+                                            width: '100%',
+                                            display: 'flex',
+                                            flexDirection: 'column',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            gap: '0.25rem'
                                         }}>
-                                            ⬇ Export CSV
+                                            <span style={{ fontSize: '1.2rem' }}>⏸</span>
+                                            <span>Stop Bot</span>
                                         </button>
-                                    </div>
+                                    )}
 
-                                    {/* Right: Delete & Exchange Link */}
-                                    <div className="action-controls">
-                                        <button onClick={handleDeleteStrategy} style={{
-                                            padding: '0.65rem 1rem',
-                                            fontSize: '0.85rem',
-                                            backgroundColor: 'transparent',
-                                            border: '1px solid #ef4444',
-                                            color: '#ef4444',
-                                            borderRadius: '0.375rem',
-                                            cursor: 'pointer'
-                                        }}>
-                                            🗑 Delete Strategy
-                                        </button>
+                                    {/* 2. Reset */}
+                                    <button className="btn btn-secondary" onClick={handleReset} style={{
+                                        padding: '0',
+                                        height: '60px',
+                                        fontSize: '0.95rem',
+                                        width: '100%',
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        gap: '0.25rem',
+                                        backgroundColor: '#f1f5f9',
+                                        color: '#334155',
+                                        border: '1px solid #cbd5e1'
+                                    }}>
+                                        <span style={{ fontSize: '1.2rem' }}>🔄</span>
+                                        <span>Reset</span>
+                                    </button>
 
-                                        {portfolio.mode === "MOCK" && (
-                                            <a
-                                                href={`http://${window.location.hostname}:5001`}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                style={{
-                                                    padding: '0.6rem 1.25rem',
-                                                    backgroundColor: '#8b5cf6',
-                                                    color: 'white',
-                                                    borderRadius: '0.375rem',
-                                                    textDecoration: 'none',
-                                                    fontWeight: '600',
-                                                    fontSize: '0.9rem'
-                                                }}
-                                            >
-                                                🏦 Exchange UI
-                                            </a>
-                                        )}
-                                    </div>
+                                    {/* 3. Simulate */}
+                                    <button className="btn btn-secondary" onClick={() => setIsSimulating(!isSimulating)} style={{
+                                        padding: '0',
+                                        height: '60px',
+                                        fontSize: '0.95rem',
+                                        width: '100%',
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        gap: '0.25rem',
+                                        backgroundColor: isSimulating ? '#eab308' : '#6366f1',
+                                        borderColor: isSimulating ? '#eab308' : '#6366f1',
+                                        color: 'white'
+                                    }}>
+                                        <span style={{ fontSize: '1.2rem' }}>{isSimulating ? '❌' : '🧪'}</span>
+                                        <span>{isSimulating ? 'Exit Sim' : 'Simulate'}</span>
+                                    </button>
+
+                                    {/* 4. Export CSV */}
+                                    <button className="btn btn-secondary" onClick={handleExport} style={{
+                                        padding: '0',
+                                        height: '60px',
+                                        fontSize: '0.95rem',
+                                        width: '100%',
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        gap: '0.25rem',
+                                        backgroundColor: '#0f766e',
+                                        borderColor: '#0f766e',
+                                        color: 'white'
+                                    }}>
+                                        <span style={{ fontSize: '1.2rem' }}>⬇</span>
+                                        <span>Export CSV</span>
+                                    </button>
+
+                                    {/* 5. Delete Strategy (Moved to end if not mock, or before exchange UI? Request said Delete at the END) */}
+                                    {/* Wait, user said "Delete to the very end". So Exchange UI should be before Delete? */}
+                                    {/* Let's check the image. The image shows: Stop | Reset | Simulate | Export | Delete | Exchange UI */}
+                                    {/* BUT the text request says: "Delete를 제일 끝으로 보내." (Send Delete to the very end) */}
+                                    {/* So the order should be: ... | Exchange UI | Delete */}
+
+                                    {/* 5. Exchange UI (Mock Only) */}
+                                    {portfolio.mode === "MOCK" && (
+                                        <a
+                                            href={`http://${window.location.hostname}:5001`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            style={{
+                                                padding: '0',
+                                                height: '60px',
+                                                fontSize: '0.9rem',
+                                                width: '100%',
+                                                display: 'flex',
+                                                flexDirection: 'column',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: '0.25rem',
+                                                backgroundColor: '#8b5cf6',
+                                                color: 'white',
+                                                borderRadius: '0.375rem',
+                                                textDecoration: 'none',
+                                                fontWeight: '600',
+                                                border: '1px solid #7c3aed'
+                                            }}
+                                        >
+                                            <span style={{ fontSize: '1.2rem' }}>🏦</span>
+                                            <span>Exchange UI</span>
+                                        </a>
+                                    )}
+
+                                    {/* 6. Delete Strategy (Always Last) */}
+                                    <button onClick={handleDeleteStrategy} style={{
+                                        padding: '0',
+                                        height: '60px',
+                                        fontSize: '0.9rem',
+                                        width: '100%',
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        gap: '0.25rem',
+                                        backgroundColor: 'transparent',
+                                        border: '1px solid #ef4444',
+                                        color: '#ef4444',
+                                        borderRadius: '0.375rem',
+                                        cursor: 'pointer'
+                                    }}>
+                                        <span style={{ fontSize: '1.2rem' }}>🗑</span>
+                                        <span>Delete</span>
+                                    </button>
                                 </div>
                             </div>
 
@@ -798,6 +958,7 @@ const Dashboard = () => {
                                         setSimResult(result);
                                         setIsSimulating(false);
                                     }}
+                                    onChartClick={handleChartClick}
                                 />
                             </div>
 

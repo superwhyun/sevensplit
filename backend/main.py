@@ -16,6 +16,7 @@ import io
 import csv
 from typing import Dict, Any, List, Optional
 from simulation import run_simulation, SimulationConfig
+from datetime import datetime, timedelta, timezone
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -433,16 +434,10 @@ def get_accounts():
         raise HTTPException(status_code=500, detail="Failed to fetch accounts")
 
 @app.get("/candles")
-def get_candles(market: str, count: int = 200):
-    """Proxy endpoint for fetching candles"""
+def get_candles(market: str, count: int = 200, interval: str = "minutes/5"):
     try:
-        if hasattr(exchange, "get_candles"):
-            return exchange.get_candles(market, count)
-        else:
-            # Fallback for MockExchange if it doesn't implement get_candles
-            # But we should implement it there too if needed.
-            # For now, just return empty list or error
-            return []
+        candles = exchange.get_candles(market, count, interval)
+        return candles
     except Exception as e:
         logging.error(f"Failed to fetch candles: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch candles")
@@ -512,6 +507,103 @@ def update_strategy_name(strategy_id: int, req: UpdateNameRequest):
 @app.post("/simulate")
 def simulate_strategy(sim_config: SimulationConfig):
     """Run a simulation based on provided config and candles"""
+    try:
+        result = run_simulation(sim_config)
+        return result
+    except Exception as e:
+        logging.error(f"Simulation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class SimulationRequest(BaseModel):
+    start_time: str # ISO format
+
+@app.post("/strategies/{strategy_id}/simulate")
+def simulate_strategy_from_time(strategy_id: int, req: SimulationRequest):
+    """Run simulation for a specific strategy starting from a given time"""
+    logging.info(f"Received simulation request for strategy {strategy_id} from {req.start_time}")
+    
+    if strategy_id not in strategies:
+        # Try to load from DB if not in memory (though it should be)
+        s_rec = db.get_strategy(strategy_id)
+        if not s_rec:
+            logging.error(f"Strategy {strategy_id} not found in DB")
+            raise HTTPException(status_code=404, detail="Strategy not found")
+        # Create a temp config from DB record
+        config = StrategyConfig(
+            buy_rate=0.01, # Default
+            sell_rate=0.01 # Default
+        )
+        ticker = s_rec.ticker
+        budget = s_rec.budget
+    else:
+        strategy = strategies[strategy_id]
+        config = strategy.config
+        ticker = strategy.ticker
+        budget = strategy.budget
+
+    # Fetch candles
+    # Determine interval based on strategy mode
+    interval = "days" if config.strategy_mode == "RSI" else "minutes/5"
+    
+    try:
+        logging.info(f"Fetching candles for {ticker} (Mode: {config.strategy_mode}, Interval: {interval})")
+        candles = exchange.get_candles(ticker, count=200, interval=interval)
+        if not candles:
+             logging.error("No candles returned from exchange")
+             raise HTTPException(status_code=500, detail="Failed to fetch candles")
+        logging.info(f"Fetched {len(candles)} candles")
+    except Exception as e:
+        logging.error(f"Error fetching candles: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching candles: {str(e)}")
+    
+    # Sort candles by time
+    candles.sort(key=lambda x: x['candle_date_time_kst'])
+    
+    # Find start index
+    start_index = -1
+    try:
+        # start_time is UTC ISO string from frontend (e.g. 2023-10-27T00:00:00.000Z)
+        start_dt = datetime.fromisoformat(req.start_time.replace('Z', '+00:00'))
+        logging.info(f"Parsed start time (UTC): {start_dt}")
+        
+        # KST Timezone
+        kst_tz = timezone(timedelta(hours=9))
+        
+        for i, candle in enumerate(candles):
+            # candle_date_time_kst is ISO string (e.g. 2023-10-27T09:00:00) - Naive KST
+            c_dt_naive = datetime.fromisoformat(candle['candle_date_time_kst'])
+            # Make it aware (KST)
+            c_dt = c_dt_naive.replace(tzinfo=kst_tz)
+            
+            # Compare
+            if interval == "days":
+                # Compare dates (local date in KST vs local date of start_time in KST?)
+                # start_dt is UTC. Convert to KST to compare "days" correctly.
+                start_dt_kst = start_dt.astimezone(kst_tz)
+                if c_dt.date() >= start_dt_kst.date():
+                    start_index = i
+                    break
+            else:
+                # Compare full datetime
+                if c_dt >= start_dt:
+                    start_index = i
+                    break
+        logging.info(f"Found start index: {start_index}")
+    except Exception as e:
+        logging.error(f"Error finding start index: {e}")
+        raise HTTPException(status_code=500, detail=f"Error processing time: {str(e)}")
+            
+    if start_index == -1:
+        start_index = 0
+
+    sim_config = SimulationConfig(
+        strategy_config=config,
+        candles=candles,
+        start_index=start_index,
+        ticker=ticker,
+        budget=budget
+    )
+
     try:
         result = run_simulation(sim_config)
         return result

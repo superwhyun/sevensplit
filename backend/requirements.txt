@@ -1,8 +1,9 @@
 fastapi
 uvicorn
-pydantic
-python-dotenv
 pyupbit
-pandas
-requests
+python-dotenv
+fastapi
+uvicorn
+websockets
+ts
 sqlalchemy
