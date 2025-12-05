@@ -15,11 +15,41 @@ class RSIStrategyLogic:
         self.current_rsi_short = None
         self.current_rsi_daily = None
         self.current_rsi_daily_short = None
+        self.current_rsi_daily_short = None
         self.last_rsi_update = 0
+        self.last_tick_hour = -1
+
+    def _get_current_hour(self):
+        """Get current hour from simulation candle or system time"""
+        # Check if running in simulation (SimulationStrategy has current_candle)
+        if hasattr(self.strategy, 'current_candle') and self.strategy.current_candle:
+            ts = self.strategy.current_candle.get('timestamp')
+            if ts:
+                try:
+                    if isinstance(ts, (int, float)):
+                        # Unix timestamp
+                        if ts > 10000000000: # Milliseconds
+                            ts = ts / 1000.0
+                        return datetime.fromtimestamp(ts).hour
+                    elif isinstance(ts, str):
+                        # ISO string
+                        return datetime.fromisoformat(ts.replace('Z', '+00:00')).hour
+                except Exception as e:
+                    logging.error(f"Error parsing simulation time: {e}")
+        
+        # Default to system time (Real mode)
+        return datetime.now().hour
 
     def tick(self, current_price: float, open_order_uuids: set):
         """RSI Daily Delta Strategy Logic"""
         self.strategy._manage_orders(open_order_uuids)
+        
+        # Throttle to once per hour
+        current_hour = self._get_current_hour()
+        if current_hour == self.last_tick_hour:
+            return
+            
+        self.last_tick_hour = current_hour
         
         if self.current_rsi is None or self.prev_rsi is None:
             return
