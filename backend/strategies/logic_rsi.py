@@ -158,10 +158,11 @@ class RSIStrategyLogic:
             
             if rsi_drop >= self.strategy.config.rsi_sell_first_threshold:
                 logging.info(f"RSI Sell Signal (Daily Close): Prev RSI {self.prev_rsi:.2f} < DayBefore {self.prev_prev_rsi:.2f} (Drop -{rsi_drop:.2f})")
-                sell_amount_splits = self.strategy.config.rsi_sell_first_amount
+                # We don't set fixed amount here anymore, we calculate based on % later
+                sell_amount_splits = -1 # Flag to proceed
 
             # Execute Sell
-            if sell_amount_splits > 0:
+            if sell_amount_splits != 0:
                 candidates = [s for s in self.strategy.splits if s.status in ["BUY_FILLED", "PENDING_SELL"]]
                 
                 # Calculate profit for each and store as tuple (split, profit_rate)
@@ -174,6 +175,24 @@ class RSIStrategyLogic:
                 min_profit = self.strategy.config.sell_rate 
                 candidates_with_profit = [item for item in candidates_with_profit if item[1] >= min_profit]
                 
+                # Calculate Sell Amount based on Percentage
+                # rsi_sell_first_amount is now treated as Percentage (0-100)
+                sell_percent = self.strategy.config.rsi_sell_first_amount
+                total_candidates = len(candidates_with_profit)
+                
+                if total_candidates > 0 and sell_percent > 0:
+                    # Calculate count: e.g. 10 items * 50% = 5 items
+                    count = int(total_candidates * (sell_percent / 100.0))
+                    # Ensure at least 1 if percent > 0 (unless count becomes 0 due to very small percent?)
+                    # Let's say 1 item * 50% = 0.5 -> int(0) -> 0. Should we sell 1?
+                    # Usually yes, if user wants to sell, we sell at least 1.
+                    if count == 0 and sell_percent > 0:
+                        count = 1
+                    
+                    sell_amount_splits = count
+                else:
+                    sell_amount_splits = 0
+
                 # Sort by Profit Descending
                 candidates_with_profit.sort(key=lambda item: item[1], reverse=True)
                 

@@ -176,6 +176,9 @@ const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
 
             {/* Buying Conditions */}
             <div style={{ marginTop: '1rem', marginBottom: '0.5rem', fontWeight: 'bold', color: '#4ade80' }}>Buying (Accumulation)</div>
+            <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginBottom: '0.75rem' }}>
+                * Executed once daily at 9:00 AM KST based on confirmed daily close.
+            </div>
             <div className="input-group">
                 <label>Max Buy RSI (Underground)</label>
                 <input type="number" name="rsi_buy_max" value={formData.rsi_buy_max ?? 30} onChange={handleChange} />
@@ -183,22 +186,12 @@ const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
                 <div className="input-group">
-                    <label>First Rebound (+)</label>
+                    <label>Rebound Threshold (+)</label>
                     <input type="number" name="rsi_buy_first_threshold" value={formData.rsi_buy_first_threshold ?? 5} onChange={handleChange} />
                 </div>
                 <div className="input-group">
-                    <label>Amount (Splits)</label>
+                    <label>Buy Amount (Splits)</label>
                     <input type="number" name="rsi_buy_first_amount" value={formData.rsi_buy_first_amount ?? 1} onChange={handleChange} />
-                </div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                <div className="input-group">
-                    <label>Next Step (+)</label>
-                    <input type="number" name="rsi_buy_next_threshold" value={formData.rsi_buy_next_threshold ?? 1} onChange={handleChange} />
-                </div>
-                <div className="input-group">
-                    <label>Amount (Splits)</label>
-                    <input type="number" name="rsi_buy_next_amount" value={formData.rsi_buy_next_amount ?? 1} onChange={handleChange} />
                 </div>
             </div>
 
@@ -211,22 +204,20 @@ const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
                 <div className="input-group">
-                    <label>First Drop (-)</label>
+                    <label>Drop Threshold (-)</label>
                     <input type="number" name="rsi_sell_first_threshold" value={formData.rsi_sell_first_threshold ?? 5} onChange={handleChange} />
                 </div>
                 <div className="input-group">
-                    <label>Amount (Splits)</label>
-                    <input type="number" name="rsi_sell_first_amount" value={formData.rsi_sell_first_amount ?? 1} onChange={handleChange} />
-                </div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                <div className="input-group">
-                    <label>Next Step (-)</label>
-                    <input type="number" name="rsi_sell_next_threshold" value={formData.rsi_sell_next_threshold ?? 1} onChange={handleChange} />
-                </div>
-                <div className="input-group">
-                    <label>Amount (Splits)</label>
-                    <input type="number" name="rsi_sell_next_amount" value={formData.rsi_sell_next_amount ?? 1} onChange={handleChange} />
+                    <label>Sell Amount (%)</label>
+                    <input
+                        type="number"
+                        name="rsi_sell_first_amount"
+                        value={formData.rsi_sell_first_amount ?? 100}
+                        onChange={handleChange}
+                        min="0"
+                        max="100"
+                        placeholder="100"
+                    />
                 </div>
             </div>
 
