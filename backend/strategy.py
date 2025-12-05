@@ -431,36 +431,48 @@ class SevenSplitStrategy(BaseStrategy):
             # Update Daily RSI once per day after 9 AM KST
             # We do this to get the confirmed daily close RSI.
             KST = timezone(timedelta(hours=9))
-            now_utc = datetime.now(timezone.utc)
-            now_kst = now_utc.astimezone(KST)
             
-            if now_kst.hour >= 9:
-                current_date_str = now_kst.strftime("%Y-%m-%d")
-                if self.rsi_logic.last_tick_date != current_date_str:
-                    # We use last_tick_date from rsi_logic to track if we updated/ticked today
-                    # But calculate_rsi is separate. Let's use a separate tracker or reuse logic.
-                    # Actually, rsi_logic.tick handles the trading logic frequency.
-                    # Here we handle the DATA UPDATE frequency.
-                    
-                    # Let's track update date separately in strategy or rsi_logic
-                    # rsi_logic has last_rsi_update (timestamp). Let's use a date string tracker on strategy or check timestamp.
-                    
-                    # Simple check: if last update was yesterday (or before 9am today), update.
-                    # But easier: just check date string.
-                    
-                    last_update_dt = datetime.fromtimestamp(self.rsi_logic.last_rsi_update, KST) if self.rsi_logic.last_rsi_update > 0 else None
-                    
-                    needs_update = False
-                    if not last_update_dt:
+            current_dt_kst = None
+            
+            # Check simulation time
+            if self.ticker == "SIM-TEST" and hasattr(self, 'current_candle') and self.current_candle:
+                ts = self.current_candle.get('timestamp')
+                if ts:
+                    try:
+                        if isinstance(ts, (int, float)):
+                            if ts > 10000000000: ts = ts / 1000.0
+                            dt_utc = datetime.fromtimestamp(ts, timezone.utc)
+                            current_dt_kst = dt_utc.astimezone(KST)
+                        elif isinstance(ts, str):
+                            dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                            current_dt_kst = dt.astimezone(KST)
+                    except Exception:
+                        pass
+            
+            if not current_dt_kst:
+                # Real mode (System Time)
+                now_utc = datetime.now(timezone.utc)
+                current_dt_kst = now_utc.astimezone(KST)
+            
+            if current_dt_kst.hour >= 9:
+                current_date_str = current_dt_kst.strftime("%Y-%m-%d")
+                
+                # Check if we need to update RSI data (calculate_rsi)
+                # We track the last update date to ensure we only calculate once per day
+                
+                last_update_ts = self.rsi_logic.last_rsi_update
+                needs_update = False
+                
+                if last_update_ts == 0:
+                    needs_update = True
+                else:
+                    last_update_dt = datetime.fromtimestamp(last_update_ts, KST)
+                    if last_update_dt.strftime("%Y-%m-%d") != current_date_str:
                         needs_update = True
-                    else:
-                        # If last update date is different from today
-                        if last_update_dt.strftime("%Y-%m-%d") != current_date_str:
-                            needs_update = True
                             
-                    if needs_update:
-                        self.calculate_rsi()
-                        self.rsi_logic.last_rsi_update = now_kst.timestamp()
+                if needs_update:
+                    self.calculate_rsi()
+                    self.rsi_logic.last_rsi_update = current_dt_kst.timestamp()
 
             if not self.is_running:
                 return
