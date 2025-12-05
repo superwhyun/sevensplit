@@ -371,8 +371,19 @@ class SevenSplitStrategy(BaseStrategy):
                 rsi_prev_prev = calculate_rsi(closes[:-2], self.config.rsi_period)
                 
                 self.rsi_logic.current_rsi = rsi_now
-                self.rsi_logic.prev_rsi = rsi_prev
-                self.rsi_logic.prev_prev_rsi = rsi_prev_prev
+                
+                # Adjust mapping for Simulation vs Real
+                # Real Mode: closes[-1] is "In Progress" (Today), closes[-2] is "Confirmed" (Yesterday)
+                # Simulation Mode: closes[-1] is "Confirmed" (Today/Current Step)
+                
+                if self.ticker == "SIM-TEST":
+                    # Simulation: Shift values so logic sees "Today Confirmed" as "prev_rsi"
+                    self.rsi_logic.prev_rsi = rsi_now
+                    self.rsi_logic.prev_prev_rsi = rsi_prev
+                else:
+                    # Real: Standard mapping
+                    self.rsi_logic.prev_rsi = rsi_prev
+                    self.rsi_logic.prev_prev_rsi = rsi_prev_prev
                 
                 self.rsi_logic.current_rsi_short = rsi_short_now
                 self.rsi_logic.prev_rsi_short = rsi_short_prev
