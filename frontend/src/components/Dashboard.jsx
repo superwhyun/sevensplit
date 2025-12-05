@@ -675,14 +675,14 @@ const Dashboard = () => {
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem' }}>
                                                 <span style={{ color: '#94a3b8' }}>RSI(14)/H</span>
-                                                <span style={{ fontWeight: 'bold', color: status.rsi >= 70 ? '#ef4444' : status.rsi <= 30 ? '#10b981' : '#f59e0b' }}>
-                                                    {status.rsi !== undefined ? Math.round(status.rsi) : '-'}
+                                                <span style={{ fontWeight: 'bold', color: (status.rsi >= 70) ? '#ef4444' : (status.rsi <= 30 && status.rsi != null) ? '#10b981' : '#f59e0b' }}>
+                                                    {(status.rsi !== undefined && status.rsi !== null) ? Math.round(status.rsi) : '-'}
                                                 </span>
                                             </div>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem' }}>
                                                 <span style={{ color: '#94a3b8' }}>RSI(4)/H</span>
-                                                <span style={{ fontWeight: 'bold', color: status.rsi_short >= 70 ? '#ef4444' : status.rsi_short <= 30 ? '#10b981' : '#f59e0b' }}>
-                                                    {status.rsi_short !== undefined ? Math.round(status.rsi_short) : '-'}
+                                                <span style={{ fontWeight: 'bold', color: (status.rsi_short >= 70) ? '#ef4444' : (status.rsi_short <= 30 && status.rsi_short != null) ? '#10b981' : '#f59e0b' }}>
+                                                    {(status.rsi_short !== undefined && status.rsi_short !== null) ? Math.round(status.rsi_short) : '-'}
                                                 </span>
                                             </div>
                                         </div>
@@ -691,14 +691,14 @@ const Dashboard = () => {
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem', borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: '0.5rem' }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem' }}>
                                                 <span style={{ color: '#94a3b8' }}>RSI(14)/D</span>
-                                                <span style={{ fontWeight: 'bold', color: status.rsi_daily >= 70 ? '#ef4444' : status.rsi_daily <= 30 ? '#10b981' : '#f59e0b' }}>
-                                                    {status.rsi_daily !== undefined ? Math.round(status.rsi_daily) : '-'}
+                                                <span style={{ fontWeight: 'bold', color: (status.rsi_daily >= 70) ? '#ef4444' : (status.rsi_daily <= 30 && status.rsi_daily != null) ? '#10b981' : '#f59e0b' }}>
+                                                    {(status.rsi_daily !== undefined && status.rsi_daily !== null) ? Math.round(status.rsi_daily) : '-'}
                                                 </span>
                                             </div>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem' }}>
                                                 <span style={{ color: '#94a3b8' }}>RSI(4)/D</span>
-                                                <span style={{ fontWeight: 'bold', color: status.rsi_daily_short >= 70 ? '#ef4444' : status.rsi_daily_short <= 30 ? '#10b981' : '#f59e0b' }}>
-                                                    {status.rsi_daily_short !== undefined ? Math.round(status.rsi_daily_short) : '-'}
+                                                <span style={{ fontWeight: 'bold', color: (status.rsi_daily_short >= 70) ? '#ef4444' : (status.rsi_daily_short <= 30 && status.rsi_daily_short != null) ? '#10b981' : '#f59e0b' }}>
+                                                    {(status.rsi_daily_short !== undefined && status.rsi_daily_short !== null) ? Math.round(status.rsi_daily_short) : '-'}
                                                 </span>
                                             </div>
                                         </div>

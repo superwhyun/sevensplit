@@ -85,23 +85,19 @@ else:
         current_mode = "MOCK"
         print(f"Using Upbit Exchange with default mock creds (URL: {server_url})")
 
+# Initialize Exchange Service
+from services.exchange_service import ExchangeService
+exchange_service = ExchangeService(exchange)
+
 # --- Strategy Management ---
-strategies: Dict[int, SevenSplitStrategy] = {}
+# Initialize Strategy Service
+from services.strategy_service import StrategyService
+strategy_service = StrategyService(db, exchange_service)
 
-def load_strategies():
-    """Load strategies from DB, or create defaults if none exist."""
-    global strategies
-    strategies = {}
-    db_strategies = db.get_all_strategies()
-    
-    if not db_strategies:
-        logging.info("No strategies found in DB. Please create one.")
-    else:
-        logging.info(f"Loading {len(db_strategies)} strategies from DB.")
-        for s in db_strategies:
-            strategies[s.id] = SevenSplitStrategy(exchange, s.id, s.ticker, s.budget)
+# Load strategies on startup
+strategy_service.load_strategies()
 
-load_strategies()
+# load_strategies moved to StrategyService
 
 # --- WebSocket connection registry ---
 ws_connections = set()
@@ -109,6 +105,7 @@ ws_connections = set()
 # Background thread for strategy tick
 def run_strategies():
     # Track last tick time for each strategy
+    strategies = strategy_service.strategies
     last_tick_time = {s_id: 0.0 for s_id in strategies.keys()}
     
     while True:
@@ -116,6 +113,7 @@ def run_strategies():
             loop_start_time = time.time()
             
             # Refresh strategy list keys
+            strategies = strategy_service.strategies
             current_strategy_ids = list(strategies.keys())
             
             # 1. Collect all tickers (Running + Stopped)
@@ -168,14 +166,14 @@ def run_strategies():
                 if s_id not in last_tick_time:
                     last_tick_time[s_id] = 0.0
                 
-                # Only tick if running AND interval passed
-                if strategy.is_running:
-                    tick_interval = strategy.config.tick_interval
-                    if current_time - last_tick_time[s_id] >= tick_interval:
-                        price = prices.get(strategy.ticker)
-                        if price:
-                            strategy.tick(current_price=price, open_orders=all_open_orders)
-                            last_tick_time[s_id] = current_time
+                # Tick regardless of running state (RSI updates even if stopped)
+                # strategy.tick handles is_running check internally for order management
+                tick_interval = strategy.config.tick_interval
+                if current_time - last_tick_time[s_id] >= tick_interval:
+                    price = prices.get(strategy.ticker)
+                    if price:
+                        strategy.tick(current_price=price, open_orders=all_open_orders)
+                        last_tick_time[s_id] = current_time
 
         except Exception as e:
             logging.error(f"Error in strategy loop: {e}")
@@ -208,21 +206,20 @@ def get_strategies():
             "budget": s.budget,
             "is_running": s.is_running
         }
-        for s in strategies.values()
+        for s in strategy_service.get_all_strategies()
     ]
 
 @app.post("/strategies")
 def create_strategy(req: CreateStrategyRequest):
     """Create a new strategy"""
     try:
-        s = db.create_strategy(
+        s_id = strategy_service.create_strategy(
             name=req.name,
             ticker=req.ticker,
             budget=req.budget,
-            config=req.config.dict()
+            config=req.config.model_dump()
         )
-        strategies[s.id] = SevenSplitStrategy(exchange, s.id, s.ticker, s.budget)
-        return {"status": "success", "strategy_id": s.id, "message": "Strategy created"}
+        return {"status": "success", "strategy_id": s_id, "message": "Strategy created"}
     except Exception as e:
         logging.error(f"Failed to create strategy: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -230,20 +227,8 @@ def create_strategy(req: CreateStrategyRequest):
 @app.delete("/strategies/{strategy_id}")
 def delete_strategy(strategy_id: int):
     """Delete a strategy"""
-    if strategy_id not in strategies:
-        raise HTTPException(status_code=404, detail="Strategy not found")
-    
     try:
-        # Stop if running
-        if strategies[strategy_id].is_running:
-            strategies[strategy_id].stop()
-            
-        # Remove from memory
-        del strategies[strategy_id]
-        
-        # Remove from DB
-        db.delete_strategy(strategy_id)
-        
+        strategy_service.delete_strategy(strategy_id)
         return {"status": "success", "message": "Strategy deleted"}
     except Exception as e:
         logging.error(f"Failed to delete strategy: {e}")
@@ -280,10 +265,9 @@ def export_trades(strategy_id: int):
 
 @app.get("/status")
 def get_status(strategy_id: int):
-    if strategy_id not in strategies:
+    strategy = strategy_service.get_strategy(strategy_id)
+    if not strategy:
         raise HTTPException(status_code=404, detail="Strategy not found")
-
-    strategy = strategies[strategy_id]
     ticker = strategy.ticker
 
     # Batch fetch price for the requested ticker to avoid individual API call
@@ -330,7 +314,7 @@ def get_full_snapshot() -> Dict[str, Any]:
     snapshot = {"strategies": {}}
     
     # Collect all tickers needed
-    all_tickers = list(set(s.ticker for s in strategies.values()))
+    all_tickers = list(set(s.ticker for s in strategy_service.get_all_strategies()))
     
     # Use shared prices from the strategy loop
     # This eliminates redundant API calls for UI updates
@@ -394,7 +378,7 @@ def get_full_snapshot() -> Dict[str, Any]:
     # Create Balance Map
     balance_map = {acc['currency']: float(acc['balance']) for acc in accounts_raw}
 
-    for s_id, strategy in strategies.items():
+    for s_id, strategy in strategy_service.strategies.items():
         try:
             ticker = strategy.ticker
             # Get strategy state with pre-fetched price
@@ -447,31 +431,22 @@ class CommandRequest(BaseModel):
 
 @app.post("/start")
 def start_bot(cmd: CommandRequest):
-    if cmd.strategy_id not in strategies:
-        raise HTTPException(status_code=404, detail="Strategy not found")
-    
-    strategy = strategies[cmd.strategy_id]
-    
-    # Fetch current price before starting to avoid individual API call
     try:
-        if hasattr(exchange, "get_current_prices"):
-            prices = exchange.get_current_prices([strategy.ticker])
-            current_price = prices.get(strategy.ticker)
-        else:
-            current_price = None
+        strategy_service.start_strategy(cmd.strategy_id)
+        return {"status": "started", "strategy_id": cmd.strategy_id}
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Strategy not found")
     except Exception as e:
-        logging.error(f"Failed to fetch price for {strategy.ticker}: {e}")
-        current_price = None
-    
-    strategy.start(current_price=current_price)
-    return {"status": "started", "strategy_id": cmd.strategy_id}
+        logging.error(f"Failed to start strategy: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/stop")
 def stop_bot(cmd: CommandRequest):
-    if cmd.strategy_id not in strategies:
+    try:
+        strategy_service.stop_strategy(cmd.strategy_id)
+        return {"status": "stopped", "strategy_id": cmd.strategy_id}
+    except ValueError:
         raise HTTPException(status_code=404, detail="Strategy not found")
-    strategies[cmd.strategy_id].stop()
-    return {"status": "stopped", "strategy_id": cmd.strategy_id}
 
 class ConfigRequest(BaseModel):
     strategy_id: int
@@ -480,23 +455,24 @@ class ConfigRequest(BaseModel):
 
 @app.post("/config")
 def update_config(req: ConfigRequest):
-    if req.strategy_id not in strategies:
+    try:
+        strategy_service.update_config(req.strategy_id, req.config, req.budget)
+        strategy = strategy_service.get_strategy(req.strategy_id)
+        return {"status": "config updated", "strategy_id": req.strategy_id, "config": req.config, "budget": strategy.budget}
+    except ValueError:
         raise HTTPException(status_code=404, detail="Strategy not found")
-    if req.budget is not None:
-        strategies[req.strategy_id].budget = req.budget
-    strategies[req.strategy_id].update_config(req.config)
-    return {"status": "config updated", "strategy_id": req.strategy_id, "config": req.config, "budget": strategies[req.strategy_id].budget}
 
 class UpdateNameRequest(BaseModel):
     name: str
 
 @app.patch("/strategies/{strategy_id}")
 def update_strategy_name(strategy_id: int, req: UpdateNameRequest):
-    if strategy_id not in strategies:
+    strategy = strategy_service.get_strategy(strategy_id)
+    if not strategy:
         raise HTTPException(status_code=404, detail="Strategy not found")
     
     # Update in memory
-    strategies[strategy_id].name = req.name
+    strategy.name = req.name
     
     # Update in DB
     db.update_strategy_name(strategy_id, req.name)
@@ -522,7 +498,8 @@ def simulate_strategy_from_time(strategy_id: int, req: SimulationRequest):
     """Run simulation for a specific strategy starting from a given time"""
     logging.info(f"Received simulation request for strategy {strategy_id} from {req.start_time}")
     
-    if strategy_id not in strategies:
+    strategy = strategy_service.get_strategy(strategy_id)
+    if not strategy:
         # Try to load from DB if not in memory (though it should be)
         s_rec = db.get_strategy(strategy_id)
         if not s_rec:
@@ -536,7 +513,6 @@ def simulate_strategy_from_time(strategy_id: int, req: SimulationRequest):
         ticker = s_rec.ticker
         budget = s_rec.budget
     else:
-        strategy = strategies[strategy_id]
         config = strategy.config
         ticker = strategy.ticker
         budget = strategy.budget
@@ -616,46 +592,11 @@ def reset_strategy(cmd: CommandRequest):
     """Reset a specific strategy"""
     s_id = cmd.strategy_id
 
-    if s_id not in strategies:
-        raise HTTPException(status_code=404, detail="Strategy not found")
-
     try:
-        # Stop the strategy if running
-        if strategies[s_id].is_running:
-            strategies[s_id].stop()
-
-        # Cancel all pending orders for this strategy
-        strategy = strategies[s_id]
-        for split in strategy.splits:
-            if split.buy_order_uuid:
-                try:
-                    exchange.cancel_order(split.buy_order_uuid)
-                except Exception as e:
-                    logging.error(f"Failed to cancel buy order {split.buy_order_uuid}: {e}")
-            if split.sell_order_uuid:
-                try:
-                    exchange.cancel_order(split.sell_order_uuid)
-                except Exception as e:
-                    logging.error(f"Failed to cancel sell order {split.sell_order_uuid}: {e}")
-
-        # Clear splits and trades from database
-        db.delete_all_splits(s_id)
-        db.delete_all_trades(s_id)
-        
-        # Reset strategy state in DB (next_split_id, last_buy_price, etc.)
-        db.update_strategy_state(
-            s_id,
-            next_split_id=1,
-            last_buy_price=None,
-            last_sell_price=None
-        )
-
-        # Recreate the strategy instance
-        s_rec = db.get_strategy(s_id)
-        strategies[s_id] = SevenSplitStrategy(exchange, s_id, s_rec.ticker, s_rec.budget)
-        logging.info(f"Reset strategy {s_id}")
-
+        strategy_service.reset_strategy(s_id)
         return {"status": "success", "strategy_id": s_id, "message": f"Strategy reset for {s_id}"}
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Strategy not found")
     except Exception as e:
         logging.error(f"Failed to reset strategy {s_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to reset: {str(e)}")
@@ -665,14 +606,14 @@ import requests
 @app.post("/reset-all")
 def reset_all_mock():
     """Reset all strategies and exchange (MOCK mode only)"""
-    global exchange, strategies, current_mode
+    global exchange, current_mode
 
     # Only allow reset in MOCK mode
     if current_mode != "MOCK":
         return {"status": "not a mock exchange"}
 
     # Stop all strategies first
-    for s_id, strategy in strategies.items():
+    for s_id, strategy in strategy_service.strategies.items():
         try:
             if strategy.is_running:
                 strategy.stop()
@@ -700,9 +641,13 @@ def reset_all_mock():
     access_key = env_access_key or "mock_access_key"
     secret_key = env_secret_key or "mock_secret_key"
     exchange = UpbitExchange(access_key, secret_key, server_url=server_url)
+    
+    # Reinitialize Exchange Service
+    global exchange_service
+    exchange_service = ExchangeService(exchange)
 
     # Reload strategies (will load existing strategies from DB)
-    load_strategies()
+    strategy_service.load_strategies()
 
     return {"status": "mock reset", "message": "All strategies and database reset"}
 

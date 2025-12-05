@@ -453,7 +453,7 @@ def run_simulation(sim_config: SimulationConfig):    # Initialize Strategy
         "total_profit": total_profit,
         "trade_count": trade_count,
         "final_balance": strategy.budget + total_profit, # Simple approx
-        "splits": [s.dict() for s in strategy.splits], # Return final splits
-        "config": strategy.config.dict(), # Return used config
+        "splits": [s.model_dump() for s in strategy.splits], # Return final splits
+        "config": strategy.config.model_dump(), # Return used config
         "debug_logs": sim_logs
     }

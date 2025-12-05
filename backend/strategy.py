@@ -7,19 +7,16 @@ import time
 from datetime import datetime
 from database import get_db
 
-from strategies import StrategyConfig, SplitState, PriceStrategyLogic, RSIStrategyLogic
+from models.strategy_state import StrategyConfig, SplitState
+from strategies import BaseStrategy, PriceStrategyLogic, RSIStrategyLogic
+from utils.indicators import calculate_rsi
 
-class SevenSplitStrategy:
+class SevenSplitStrategy(BaseStrategy):
     def __init__(self, exchange, strategy_id: int, ticker: str, budget: float = 1000000.0):
-        self.exchange = exchange
-        self.strategy_id = strategy_id
-        self.ticker = ticker
-        self.budget = budget
+        super().__init__(exchange, strategy_id, ticker, budget)
         self.db = get_db()
-        self.config = StrategyConfig()
-        self.lock = threading.RLock()
+        # self.config, self.lock, self.is_running are initialized in super
         self.splits: List[SplitState] = []
-        self.is_running = False
         self.trade_history = []
         self.next_split_id = 1
         self.last_buy_price = None # Track the last buy price for creating next split
@@ -33,9 +30,9 @@ class SevenSplitStrategy:
         # Load state first to see if we have existing config
         state_loaded = self.load_state()
 
-        # Check for "bad defaults" from previous runs (e.g. BTC defaults applied to ETH/SOL)
-        # Old default was 50,000,000. If we see this for non-BTC, it's likely wrong.
-        has_bad_default = (self.config.min_price == 50000000.0 and self.ticker != "KRW-BTC")
+        # Check for "bad defaults" from previous runs
+        # Old default was 50,000,000. If we see this, it's likely wrong (even for BTC, 50m is too low now).
+        has_bad_default = (self.config.min_price == 50000000.0)
         
         # If no state loaded, or we have bad defaults, or uninitialized (0.0), try to set from current price
         if not state_loaded or has_bad_default or self.config.min_price == 0.0:
@@ -57,7 +54,7 @@ class SevenSplitStrategy:
         """Save state to database"""
         try:
             # Update strategy state
-            config_dict = self.config.dict()
+            config_dict = self.config.model_dump()
             self.db.update_strategy_state(
                 self.strategy_id,
                 investment_per_split=config_dict['investment_per_split'],
@@ -263,12 +260,7 @@ class SevenSplitStrategy:
 
             self.save_state()
 
-    def update_config(self, config: StrategyConfig):
-        """Update configuration."""
-        with self.lock:
-            logging.info(f"Updating config for Strategy {self.strategy_id}. Old: {self.config}, New: {config}")
-            self.config = config
-            self.save_state()
+    # update_config is inherited from BaseStrategy
 
     def check_trade_limit(self) -> bool:
         """Check if total trade actions (buys + sells) in last 24 hours is within limit"""
@@ -341,68 +333,46 @@ class SevenSplitStrategy:
             # Fetch candles
             # Count: 14 (period) + 1 (for delta) + buffer. 200 is safe.
             candles = self.exchange.get_candles(self.ticker, count=200, interval=self.config.rsi_timeframe)
-            if not candles or len(candles) < self.config.rsi_period + 1:
-                logging.warning(f"Not enough candles for RSI calculation: {len(candles) if candles else 0}")
-                return
+            
+            current_rsi = None
+            current_rsi_short = None
+            
+            if candles:
+                # Sort by timestamp ascending (oldest first)
+                candles.sort(key=lambda x: x['candle_date_time_kst'])
+                closes = [float(c['trade_price']) for c in candles]
+                
+                current_rsi = calculate_rsi(closes, self.config.rsi_period)
+                current_rsi_short = calculate_rsi(closes, 4)
 
-            # Sort by timestamp ascending (oldest first)
-            candles.sort(key=lambda x: x['candle_date_time_kst'])
-            
-            # Extract closing prices
-            closes = [float(c['trade_price']) for c in candles]
-            
-            # Calculate RSI
-            import pandas as pd
-            series = pd.Series(closes)
-            delta = series.diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=self.config.rsi_period).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=self.config.rsi_period).mean()
-            
-            rs = gain / loss
-            rsi = 100 - (100 / (1 + rs))
-            
-            # Calculate RSI (Short - Period 4)
-            gain_short = (delta.where(delta > 0, 0)).rolling(window=4).mean()
-            loss_short = (-delta.where(delta < 0, 0)).rolling(window=4).mean()
-            rs_short = gain_short / loss_short
-            rsi_short = 100 - (100 / (1 + rs_short))
-
-            # Get latest RSI
-            current_rsi = rsi.iloc[-1]
-            current_rsi_short = rsi_short.iloc[-1]
-            
-            # Update state
-            self.rsi_logic.prev_rsi = self.rsi_logic.current_rsi # Save previous before updating
-            self.rsi_logic.current_rsi = float(current_rsi)
-            
-            self.rsi_logic.prev_rsi_short = self.rsi_logic.current_rsi_short
-            self.rsi_logic.current_rsi_short = float(current_rsi_short)
+            if current_rsi is not None:
+                self.rsi_logic.prev_rsi = self.rsi_logic.current_rsi
+                self.rsi_logic.current_rsi = current_rsi
+                
+            if current_rsi_short is not None:
+                self.rsi_logic.prev_rsi_short = self.rsi_logic.current_rsi_short
+                self.rsi_logic.current_rsi_short = current_rsi_short
             
             # --- Calculate Daily RSI ---
             daily_candles = self.exchange.get_candles(self.ticker, count=200, interval="days")
-            if daily_candles and len(daily_candles) >= self.config.rsi_period + 1:
+            
+            current_rsi_daily = None
+            current_rsi_daily_short = None
+            
+            if daily_candles:
                 daily_candles.sort(key=lambda x: x['candle_date_time_kst'])
                 daily_closes = [float(c['trade_price']) for c in daily_candles]
                 
-                series_d = pd.Series(daily_closes)
-                delta_d = series_d.diff()
+                current_rsi_daily = calculate_rsi(daily_closes, self.config.rsi_period)
+                current_rsi_daily_short = calculate_rsi(daily_closes, 4)
                 
-                # Daily RSI (14)
-                gain_d = (delta_d.where(delta_d > 0, 0)).rolling(window=self.config.rsi_period).mean()
-                loss_d = (-delta_d.where(delta_d < 0, 0)).rolling(window=self.config.rsi_period).mean()
-                rs_d = gain_d / loss_d
-                rsi_d = 100 - (100 / (1 + rs_d))
+            if current_rsi_daily is not None:
+                self.rsi_logic.current_rsi_daily = current_rsi_daily
                 
-                # Daily RSI (4)
-                gain_d_short = (delta_d.where(delta_d > 0, 0)).rolling(window=4).mean()
-                loss_d_short = (-delta_d.where(delta_d < 0, 0)).rolling(window=4).mean()
-                rs_d_short = gain_d_short / loss_d_short
-                rsi_d_short = 100 - (100 / (1 + rs_d_short))
-                
-                self.rsi_logic.current_rsi_daily = float(rsi_d.iloc[-1])
-                self.rsi_logic.current_rsi_daily_short = float(rsi_d_short.iloc[-1])
+            if current_rsi_daily_short is not None:
+                self.rsi_logic.current_rsi_daily_short = current_rsi_daily_short
             
-            logging.info(f"RSI Updated: {self.rsi_logic.current_rsi:.2f} (Prev: {self.rsi_logic.prev_rsi}), Short: {self.rsi_logic.current_rsi_short:.2f}, Daily: {self.rsi_logic.current_rsi_daily}, DailyShort: {self.rsi_logic.current_rsi_daily_short}")
+            # logging.info(f"RSI Updated: {self.rsi_logic.current_rsi} (Prev: {self.rsi_logic.prev_rsi}), Short: {self.rsi_logic.current_rsi_short}, Daily: {self.rsi_logic.current_rsi_daily}, DailyShort: {self.rsi_logic.current_rsi_daily_short}")
             
         except Exception as e:
             logging.error(f"Failed to calculate RSI: {e}")
@@ -410,6 +380,13 @@ class SevenSplitStrategy:
     def tick(self, current_price: float = None, open_orders: list = None):
         """Main tick function called periodically to check and update splits."""
         with self.lock:
+            # Update RSI every 60 seconds (Common for both strategies)
+            # We do this even if not running, so the dashboard shows correct indicators.
+            current_time = time.time()
+            if current_time - self.rsi_logic.last_rsi_update >= 60:
+                self.calculate_rsi()
+                self.rsi_logic.last_rsi_update = current_time
+
             if not self.is_running:
                 return
 
@@ -430,12 +407,6 @@ class SevenSplitStrategy:
 
             if not current_price:
                 return
-
-            # Update RSI every 60 seconds (Common for both strategies)
-            current_time = time.time()
-            if current_time - self.rsi_logic.last_rsi_update >= 60:
-                self.calculate_rsi()
-                self.rsi_logic.last_rsi_update = current_time
 
             # Prepare open orders list (Common)
             open_order_uuids = set()
@@ -969,8 +940,8 @@ class SevenSplitStrategy:
                 "ticker": self.ticker,
                 "budget": self.budget,
                 "is_running": self.is_running,
-                "config": self.config.dict(),
-                "splits": [s.dict() for s in self.splits],
+                "config": self.config.model_dump(),
+                "splits": [s.model_dump() for s in self.splits],
                 "current_price": current_price,
                 "total_profit_amount": total_profit_amount,
                 "total_profit_rate": total_profit_rate,
