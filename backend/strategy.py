@@ -4,7 +4,7 @@ import logging
 import json
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from database import get_db
 
 from models.strategy_state import StrategyConfig, SplitState
@@ -391,10 +391,39 @@ class SevenSplitStrategy(BaseStrategy):
         with self.lock:
             # Update RSI every 60 seconds (Common for both strategies)
             # We do this even if not running, so the dashboard shows correct indicators.
-            current_time = time.time()
-            if current_time - self.rsi_logic.last_rsi_update >= 60:
-                self.calculate_rsi()
-                self.rsi_logic.last_rsi_update = current_time
+            # Update RSI once per day after 9 AM KST
+            # We do this to get the confirmed daily close RSI.
+            KST = timezone(timedelta(hours=9))
+            now_utc = datetime.now(timezone.utc)
+            now_kst = now_utc.astimezone(KST)
+            
+            if now_kst.hour >= 9:
+                current_date_str = now_kst.strftime("%Y-%m-%d")
+                if self.rsi_logic.last_tick_date != current_date_str:
+                    # We use last_tick_date from rsi_logic to track if we updated/ticked today
+                    # But calculate_rsi is separate. Let's use a separate tracker or reuse logic.
+                    # Actually, rsi_logic.tick handles the trading logic frequency.
+                    # Here we handle the DATA UPDATE frequency.
+                    
+                    # Let's track update date separately in strategy or rsi_logic
+                    # rsi_logic has last_rsi_update (timestamp). Let's use a date string tracker on strategy or check timestamp.
+                    
+                    # Simple check: if last update was yesterday (or before 9am today), update.
+                    # But easier: just check date string.
+                    
+                    last_update_dt = datetime.fromtimestamp(self.rsi_logic.last_rsi_update, KST) if self.rsi_logic.last_rsi_update > 0 else None
+                    
+                    needs_update = False
+                    if not last_update_dt:
+                        needs_update = True
+                    else:
+                        # If last update date is different from today
+                        if last_update_dt.strftime("%Y-%m-%d") != current_date_str:
+                            needs_update = True
+                            
+                    if needs_update:
+                        self.calculate_rsi()
+                        self.rsi_logic.last_rsi_update = now_kst.timestamp()
 
             if not self.is_running:
                 return
