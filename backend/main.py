@@ -601,6 +601,35 @@ def reset_strategy(cmd: CommandRequest):
         logging.error(f"Failed to reset strategy {s_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to reset: {str(e)}")
 
+class DebugRSIRequest(BaseModel):
+    strategy_id: int
+    rsi: float
+    prev_rsi: Optional[float] = None
+    rsi_short: Optional[float] = None
+
+@app.post("/debug/rsi")
+def set_debug_rsi(req: DebugRSIRequest):
+    """[MOCK ONLY] Force set RSI values for testing."""
+    if current_mode != "MOCK":
+        raise HTTPException(status_code=403, detail="Debug endpoints only available in MOCK mode")
+        
+    strategy = strategy_service.get_strategy(req.strategy_id)
+    if not strategy:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+        
+    # Inject values directly into logic module
+    strategy.rsi_logic.current_rsi = req.rsi
+    if req.prev_rsi is not None:
+        strategy.rsi_logic.prev_rsi = req.prev_rsi
+    if req.rsi_short is not None:
+        strategy.rsi_logic.current_rsi_short = req.rsi_short
+        
+    # Prevent overwrite by next tick's calculation for a short duration
+    # Set last update time to future so it doesn't recalc immediately
+    strategy.rsi_logic.last_rsi_update = time.time() + 60 
+    
+    return {"status": "success", "message": f"RSI set to {req.rsi} (Prev: {req.prev_rsi}) for strategy {req.strategy_id}"}
+
 import requests
 
 @app.post("/reset-all")

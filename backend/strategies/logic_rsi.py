@@ -18,40 +18,24 @@ class RSIStrategyLogic:
         self.last_rsi_update = 0
 
     def tick(self, current_price: float, open_order_uuids: set):
-        """RSI Reversal Strategy Logic"""
+        """RSI Daily Delta Strategy Logic"""
         self.strategy._manage_orders(open_order_uuids)
         
-        if self.current_rsi is None:
+        if self.current_rsi is None or self.prev_rsi is None:
             return
 
-        # --- Buying Logic (Accumulation) ---
-        # 1. Track Local Min (Lowest RSI while in Buy Zone)
-        if self.current_rsi < self.strategy.config.rsi_buy_max:
-            if self.current_rsi < self.rsi_lowest:
-                self.rsi_lowest = self.current_rsi
-                # Reset highest when we find a new low (start of new cycle)
-                self.rsi_highest = 0.0 
-        else:
-            # Reset Lowest if we go above Max Buy (Exited Buy Zone)
-            if self.rsi_lowest < 100.0:
-                 self.rsi_lowest = 100.0
-
-        # 2. Check Buy Conditions
+        # --- Buying Logic (Daily Delta) ---
+        # Condition: RSI is in Buy Zone AND RSI increased by threshold compared to yesterday
         if self.current_rsi < self.strategy.config.rsi_buy_max:
             buy_amount_splits = 0
             
-            # A. First Buy (Rebound from Low)
-            if (self.current_rsi - self.rsi_lowest) >= self.strategy.config.rsi_buy_first_threshold:
-                if self.prev_rsi and (self.prev_rsi - self.rsi_lowest) < self.strategy.config.rsi_buy_first_threshold:
-                    logging.info(f"RSI First Buy Signal: RSI {self.current_rsi} (Low {self.rsi_lowest} + {self.strategy.config.rsi_buy_first_threshold})")
-                    buy_amount_splits = self.strategy.config.rsi_buy_first_amount
-
-            # B. Next Buy (Trend Following)
-            elif (self.current_rsi - self.rsi_lowest) >= self.strategy.config.rsi_buy_first_threshold:
-                if self.prev_rsi and (self.current_rsi - self.prev_rsi) >= self.strategy.config.rsi_buy_next_threshold:
-                    logging.info(f"RSI Next Buy Signal: RSI {self.current_rsi} (+{self.current_rsi - self.prev_rsi} vs Prev)")
-                    buy_amount_splits = self.strategy.config.rsi_buy_next_amount
-
+            # Calculate Delta (Today - Yesterday)
+            rsi_delta = self.current_rsi - self.prev_rsi
+            
+            if rsi_delta >= self.strategy.config.rsi_buy_first_threshold:
+                logging.info(f"RSI Buy Signal: RSI {self.current_rsi} (Yesterday {self.prev_rsi}, Delta +{rsi_delta:.2f} >= {self.strategy.config.rsi_buy_first_threshold})")
+                buy_amount_splits = self.strategy.config.rsi_buy_first_amount
+            
             # Execute Buy
             if buy_amount_splits > 0:
                 if self.strategy.check_trade_limit():
@@ -65,52 +49,42 @@ class RSIStrategyLogic:
                     else:
                         logging.warning(f"Max holdings reached ({current_holdings}). Skipping RSI buy.")
 
-        # --- Selling Logic (Distribution) ---
-        # 1. Track Local Max (Highest RSI while in Sell Zone)
-        if self.current_rsi > self.strategy.config.rsi_sell_min:
-            if self.current_rsi > self.rsi_highest:
-                self.rsi_highest = self.current_rsi
-                self.rsi_lowest = 100.0 # Reset lowest
-        else:
-            if self.rsi_highest > 0.0:
-                self.rsi_highest = 0.0
-
-        # 2. Check Sell Conditions
+        # --- Selling Logic (Daily Delta) ---
+        # Condition: RSI is in Sell Zone AND RSI decreased by threshold compared to yesterday
         if self.current_rsi > self.strategy.config.rsi_sell_min:
             sell_amount_splits = 0
             
-            # A. First Sell (Drop from High)
-            if (self.rsi_highest - self.current_rsi) >= self.strategy.config.rsi_sell_first_threshold:
-                if self.prev_rsi and (self.rsi_highest - self.prev_rsi) < self.strategy.config.rsi_sell_first_threshold:
-                    logging.info(f"RSI First Sell Signal: RSI {self.current_rsi} (High {self.rsi_highest} - {self.strategy.config.rsi_sell_first_threshold})")
-                    sell_amount_splits = self.strategy.config.rsi_sell_first_amount
-
-            # B. Next Sell (Trend Following)
-            elif (self.rsi_highest - self.current_rsi) >= self.strategy.config.rsi_sell_first_threshold:
-                if self.prev_rsi and (self.prev_rsi - self.current_rsi) >= self.strategy.config.rsi_sell_next_threshold:
-                    logging.info(f"RSI Next Sell Signal: RSI {self.current_rsi} (-{self.prev_rsi - self.current_rsi} vs Prev)")
-                    sell_amount_splits = self.strategy.config.rsi_sell_next_amount
+            # Calculate Delta (Yesterday - Today) -> Positive means drop
+            rsi_drop = self.prev_rsi - self.current_rsi
+            
+            if rsi_drop >= self.strategy.config.rsi_sell_first_threshold:
+                logging.info(f"RSI Sell Signal: RSI {self.current_rsi} (Yesterday {self.prev_rsi}, Drop -{rsi_drop:.2f} >= {self.strategy.config.rsi_sell_first_threshold})")
+                sell_amount_splits = self.strategy.config.rsi_sell_first_amount
 
             # Execute Sell
             if sell_amount_splits > 0:
                 candidates = [s for s in self.strategy.splits if s.status in ["BUY_FILLED", "PENDING_SELL"]]
                 
-                # Calculate profit for each
+                # Calculate profit for each and store as tuple (split, profit_rate)
+                candidates_with_profit = []
                 for s in candidates:
-                    s.temp_profit_rate = (current_price - s.actual_buy_price) / s.actual_buy_price
+                    profit_rate = (current_price - s.actual_buy_price) / s.actual_buy_price
+                    candidates_with_profit.append((s, profit_rate))
 
                 # Filter by Min Profit
                 min_profit = self.strategy.config.sell_rate 
-                candidates = [s for s in candidates if s.temp_profit_rate >= min_profit]
+                candidates_with_profit = [item for item in candidates_with_profit if item[1] >= min_profit]
                 
                 # Sort by Profit Descending
-                candidates.sort(key=lambda s: s.temp_profit_rate, reverse=True)
+                candidates_with_profit.sort(key=lambda item: item[1], reverse=True)
                 
-                # Take top N
-                to_sell = candidates[:sell_amount_splits]
+                # Take top N splits
+                to_sell = [item[0] for item in candidates_with_profit[:sell_amount_splits]]
                 
                 for split in to_sell:
-                    logging.info(f"RSI Sell Execution: Split {split.id} (Profit: {split.temp_profit_rate*100:.2f}%)")
+                    # Recalculate profit for logging (or use stored value)
+                    profit_rate = (current_price - split.actual_buy_price) / split.actual_buy_price
+                    logging.info(f"RSI Sell Execution: Split {split.id} (Profit: {profit_rate*100:.2f}%)")
                     # If PENDING_SELL, cancel first
                     if split.status == "PENDING_SELL" and split.sell_order_uuid:
                         try:

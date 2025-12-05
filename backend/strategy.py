@@ -330,9 +330,10 @@ class SevenSplitStrategy(BaseStrategy):
     def calculate_rsi(self):
         """Calculate RSI based on configured timeframe."""
         try:
-            # Fetch candles
-            # Count: 14 (period) + 1 (for delta) + buffer. 200 is safe.
-            candles = self.exchange.get_candles(self.ticker, count=200, interval=self.config.rsi_timeframe)
+
+            # Fetch Daily Candles (Always use Daily for RSI Strategy)
+            # Count: 200 is safe buffer.
+            candles = self.exchange.get_candles(self.ticker, count=200, interval="days")
             
             current_rsi = None
             current_rsi_short = None
@@ -342,7 +343,9 @@ class SevenSplitStrategy(BaseStrategy):
                 candles.sort(key=lambda x: x['candle_date_time_kst'])
                 closes = [float(c['trade_price']) for c in candles]
                 
+                # Calculate RSI based on configured period (e.g., 14 or 4)
                 current_rsi = calculate_rsi(closes, self.config.rsi_period)
+                # Calculate Short RSI (fixed 4) for reference/display
                 current_rsi_short = calculate_rsi(closes, 4)
 
             if current_rsi is not None:
@@ -353,24 +356,9 @@ class SevenSplitStrategy(BaseStrategy):
                 self.rsi_logic.prev_rsi_short = self.rsi_logic.current_rsi_short
                 self.rsi_logic.current_rsi_short = current_rsi_short
             
-            # --- Calculate Daily RSI ---
-            daily_candles = self.exchange.get_candles(self.ticker, count=200, interval="days")
-            
-            current_rsi_daily = None
-            current_rsi_daily_short = None
-            
-            if daily_candles:
-                daily_candles.sort(key=lambda x: x['candle_date_time_kst'])
-                daily_closes = [float(c['trade_price']) for c in daily_candles]
-                
-                current_rsi_daily = calculate_rsi(daily_closes, self.config.rsi_period)
-                current_rsi_daily_short = calculate_rsi(daily_closes, 4)
-                
-            if current_rsi_daily is not None:
-                self.rsi_logic.current_rsi_daily = current_rsi_daily
-                
-            if current_rsi_daily_short is not None:
-                self.rsi_logic.current_rsi_daily_short = current_rsi_daily_short
+            # Populate daily fields for compatibility/display (same as current now)
+            self.rsi_logic.current_rsi_daily = current_rsi
+            self.rsi_logic.current_rsi_daily_short = current_rsi_short
             
             # logging.info(f"RSI Updated: {self.rsi_logic.current_rsi} (Prev: {self.rsi_logic.prev_rsi}), Short: {self.rsi_logic.current_rsi_short}, Daily: {self.rsi_logic.current_rsi_daily}, DailyShort: {self.rsi_logic.current_rsi_daily_short}")
             
