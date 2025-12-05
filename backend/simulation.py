@@ -428,7 +428,10 @@ def run_simulation(sim_config: SimulationConfig):    # Initialize Strategy
         # Pass 2: Create sell orders for BUY_FILLED (just filled above or in tick)
         for split in list(strategy.splits):
             if split.status == "BUY_FILLED":
-                strategy._create_sell_order(split)
+                # Only create sell order for Price Grid strategy.
+                # RSI strategy holds until RSI sell signal.
+                if strategy.config.strategy_mode != "RSI":
+                    strategy._create_sell_order(split)
                 
         # Pass 3: Check fills for PENDING_SELL (existing or newly created)
         for split in list(strategy.splits):
