@@ -97,32 +97,45 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
 
     // Calculate RSI (Dual: 14 and 4)
     const calculateDualRSI = (data) => {
-        // Helper to calculate RSI for a specific period using SMA (to match Backend)
+        // Helper to calculate RSI for a specific period using Wilder's Smoothing (to match Upbit)
         const calcRSI = (period) => {
+            if (data.length < period + 1) return [];
+
             const results = [];
+            let gains = [];
+            let losses = [];
 
-            for (let i = 0; i < data.length; i++) {
-                if (i < period) {
-                    continue;
-                }
-
-                // Calculate average gain/loss for the window
-                let sumGain = 0;
-                let sumLoss = 0;
-                for (let j = 0; j < period; j++) {
-                    const change = data[i - j].close - data[i - j - 1].close;
-                    if (change > 0) sumGain += change;
-                    else sumLoss -= change;
-                }
-
-                const avgGain = sumGain / period;
-                const avgLoss = sumLoss / period;
-
-                const rs = avgLoss === 0 ? (avgGain === 0 ? 0 : 100) : avgGain / avgLoss;
-                const rsi = 100 - (100 / (1 + rs));
-
-                results.push({ time: data[i].time, value: rsi });
+            // 1. Calculate Deltas
+            for (let i = 1; i < data.length; i++) {
+                const change = data[i].close - data[i - 1].close;
+                gains.push(change > 0 ? change : 0);
+                losses.push(change < 0 ? Math.abs(change) : 0);
             }
+
+            // 2. Initial Average (SMA)
+            let avgGain = gains.slice(0, period).reduce((a, b) => a + b, 0) / period;
+            let avgLoss = losses.slice(0, period).reduce((a, b) => a + b, 0) / period;
+
+            // First RSI point
+            let rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+            let rsi = 100 - (100 / (1 + rs));
+
+            // The index in 'data' corresponding to this first RSI point is 'period'
+            // (since we started from index 1 for deltas, gains[period-1] corresponds to data[period])
+            results.push({ time: data[period].time, value: rsi });
+
+            // 3. Wilder's Smoothing for subsequent points
+            for (let i = period; i < gains.length; i++) {
+                avgGain = (avgGain * (period - 1) + gains[i]) / period;
+                avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
+
+                rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+                rsi = 100 - (100 / (1 + rs));
+
+                // gains[i] corresponds to data[i+1]
+                results.push({ time: data[i + 1].time, value: rsi });
+            }
+
             return results;
         };
 
@@ -381,7 +394,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
 
         const markers = [];
 
-        if (isSimulating) {
+        if (isSimulating || simResult) {
             if (simResult && simResult.trades) {
                 simResult.trades.forEach(t => {
                     // Buy Marker

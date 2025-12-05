@@ -442,6 +442,7 @@ const Dashboard = () => {
             }
 
             setSimResult(response.data);
+            setIsSimulating(false);
         } catch (error) {
             console.error("Simulation failed:", error);
             alert("Simulation failed. Check console for details.");
@@ -512,7 +513,10 @@ const Dashboard = () => {
                 }}>
                     <span>🧪 VIEWING SIMULATION RESULTS</span>
                     <button
-                        onClick={() => setSimResult(null)}
+                        onClick={() => {
+                            setSimResult(null);
+                            setIsSimulating(false);
+                        }}
                         style={{
                             padding: '0.25rem 0.75rem',
                             backgroundColor: '#000',
