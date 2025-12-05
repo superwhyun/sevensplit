@@ -498,39 +498,7 @@ const Dashboard = () => {
                 </div>
             )}
 
-            {/* Simulation Result Banner */}
-            {simResult && (
-                <div style={{
-                    backgroundColor: '#eab308',
-                    color: '#000',
-                    padding: '0.75rem',
-                    textAlign: 'center',
-                    fontWeight: 'bold',
-                    display: 'flex',
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                    gap: '1rem'
-                }}>
-                    <span>🧪 VIEWING SIMULATION RESULTS</span>
-                    <button
-                        onClick={() => {
-                            setSimResult(null);
-                            setIsSimulating(false);
-                        }}
-                        style={{
-                            padding: '0.25rem 0.75rem',
-                            backgroundColor: '#000',
-                            color: '#eab308',
-                            border: 'none',
-                            borderRadius: '0.25rem',
-                            cursor: 'pointer',
-                            fontWeight: 'bold'
-                        }}
-                    >
-                        Exit Simulation View
-                    </button>
-                </div>
-            )}
+
 
             <AddStrategyModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} onAdd={handleAddStrategy} />
             <RenameStrategyModal
@@ -814,6 +782,41 @@ const Dashboard = () => {
                             </div>
                         </div>
                     </div>
+
+                    {/* Simulation Result Banner */}
+                    {simResult && (
+                        <div style={{
+                            backgroundColor: '#eab308',
+                            color: '#000',
+                            padding: '0.75rem',
+                            textAlign: 'center',
+                            fontWeight: 'bold',
+                            display: 'flex',
+                            justifyContent: 'center',
+                            alignItems: 'center',
+                            gap: '1rem',
+                            marginBottom: '1rem'
+                        }}>
+                            <span>🧪 VIEWING SIMULATION RESULTS</span>
+                            <button
+                                onClick={() => {
+                                    setSimResult(null);
+                                    setIsSimulating(false);
+                                }}
+                                style={{
+                                    padding: '0.25rem 0.75rem',
+                                    backgroundColor: '#000',
+                                    color: '#eab308',
+                                    border: 'none',
+                                    borderRadius: '0.25rem',
+                                    cursor: 'pointer',
+                                    fontWeight: 'bold'
+                                }}
+                            >
+                                Exit Simulation View
+                            </button>
+                        </div>
+                    )}
 
                     {/* Main Content Grid */}
                     <div className="dashboard-layout">

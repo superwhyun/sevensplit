@@ -160,33 +160,18 @@ const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
         <>
             {/* Indicator Settings */}
             <div style={{ marginTop: '1rem', marginBottom: '0.5rem', fontWeight: 'bold', color: '#60a5fa' }}>Indicator Settings</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                <div className="input-group">
-                    <label>Timeframe</label>
-                    <select
-                        name="rsi_timeframe"
-                        value={formData.rsi_timeframe || 'minutes/60'}
-                        onChange={handleChange}
-                        style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', border: '1px solid #334155', backgroundColor: '#1e293b', color: '#e2e8f0' }}
-                    >
-                        <option value="minutes/60">1 Hour</option>
-                        <option value="minutes/240">4 Hours</option>
-                        <option value="days">1 Day</option>
-                    </select>
-                </div>
-                <div className="input-group">
-                    <label>Period</label>
-                    <select
-                        name="rsi_period"
-                        value={formData.rsi_period || 14}
-                        onChange={handleChange}
-                        style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', border: '1px solid #334155', backgroundColor: '#1e293b', color: '#e2e8f0' }}
-                    >
-                        <option value={14}>14</option>
-                        <option value={7}>7</option>
-                        <option value={4}>4</option>
-                    </select>
-                </div>
+            <div className="input-group">
+                <label>Period</label>
+                <select
+                    name="rsi_period"
+                    value={formData.rsi_period || 14}
+                    onChange={handleChange}
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: '0.375rem', border: '1px solid #334155', backgroundColor: '#1e293b', color: '#e2e8f0' }}
+                >
+                    <option value={14}>14</option>
+                    <option value={7}>7</option>
+                    <option value={4}>4</option>
+                </select>
             </div>
 
             {/* Buying Conditions */}
