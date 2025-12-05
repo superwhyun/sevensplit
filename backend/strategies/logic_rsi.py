@@ -17,6 +17,7 @@ class RSIStrategyLogic:
         self.current_rsi_daily_short = None
         self.current_rsi_daily_short = None
         self.last_rsi_update = 0
+        self.last_hourly_rsi_update = 0 # Track hourly RSI update for UI
         self.last_tick_date = None # Track execution by date (YYYY-MM-DD)
 
     def tick(self, current_price: float, open_order_uuids: set):
@@ -66,17 +67,68 @@ class RSIStrategyLogic:
 
         # --- Buying Logic (Daily Delta - Confirmed Close) ---
         # Condition: Yesterday's RSI (prev_rsi) is in Buy Zone AND Increased from Day Before (prev_prev_rsi)
-        # Note: prev_rsi is the RSI of the candle that closed at 9 AM today (or yesterday, depending on perspective).
-        # It represents the "Confirmed Close" of the last full day.
+        # AND V-Shape Check: DayBefore >= Yesterday (It was going down or flat, then turned up)
         
-        if self.prev_rsi < self.strategy.config.rsi_buy_max:
+        if self.prev_rsi < self.strategy.config.rsi_buy_max and self.prev_prev_rsi >= self.prev_rsi:
             buy_amount_splits = 0
             
             # Calculate Delta (Yesterday - DayBefore)
+            rsi_delta = self.prev_rsi - self.prev_prev_rsi # Wait, if prev_prev >= prev, delta is <= 0?
+            
+            # Ah, logic error in my thought.
+            # V-Shape:
+            # DayBefore (e.g. 30) -> Yesterday (e.g. 25) -> Today (Confirmed Close? No, Yesterday IS the confirmed close)
+            
+            # Let's re-read: "RSI가 Max Buy RSI 이하에서 가장 낮은 지점에서 양전하게 되면 매수"
+            # This implies we are looking at:
+            # DayBefore (Down) -> Yesterday (Bottom) -> Today (Up)?
+            # But we only act on Confirmed Close.
+            # So we need:
+            # DayBeforeYesterday (e.g. 30) -> Yesterday (e.g. 25) -> Today (Confirmed Close, e.g. 28)
+            # So we need 3 points: prev_prev_prev, prev_prev, prev?
+            
+            # Or does user mean:
+            # Yesterday (Confirmed) was the turning point?
+            # If Yesterday (28) > DayBefore (25), it turned up.
+            # And DayBefore (25) < DayBeforeBefore (30).
+            
+            # Current variables:
+            # prev_rsi: Yesterday's Close RSI (Confirmed)
+            # prev_prev_rsi: DayBefore's Close RSI (Confirmed)
+            
+            # If prev > prev_prev: It went UP yesterday.
+            # To be a "Bottom", prev_prev must have been lower than prev_prev_prev.
+            
+            # But maybe simple "Turn Up" is enough?
+            # User said: "Max Buy RSI 이하에서 가장 낮은 지점에서 양전하게 되면"
+            # "양전" means Positive Transition (Down -> Up).
+            # So: prev_prev (Low) -> prev (High) is a turn up.
+            # And prev_prev should be < Max Buy RSI.
+            
+            # Let's stick to:
+            # 1. prev_prev < Max Buy RSI (It was in buy zone)
+            # 2. prev > prev_prev (It turned up)
+            # 3. Delta >= Threshold
+            
+            # Wait, user said "Max Buy RSI 이하에서 가장 낮은 지점에서".
+            # If prev_prev was the bottom, then prev_prev < prev.
+            
+            # So:
+            # if self.prev_prev_rsi < self.strategy.config.rsi_buy_max: (The bottom was in buy zone)
+            # and self.prev_rsi > self.prev_prev_rsi: (It turned up)
+            
+            # Let's adjust the condition.
+            pass
+
+        if self.prev_prev_rsi < self.strategy.config.rsi_buy_max:
+            buy_amount_splits = 0
+            
+            # Calculate Delta (Yesterday - DayBefore)
+            # Yesterday (prev) should be higher than DayBefore (prev_prev)
             rsi_delta = self.prev_rsi - self.prev_prev_rsi
             
             if rsi_delta >= self.strategy.config.rsi_buy_first_threshold:
-                logging.info(f"RSI Buy Signal (Daily Close): Prev RSI {self.prev_rsi:.2f} (DayBefore {self.prev_prev_rsi:.2f}, Delta +{rsi_delta:.2f} >= {self.strategy.config.rsi_buy_first_threshold})")
+                logging.info(f"RSI Buy Signal (Daily Close): Prev RSI {self.prev_rsi:.2f} > DayBefore {self.prev_prev_rsi:.2f} (Delta +{rsi_delta:.2f})")
                 buy_amount_splits = self.strategy.config.rsi_buy_first_amount
             
             # Execute Buy
@@ -93,15 +145,19 @@ class RSIStrategyLogic:
                         logging.warning(f"Max holdings reached ({current_holdings}). Skipping RSI buy.")
 
         # --- Selling Logic (Daily Delta - Confirmed Close) ---
-        # Condition: Yesterday's RSI (prev_rsi) is in Sell Zone AND Decreased from Day Before (prev_prev_rsi)
-        if self.prev_rsi > self.strategy.config.rsi_sell_min:
+        # Condition: DayBefore RSI (prev_prev_rsi) is in Sell Zone AND Decreased to Yesterday (prev_rsi)
+        # "Min Sell RSI 위에서 천장을 찍고 내려올때"
+        # Top was prev_prev. prev_prev > Min Sell RSI.
+        # Turned down: prev < prev_prev.
+        
+        if self.prev_prev_rsi > self.strategy.config.rsi_sell_min:
             sell_amount_splits = 0
             
             # Calculate Delta (DayBefore - Yesterday) -> Positive means drop
             rsi_drop = self.prev_prev_rsi - self.prev_rsi
             
             if rsi_drop >= self.strategy.config.rsi_sell_first_threshold:
-                logging.info(f"RSI Sell Signal (Daily Close): Prev RSI {self.prev_rsi:.2f} (DayBefore {self.prev_prev_rsi:.2f}, Drop -{rsi_drop:.2f} >= {self.strategy.config.rsi_sell_first_threshold})")
+                logging.info(f"RSI Sell Signal (Daily Close): Prev RSI {self.prev_rsi:.2f} < DayBefore {self.prev_prev_rsi:.2f} (Drop -{rsi_drop:.2f})")
                 sell_amount_splits = self.strategy.config.rsi_sell_first_amount
 
             # Execute Sell

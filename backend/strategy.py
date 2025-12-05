@@ -386,12 +386,38 @@ class SevenSplitStrategy(BaseStrategy):
         except Exception as e:
             logging.error(f"Failed to calculate RSI: {e}")
 
+    def calculate_hourly_rsi(self):
+        """Calculate Hourly RSI for UI display (updates every minute)."""
+        try:
+            # Fetch Hourly Candles (e.g., 60 minutes)
+            candles = self.exchange.get_candles(self.ticker, count=200, interval="minutes/60")
+            if candles:
+                candles.sort(key=lambda x: x['candle_date_time_kst'])
+                closes = [float(c['trade_price']) for c in candles]
+                
+                # Calculate RSI (14 and 4)
+                rsi_14 = calculate_rsi(closes, 14)
+                rsi_4 = calculate_rsi(closes, 4)
+                
+                # Update logic state (for UI only, not used in logic)
+                # We reuse the 'short' fields or add new ones?
+                # The dashboard expects 'rsi' and 'rsi_short' for the hourly display.
+                self.rsi_logic.current_rsi = rsi_14
+                self.rsi_logic.current_rsi_short = rsi_4
+                
+        except Exception as e:
+            logging.error(f"Failed to calculate Hourly RSI: {e}")
+
     def tick(self, current_price: float = None, open_orders: list = None):
         """Main tick function called periodically to check and update splits."""
         with self.lock:
-            # Update RSI every 60 seconds (Common for both strategies)
-            # We do this even if not running, so the dashboard shows correct indicators.
-            # Update RSI once per day after 9 AM KST
+            # Update Hourly RSI every 60 seconds for UI
+            current_time = time.time()
+            if current_time - self.rsi_logic.last_hourly_rsi_update >= 60:
+                self.calculate_hourly_rsi()
+                self.rsi_logic.last_hourly_rsi_update = current_time
+
+            # Update Daily RSI once per day after 9 AM KST
             # We do this to get the confirmed daily close RSI.
             KST = timezone(timedelta(hours=9))
             now_utc = datetime.now(timezone.utc)
