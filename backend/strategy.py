@@ -338,27 +338,48 @@ class SevenSplitStrategy(BaseStrategy):
             current_rsi = None
             current_rsi_short = None
             
+            if current_rsi is not None:
+                self.rsi_logic.prev_prev_rsi = self.rsi_logic.prev_rsi
+                self.rsi_logic.prev_rsi = self.rsi_logic.current_rsi # This was actually storing 'yesterday' if current is 'today'
+                # Wait, calculate_rsi(closes) returns the RSI for the last close.
+                # If we want prev_prev, we need to look at the history returned by calculate_rsi function if it returned a list.
+                # But the utility function `calculate_rsi` returns a single float (the last one).
+                
+                # We need to change how we get these values. 
+                # We should calculate RSI for the whole series and pick the last 3 values.
+                pass
+
+            # Let's rewrite the logic inside the try block properly
             if candles:
                 # Sort by timestamp ascending (oldest first)
                 candles.sort(key=lambda x: x['candle_date_time_kst'])
                 closes = [float(c['trade_price']) for c in candles]
                 
-                # Calculate RSI based on configured period (e.g., 14 or 4)
-                current_rsi = calculate_rsi(closes, self.config.rsi_period)
-                # Calculate Short RSI (fixed 4) for reference/display
-                current_rsi_short = calculate_rsi(closes, 4)
-
-            if current_rsi is not None:
-                self.rsi_logic.prev_rsi = self.rsi_logic.current_rsi
-                self.rsi_logic.current_rsi = current_rsi
+                # We need a calculate_rsi_series function or call calculate_rsi on sliced lists
+                # Calling on sliced lists is inefficient but simple for now.
+                # Actually, let's use the fact that we need rsi[-1], rsi[-2], rsi[-3]
                 
-            if current_rsi_short is not None:
-                self.rsi_logic.prev_rsi_short = self.rsi_logic.current_rsi_short
-                self.rsi_logic.current_rsi_short = current_rsi_short
-            
-            # Populate daily fields for compatibility/display (same as current now)
-            self.rsi_logic.current_rsi_daily = current_rsi
-            self.rsi_logic.current_rsi_daily_short = current_rsi_short
+                # Current (Today, incomplete if mid-day)
+                rsi_now = calculate_rsi(closes, self.config.rsi_period)
+                rsi_short_now = calculate_rsi(closes, 4)
+                
+                # Prev (Yesterday, confirmed)
+                rsi_prev = calculate_rsi(closes[:-1], self.config.rsi_period)
+                rsi_short_prev = calculate_rsi(closes[:-1], 4)
+                
+                # Prev Prev (Day before yesterday, confirmed)
+                rsi_prev_prev = calculate_rsi(closes[:-2], self.config.rsi_period)
+                
+                self.rsi_logic.current_rsi = rsi_now
+                self.rsi_logic.prev_rsi = rsi_prev
+                self.rsi_logic.prev_prev_rsi = rsi_prev_prev
+                
+                self.rsi_logic.current_rsi_short = rsi_short_now
+                self.rsi_logic.prev_rsi_short = rsi_short_prev
+                
+                # Populate daily fields
+                self.rsi_logic.current_rsi_daily = rsi_now
+                self.rsi_logic.current_rsi_daily_short = rsi_short_now
             
             # logging.info(f"RSI Updated: {self.rsi_logic.current_rsi} (Prev: {self.rsi_logic.prev_rsi}), Short: {self.rsi_logic.current_rsi_short}, Daily: {self.rsi_logic.current_rsi_daily}, DailyShort: {self.rsi_logic.current_rsi_daily_short}")
             

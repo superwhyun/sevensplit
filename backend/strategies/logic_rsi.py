@@ -17,53 +17,62 @@ class RSIStrategyLogic:
         self.current_rsi_daily_short = None
         self.current_rsi_daily_short = None
         self.last_rsi_update = 0
-        self.last_tick_hour = -1
-
-    def _get_current_hour(self):
-        """Get current hour from simulation candle or system time"""
-        # Check if running in simulation (SimulationStrategy has current_candle)
-        if hasattr(self.strategy, 'current_candle') and self.strategy.current_candle:
-            ts = self.strategy.current_candle.get('timestamp')
-            if ts:
-                try:
-                    if isinstance(ts, (int, float)):
-                        # Unix timestamp
-                        if ts > 10000000000: # Milliseconds
-                            ts = ts / 1000.0
-                        return datetime.fromtimestamp(ts).hour
-                    elif isinstance(ts, str):
-                        # ISO string
-                        return datetime.fromisoformat(ts.replace('Z', '+00:00')).hour
-                except Exception as e:
-                    logging.error(f"Error parsing simulation time: {e}")
-        
-        # Default to system time (Real mode)
-        return datetime.now().hour
+        self.last_tick_date = None # Track execution by date (YYYY-MM-DD)
 
     def tick(self, current_price: float, open_order_uuids: set):
         """RSI Daily Delta Strategy Logic"""
         self.strategy._manage_orders(open_order_uuids)
         
-        # Throttle to once per hour
-        current_hour = self._get_current_hour()
-        if current_hour == self.last_tick_hour:
-            return
-            
-        self.last_tick_hour = current_hour
+        # Determine current time (Simulation or Real)
+        current_dt = datetime.now()
+        # Check if running in simulation
+        if hasattr(self.strategy, 'current_candle') and self.strategy.current_candle:
+            ts = self.strategy.current_candle.get('timestamp')
+            if ts:
+                try:
+                    if isinstance(ts, (int, float)):
+                        if ts > 10000000000: ts = ts / 1000.0
+                        current_dt = datetime.fromtimestamp(ts)
+                    elif isinstance(ts, str):
+                        current_dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                except Exception:
+                    pass
+
+        # Execute only once per day, after 9 AM KST (00:00 UTC)
+        # Assuming system/simulation time is KST-aware or we treat hour 9 as start of day.
+        # If simulation time is UTC, 00:00 UTC is 09:00 KST.
+        # Let's assume the time we got is "Local Time" (KST for Upbit context).
         
-        if self.current_rsi is None or self.prev_rsi is None:
+        # If current_dt.hour < 9, it's before market close of previous day (in KST context).
+        # We want to act on the candle that closed at 9 AM.
+        # So we wait until hour >= 9.
+        
+        if current_dt.hour < 9:
             return
 
-        # --- Buying Logic (Daily Delta) ---
-        # Condition: RSI is in Buy Zone AND RSI increased by threshold compared to yesterday
-        if self.current_rsi < self.strategy.config.rsi_buy_max:
+        current_date_str = current_dt.strftime("%Y-%m-%d")
+        if current_date_str == self.last_tick_date:
+            return
+            
+        self.last_tick_date = current_date_str
+        
+        # Ensure we have enough history
+        if self.prev_rsi is None or self.prev_prev_rsi is None:
+            return
+
+        # --- Buying Logic (Daily Delta - Confirmed Close) ---
+        # Condition: Yesterday's RSI (prev_rsi) is in Buy Zone AND Increased from Day Before (prev_prev_rsi)
+        # Note: prev_rsi is the RSI of the candle that closed at 9 AM today (or yesterday, depending on perspective).
+        # It represents the "Confirmed Close" of the last full day.
+        
+        if self.prev_rsi < self.strategy.config.rsi_buy_max:
             buy_amount_splits = 0
             
-            # Calculate Delta (Today - Yesterday)
-            rsi_delta = self.current_rsi - self.prev_rsi
+            # Calculate Delta (Yesterday - DayBefore)
+            rsi_delta = self.prev_rsi - self.prev_prev_rsi
             
             if rsi_delta >= self.strategy.config.rsi_buy_first_threshold:
-                logging.info(f"RSI Buy Signal: RSI {self.current_rsi} (Yesterday {self.prev_rsi}, Delta +{rsi_delta:.2f} >= {self.strategy.config.rsi_buy_first_threshold})")
+                logging.info(f"RSI Buy Signal (Daily Close): Prev RSI {self.prev_rsi:.2f} (DayBefore {self.prev_prev_rsi:.2f}, Delta +{rsi_delta:.2f} >= {self.strategy.config.rsi_buy_first_threshold})")
                 buy_amount_splits = self.strategy.config.rsi_buy_first_amount
             
             # Execute Buy
@@ -79,16 +88,16 @@ class RSIStrategyLogic:
                     else:
                         logging.warning(f"Max holdings reached ({current_holdings}). Skipping RSI buy.")
 
-        # --- Selling Logic (Daily Delta) ---
-        # Condition: RSI is in Sell Zone AND RSI decreased by threshold compared to yesterday
-        if self.current_rsi > self.strategy.config.rsi_sell_min:
+        # --- Selling Logic (Daily Delta - Confirmed Close) ---
+        # Condition: Yesterday's RSI (prev_rsi) is in Sell Zone AND Decreased from Day Before (prev_prev_rsi)
+        if self.prev_rsi > self.strategy.config.rsi_sell_min:
             sell_amount_splits = 0
             
-            # Calculate Delta (Yesterday - Today) -> Positive means drop
-            rsi_drop = self.prev_rsi - self.current_rsi
+            # Calculate Delta (DayBefore - Yesterday) -> Positive means drop
+            rsi_drop = self.prev_prev_rsi - self.prev_rsi
             
             if rsi_drop >= self.strategy.config.rsi_sell_first_threshold:
-                logging.info(f"RSI Sell Signal: RSI {self.current_rsi} (Yesterday {self.prev_rsi}, Drop -{rsi_drop:.2f} >= {self.strategy.config.rsi_sell_first_threshold})")
+                logging.info(f"RSI Sell Signal (Daily Close): Prev RSI {self.prev_rsi:.2f} (DayBefore {self.prev_prev_rsi:.2f}, Drop -{rsi_drop:.2f} >= {self.strategy.config.rsi_sell_first_threshold})")
                 sell_amount_splits = self.strategy.config.rsi_sell_first_amount
 
             # Execute Sell
