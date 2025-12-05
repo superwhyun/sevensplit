@@ -1,6 +1,6 @@
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 class RSIStrategyLogic:
     def __init__(self, strategy):
@@ -24,7 +24,15 @@ class RSIStrategyLogic:
         self.strategy._manage_orders(open_order_uuids)
         
         # Determine current time (Simulation or Real)
-        current_dt = datetime.now()
+        # We need to ensure we are working with KST because Upbit daily close is 9 AM KST.
+        KST = timezone(timedelta(hours=9))
+        
+        # Default to system time, assume UTC if naive, then convert to KST
+        # Actually, datetime.now() returns local time. datetime.now(timezone.utc) returns UTC.
+        # Let's get UTC time first to be safe, then convert to KST.
+        now_utc = datetime.now(timezone.utc)
+        current_dt_kst = now_utc.astimezone(KST)
+        
         # Check if running in simulation
         if hasattr(self.strategy, 'current_candle') and self.strategy.current_candle:
             ts = self.strategy.current_candle.get('timestamp')
@@ -32,25 +40,21 @@ class RSIStrategyLogic:
                 try:
                     if isinstance(ts, (int, float)):
                         if ts > 10000000000: ts = ts / 1000.0
-                        current_dt = datetime.fromtimestamp(ts)
+                        # Unix timestamp is always UTC
+                        dt_utc = datetime.fromtimestamp(ts, timezone.utc)
+                        current_dt_kst = dt_utc.astimezone(KST)
                     elif isinstance(ts, str):
-                        current_dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                        # ISO string (usually UTC with Z)
+                        dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                        current_dt_kst = dt.astimezone(KST)
                 except Exception:
                     pass
 
-        # Execute only once per day, after 9 AM KST (00:00 UTC)
-        # Assuming system/simulation time is KST-aware or we treat hour 9 as start of day.
-        # If simulation time is UTC, 00:00 UTC is 09:00 KST.
-        # Let's assume the time we got is "Local Time" (KST for Upbit context).
-        
-        # If current_dt.hour < 9, it's before market close of previous day (in KST context).
-        # We want to act on the candle that closed at 9 AM.
-        # So we wait until hour >= 9.
-        
-        if current_dt.hour < 9:
+        # Execute only once per day, after 9 AM KST
+        if current_dt_kst.hour < 9:
             return
 
-        current_date_str = current_dt.strftime("%Y-%m-%d")
+        current_date_str = current_dt_kst.strftime("%Y-%m-%d")
         if current_date_str == self.last_tick_date:
             return
             
