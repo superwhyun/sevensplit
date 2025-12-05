@@ -392,25 +392,23 @@ def run_simulation(sim_config: SimulationConfig):    # Initialize Strategy
         # It will check fills again (redundant but harmless) and then create new orders.
         
         # 1. Determine the price to tick with
-        # We want to simulate Limit Orders.
-        # If we have a position, we buy at (last_buy_price * (1 - buy_rate)).
-        # If the candle Low hit that price, we should trigger the strategy at that EXACT price, not the Low price.
-        
         tick_price = candle['close'] # Default to close
-        
-        if strategy.last_buy_price is None:
-            # First buy: Buy at Open of the starting candle
-            tick_price = candle['open']
-        else:
-            # Subsequent buys
-            next_buy_price = strategy.last_buy_price * (1 - strategy.config.buy_rate)
-            if candle['low'] <= next_buy_price:
-                # Price dropped enough to trigger buy
-                # We tick at the target price so the order is placed at that price
-                tick_price = next_buy_price
+
+        if strategy.config.strategy_mode != "RSI":
+            # Price Grid Logic (Classic)
+            if strategy.last_buy_price is None:
+                # First buy: Buy at Open of the starting candle
+                tick_price = candle['open']
             else:
-                # Price didn't drop enough, just update with close
-                tick_price = candle['close']
+                # Subsequent buys
+                next_buy_price = strategy.last_buy_price * (1 - strategy.config.buy_rate)
+                if candle['low'] <= next_buy_price:
+                    # Price dropped enough to trigger buy
+                    # We tick at the target price so the order is placed at that price
+                    tick_price = next_buy_price
+                else:
+                    # Price didn't drop enough, just update with close
+                    tick_price = candle['close']
 
         # 2. Run strategy tick
         # This will:
@@ -441,7 +439,9 @@ def run_simulation(sim_config: SimulationConfig):    # Initialize Strategy
         strategy._cleanup_filled_splits()
         
         # Check if we need to create new buy split (e.g. if we sold everything and need to reset)
-        strategy._check_create_new_buy_split(tick_price)
+        # Only for Price Grid strategy. RSI strategy handles its own buy logic.
+        if strategy.config.strategy_mode != "RSI":
+            strategy._check_create_new_buy_split(tick_price)
 
     # Collect results
     trades = strategy.db.trades
