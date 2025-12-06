@@ -78,8 +78,8 @@ class RSIStrategyLogic:
         # Calculate Delta (Yesterday - DayBefore)
         rsi_delta = self.prev_rsi - self.prev_prev_rsi
         
-        # DEBUG LOGGING: Log whenever we are in Buy Zone (PrevPrev is low)
-        if self.prev_prev_rsi < self.strategy.config.rsi_buy_max:
+        # DEBUG LOGGING: Log whenever we are in Buy Zone (either Prev or PrevPrev is low)
+        if self.prev_rsi < self.strategy.config.rsi_buy_max or self.prev_prev_rsi < self.strategy.config.rsi_buy_max:
              logging.info(f"  [Buy Zone Debug] Date={current_date_str}, Prev={self.prev_rsi:.2f}, PrevPrev={self.prev_prev_rsi:.2f}, MaxBuy={self.strategy.config.rsi_buy_max}")
              logging.info(f"    -> Cond1(PrevPrev<Max): {buy_cond_1}, Cond2(Prev>PrevPrev): {buy_cond_2}, Delta: {rsi_delta:.2f}")
 

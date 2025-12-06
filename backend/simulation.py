@@ -362,9 +362,16 @@ def run_simulation(sim_config: SimulationConfig):    # Initialize Strategy
         sim_logs.append(msg)
 
     # Run simulation loop
-    # We iterate from start_idx to the end
+    # We iterate from start_idx    # Main Simulation Loop
     for i in range(start_idx, len(candles)):
         candle = candles[i]
+        
+        # Log current simulation date for debugging gaps
+        ts = candle.get('timestamp')
+        logging.info(f"SIM Loop: Processing candle {ts}") # Too verbose for full run, enable if needed
+        
+        # Update strategy with current candle (for RSI calc)
+        strategy.current_candle = candle
         # Normalize candle keys if needed (assuming frontend sends {t, o, h, l, c})
         # Map frontend keys to what we need. Frontend usually sends: x (time), y ([o, h, l, c])
         # Or we define the API to accept structured objects.
