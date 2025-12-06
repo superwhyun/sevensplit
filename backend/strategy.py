@@ -454,7 +454,12 @@ class SevenSplitStrategy(BaseStrategy):
                 now_utc = datetime.now(timezone.utc)
                 current_dt_kst = now_utc.astimezone(KST)
             
-            if current_dt_kst.hour >= 9:
+            # Check execution time
+            # In Real mode, we wait for 9 AM KST (Daily Close).
+            # In Simulation, timestamps might be slightly off (e.g. 08:59:59), so we process every candle.
+            is_simulation = (self.ticker == "SIM-TEST")
+            
+            if is_simulation or current_dt_kst.hour >= 9:
                 current_date_str = current_dt_kst.strftime("%Y-%m-%d")
                 
                 # Check if we need to update RSI data (calculate_rsi)

@@ -52,7 +52,8 @@ class RSIStrategyLogic:
                     pass
 
         # Execute only once per day, after 9 AM KST
-        if current_dt_kst.hour < 9:
+        # In Simulation, skip hour check to handle timestamp jitter
+        if self.strategy.ticker != "SIM-TEST" and current_dt_kst.hour < 9:
             return
 
         current_date_str = current_dt_kst.strftime("%Y-%m-%d")
