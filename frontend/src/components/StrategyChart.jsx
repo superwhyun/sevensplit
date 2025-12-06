@@ -24,20 +24,27 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
         if (simResult) setShowResultPopup(true);
     }, [simResult]);
 
-    // Helper to parse KST ISO string to UTC timestamp (seconds)
-    const parseKSTISO = (isoString) => {
-        if (!isoString) return null;
-        // Append +09:00 if missing to treat it as KST
-        const timeStr = isoString.endsWith('Z') || isoString.includes('+') ? isoString : isoString + '+09:00';
-        return new Date(timeStr).getTime() / 1000;
+    // Helper: Treat a KST time string (e.g. "2023-01-01T09:00:00") as if it were UTC
+    // This forces the chart to display "09:00" regardless of browser timezone
+    const parseKSTAsUTC = (kstString) => {
+        if (!kstString) return null;
+        // Remove any existing offset if present
+        const cleanStr = kstString.replace(/[+-]\d{2}:\d{2}$/, '').replace('Z', '');
+        return new Date(cleanStr + 'Z').getTime() / 1000;
     };
 
-    // Helper to parse UTC ISO string to UTC timestamp (seconds)
-    const parseUTCISO = (isoString) => {
-        if (!isoString) return null;
-        // Append Z if missing to treat it as UTC
-        const timeStr = isoString.endsWith('Z') || isoString.includes('+') ? isoString : isoString + 'Z';
-        return new Date(timeStr).getTime() / 1000;
+    // Helper: Shift a true UTC timestamp (or ISO) to KST-like timestamp
+    // e.g. 00:00 UTC -> 09:00 "Fake UTC"
+    const shiftToKST = (utcIsoOrTimestamp) => {
+        if (!utcIsoOrTimestamp) return null;
+        let ts = 0;
+        if (typeof utcIsoOrTimestamp === 'number') {
+            ts = utcIsoOrTimestamp;
+        } else {
+            const timeStr = utcIsoOrTimestamp.endsWith('Z') || utcIsoOrTimestamp.includes('+') ? utcIsoOrTimestamp : utcIsoOrTimestamp + 'Z';
+            ts = new Date(timeStr).getTime() / 1000;
+        }
+        return ts + (9 * 60 * 60);
     };
 
     useEffect(() => {
@@ -67,8 +74,8 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                 data.sort((a, b) => new Date(a.candle_date_time_kst) - new Date(b.candle_date_time_kst));
 
                 const candleData = data.map(d => ({
-                    // Use KST time with explicit +09:00 offset to ensure correct UTC timestamp
-                    time: parseKSTISO(d.candle_date_time_kst),
+                    // Use KST time string but treat as UTC to force chart to display KST time
+                    time: parseKSTAsUTC(d.candle_date_time_kst),
                     open: d.opening_price,
                     high: d.high_price,
                     low: d.low_price,
@@ -76,7 +83,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                 }));
 
                 const volumeData = data.map(d => ({
-                    time: parseKSTISO(d.candle_date_time_kst),
+                    time: parseKSTAsUTC(d.candle_date_time_kst),
                     value: d.candle_acc_trade_volume,
                     color: d.trade_price >= d.opening_price ? 'rgba(38, 166, 154, 0.5)' : 'rgba(239, 83, 80, 0.5)',
                 }));
@@ -399,8 +406,8 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                 simResult.trades.forEach(t => {
                     // Buy Marker
                     if (t.bought_at) {
-                        // Simulation returns UTC naive strings, so use parseUTCISO
-                        const buyTime = parseUTCISO(t.bought_at);
+                        // Shift UTC timestamp to KST to match chart
+                        const buyTime = shiftToKST(t.bought_at);
                         if (buyTime) {
                             markers.push({
                                 time: buyTime,
@@ -415,15 +422,8 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
 
                     // Sell Marker
                     if (t.timestamp) {
-                        let sellTime = t.timestamp;
-                        if (typeof sellTime === 'string') {
-                            // Simulation returns UTC naive strings
-                            sellTime = parseUTCISO(sellTime);
-                        } else if (typeof sellTime === 'number') {
-                            // If it's a number, assume it's already UTC seconds.
-                            // No parsing needed, just assign.
-                        }
-
+                        // Shift UTC timestamp to KST to match chart
+                        const sellTime = shiftToKST(t.timestamp);
                         if (sellTime) {
                             markers.push({
                                 time: sellTime,
@@ -442,7 +442,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             if (simResult && simResult.splits) {
                 simResult.splits.forEach(s => {
                     if (s.bought_at) {
-                        const buyTime = parseUTCISO(s.bought_at);
+                        const buyTime = shiftToKST(s.bought_at);
                         if (buyTime) {
                             markers.push({
                                 time: buyTime,
@@ -460,7 +460,8 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             if (splits && splits.length > 0) {
                 splits.forEach(split => {
                     if (split.bought_at) {
-                        const time = parseKSTISO(split.bought_at);
+                        // Split bought_at is UTC ISO from backend -> Shift to KST
+                        const time = shiftToKST(split.bought_at);
                         if (time) {
                             markers.push({
                                 time: time,
@@ -478,7 +479,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             if (tradeHistory && tradeHistory.length > 0) {
                 tradeHistory.forEach(trade => {
                     if (trade.timestamp) {
-                        const time = parseKSTISO(trade.timestamp);
+                        const time = shiftToKST(trade.timestamp);
                         if (time) {
                             markers.push({
                                 time: time,
@@ -492,7 +493,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                     }
 
                     if (trade.bought_at) {
-                        const time = parseKSTISO(trade.bought_at);
+                        const time = shiftToKST(trade.bought_at);
                         if (time) {
                             markers.push({
                                 time: time,

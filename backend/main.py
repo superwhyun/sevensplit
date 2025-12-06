@@ -19,7 +19,7 @@ from simulation import run_simulation, SimulationConfig
 from datetime import datetime, timedelta, timezone
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Load environment from backend/.env explicitly to ensure correct config even when run from repo root
 BACKEND_DIR = os.path.dirname(__file__)
@@ -102,6 +102,11 @@ strategy_service.load_strategies()
 # --- WebSocket connection registry ---
 ws_connections = set()
 
+# --- Global Caches ---
+shared_prices: Dict[str, float] = {}
+accounts_cache = {'data': [], 'timestamp': 0}
+supplementary_price_cache = {'data': {}, 'timestamp': 0}
+
 # Background thread for strategy tick
 def run_strategies():
     # Track last tick time for each strategy
@@ -116,8 +121,8 @@ def run_strategies():
             strategies = strategy_service.strategies
             current_strategy_ids = list(strategies.keys())
             
-            # 1. Collect all tickers (Running + Stopped)
-            tickers_to_fetch = set()
+            # 1. Collect all tickers (Running + Stopped) + Major Coins for Portfolio
+            tickers_to_fetch = {"KRW-BTC", "KRW-ETH", "KRW-SOL"}
             for s_id in current_strategy_ids:
                 if s_id in strategies:
                     tickers_to_fetch.add(strategies[s_id].ticker)
@@ -145,8 +150,6 @@ def run_strategies():
 
             # Update Shared Cache
             global shared_prices
-            if 'shared_prices' not in globals():
-                shared_prices = {}
             shared_prices.update(prices)
 
             # Fetch Orders
@@ -271,23 +274,42 @@ def get_status(strategy_id: int):
     ticker = strategy.ticker
 
     # Batch fetch price for the requested ticker to avoid individual API call
-    try:
-        if hasattr(exchange, "get_current_prices"):
-            prices = exchange.get_current_prices([ticker])
-            current_price = prices.get(ticker)
-        else:
+    # Batch fetch price for the requested ticker to avoid individual API call
+    # Use shared_prices if available
+    global shared_prices
+    current_price = shared_prices.get(ticker)
+    
+    if not current_price:
+        try:
+            if hasattr(exchange, "get_current_prices"):
+                prices = exchange.get_current_prices([ticker])
+                current_price = prices.get(ticker)
+                # Update cache
+                shared_prices.update(prices)
+            else:
+                current_price = None
+        except Exception as e:
+            logging.error(f"Failed to fetch price for {ticker}: {e}")
             current_price = None
-    except Exception as e:
-        logging.error(f"Failed to fetch price for {ticker}: {e}")
-        current_price = None
 
     state = strategy.get_state(current_price=current_price)
     # Mode flag
     state["mode"] = current_mode
     
-    # Fetch accounts once to get both balances
+    # Fetch accounts (use cache if available)
+    global accounts_cache
+    current_time = time.time()
+    accounts_raw = []
+    
     try:
-        accounts_raw = exchange._request('GET', '/v1/accounts') if hasattr(exchange, '_request') else []
+        # Check cache validity (10s)
+        if current_time - accounts_cache['timestamp'] < 10 and accounts_cache['data']:
+             accounts_raw = accounts_cache['data']
+        else:
+             accounts_raw = exchange._request('GET', '/v1/accounts') if hasattr(exchange, '_request') else []
+             accounts_cache['data'] = accounts_raw
+             accounts_cache['timestamp'] = current_time
+             
         balance_map = {acc['currency']: float(acc['balance']) for acc in accounts_raw}
     except Exception as e:
         logging.error(f"Failed to fetch accounts for status: {e}")
@@ -318,13 +340,10 @@ def get_full_snapshot() -> Dict[str, Any]:
     
     # Use shared prices from the strategy loop
     # This eliminates redundant API calls for UI updates
+    # Use shared prices from the strategy loop
     global shared_prices
-    if 'shared_prices' not in globals():
-        shared_prices = {}
         
     # If we have shared prices, use them. 
-    # If shared_prices is empty (bot just started), we might want to fetch once or just wait.
-    # Let's fetch if empty to ensure UI shows something immediately.
     prices = shared_prices.copy()
     
     # Check for missing tickers (e.g. stopped strategies)
@@ -334,9 +353,6 @@ def get_full_snapshot() -> Dict[str, Any]:
         # Fetch missing tickers with 1s Caching
         global supplementary_price_cache
         current_time = time.time()
-        
-        if 'supplementary_price_cache' not in globals():
-            supplementary_price_cache = {'data': {}, 'timestamp': 0}
             
         try:
             # Check if we need to refresh cache (older than 1s)
@@ -357,10 +373,6 @@ def get_full_snapshot() -> Dict[str, Any]:
     global accounts_cache
     current_time = time.time()
     
-    # Initialize cache if not exists
-    if 'accounts_cache' not in globals():
-        accounts_cache = {'data': [], 'timestamp': 0}
-        
     try:
         if current_time - accounts_cache['timestamp'] > 10:
             # Cache expired or empty, fetch new data
@@ -821,7 +833,27 @@ def _calculate_portfolio(prices: dict = {}, accounts_raw: list = None):
 
 @app.get("/portfolio")
 def get_portfolio():
-    return _calculate_portfolio()
+    global shared_prices
+    global accounts_cache
+    
+    # Use cached accounts if available and valid
+    current_time = time.time()
+    accounts_raw = None
+    
+    try:
+        if current_time - accounts_cache['timestamp'] < 10 and accounts_cache['data']:
+            accounts_raw = accounts_cache['data']
+        # If not valid, _calculate_portfolio will fetch (and we should probably update cache there? 
+        # But _calculate_portfolio is pure logic mostly.
+        # Let's fetch here if needed to keep consistency
+        else:
+             accounts_raw = exchange._request('GET', '/v1/accounts') if hasattr(exchange, '_request') else []
+             accounts_cache['data'] = accounts_raw
+             accounts_cache['timestamp'] = current_time
+    except Exception:
+        pass
+
+    return _calculate_portfolio(prices=shared_prices, accounts_raw=accounts_raw)
 
 
 @app.websocket("/ws")

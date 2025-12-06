@@ -4,6 +4,7 @@ import logging
 import json
 import threading
 import time
+import random
 from datetime import datetime, timedelta, timezone
 from database import get_db
 
@@ -26,6 +27,10 @@ class SevenSplitStrategy(BaseStrategy):
         # Logic Modules
         self.price_logic = PriceStrategyLogic(self)
         self.rsi_logic = RSIStrategyLogic(self)
+        
+        # Optimization: Staggered start for RSI to prevent 429 errors on startup
+        self.start_time = time.time()
+        self.initial_rsi_delay = random.uniform(5, 10) # Random delay between 5s and 10s
         
         # Load state first to see if we have existing config
         state_loaded = self.load_state()
@@ -267,7 +272,7 @@ class SevenSplitStrategy(BaseStrategy):
         if self.config.max_trades_per_day <= 0:
             return True # No limit
             
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         one_day_ago = now.timestamp() - 86400
         recent_count = 0
         
@@ -423,10 +428,14 @@ class SevenSplitStrategy(BaseStrategy):
         """Main tick function called periodically to check and update splits."""
         with self.lock:
             # Update Hourly RSI every 60 seconds for UI
+            # Update Hourly RSI every 30 minutes (1800s) for UI
+            # Also check for initial delay to prevent startup spike
             current_time = time.time()
-            if current_time - self.rsi_logic.last_hourly_rsi_update >= 60:
-                self.calculate_hourly_rsi()
-                self.rsi_logic.last_hourly_rsi_update = current_time
+            
+            if current_time - self.start_time > self.initial_rsi_delay:
+                if current_time - self.rsi_logic.last_hourly_rsi_update >= 1800:
+                    self.calculate_hourly_rsi()
+                    self.rsi_logic.last_hourly_rsi_update = current_time
 
             # Update Daily RSI once per day after 9 AM KST
             # We do this to get the confirmed daily close RSI.
@@ -459,7 +468,7 @@ class SevenSplitStrategy(BaseStrategy):
             # In Simulation, timestamps might be slightly off (e.g. 08:59:59), so we process every candle.
             is_simulation = (self.ticker == "SIM-TEST")
             
-            if is_simulation or current_dt_kst.hour >= 9:
+            if is_simulation or (current_dt_kst.hour >= 9 and current_time - self.start_time > self.initial_rsi_delay):
                 current_date_str = current_dt_kst.strftime("%Y-%m-%d")
                 
                 # Check if we need to update RSI data (calculate_rsi)
@@ -608,7 +617,7 @@ class SevenSplitStrategy(BaseStrategy):
             id=self.next_split_id,
             status="PENDING_BUY",
             buy_price=target_price,
-            created_at=datetime.now().isoformat()
+            created_at=datetime.now(timezone.utc).isoformat()
         )
 
         # Normalize price to valid tick size
@@ -689,7 +698,7 @@ class SevenSplitStrategy(BaseStrategy):
         if split.status == "PENDING_BUY" and split.created_at:
             try:
                 created_dt = datetime.fromisoformat(split.created_at)
-                elapsed = (datetime.now() - created_dt).total_seconds()
+                elapsed = (datetime.now(timezone.utc) - created_dt).total_seconds()
                 if elapsed > 1800:  # 30 minutes timeout
                     current_price = self.exchange.get_current_price(self.ticker)
                     # Check if current price is within max_price (if set)
@@ -703,7 +712,7 @@ class SevenSplitStrategy(BaseStrategy):
                             res = self.exchange.buy_market_order(self.ticker, split.buy_amount)
                             if res:
                                 split.buy_order_uuid = res.get('uuid')
-                                split.created_at = datetime.now().isoformat()  # Reset timer
+                                split.created_at = datetime.now(timezone.utc).isoformat()  # Reset timer
                                 logging.info(f"Placed market order {split.buy_order_uuid} for split {split.id}")
                                 self.save_state()
                                 return
@@ -727,7 +736,7 @@ class SevenSplitStrategy(BaseStrategy):
                 if executed_vol > 0:
                     # Filled or Partially Filled -> Treat as success
                     split.status = "BUY_FILLED"
-                    split.bought_at = datetime.now().isoformat()
+                    split.bought_at = datetime.now(timezone.utc).isoformat()
                     
                     # Calculate actual buy price and volume from trades
                     trades = order.get('trades', [])

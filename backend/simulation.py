@@ -260,7 +260,13 @@ class SimulationStrategy(SevenSplitStrategy):
         
         # Logic Modules
         self.price_logic = PriceStrategyLogic(self)
+        self.price_logic = PriceStrategyLogic(self)
         self.rsi_logic = RSIStrategyLogic(self)
+        
+        # Initialize start_time for RSI delay logic (needed for tick method)
+        import time
+        self.start_time = time.time()
+        self.initial_rsi_delay = 0 # No delay needed for simulation
         
         # Initialize defaults if needed (similar to SevenSplitStrategy)
         if self.config.min_price == 0.0:
@@ -385,18 +391,18 @@ def run_simulation(sim_config: SimulationConfig):    # Initialize Strategy
     sim_logs = []
     start_price = candles[start_idx].get('close') or candles[start_idx].get('trade_price')
     msg = f"SIM: Start Price: {start_price}, Start Index: {start_idx}/{len(candles)}"
-    logging.info(msg)
+    # logging.info(msg)
     sim_logs.append(msg)
     
     if strategy.config.min_price == 0.0 and start_price:
         strategy.config.min_price = start_price * 0.5 # Wide range for sim
         strategy.config.max_price = start_price * 1.5
         msg = f"SIM: Initialized config with min={strategy.config.min_price}, max={strategy.config.max_price}"
-        logging.info(msg)
+        # logging.info(msg)
         sim_logs.append(msg)
     else:
         msg = f"SIM: Config min={strategy.config.min_price}, max={strategy.config.max_price}, mode={strategy.config.strategy_mode}"
-        logging.info(msg)
+        # logging.info(msg)
         sim_logs.append(msg)
 
     # Run simulation loop
@@ -406,7 +412,7 @@ def run_simulation(sim_config: SimulationConfig):    # Initialize Strategy
         
         # Log current simulation date for debugging gaps
         ts = candle.get('timestamp')
-        logging.info(f"SIM Loop: Processing candle {ts}") # Too verbose for full run, enable if needed
+        # logging.info(f"SIM Loop: Processing candle {ts}") # Too verbose for full run, enable if needed
         
         # Update strategy with current candle (for RSI calc)
         strategy.current_candle = candle
