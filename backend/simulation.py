@@ -306,10 +306,28 @@ class SimulationStrategy(SevenSplitStrategy):
         if not split.sell_order_uuid:
             return
 
-        # Check if High price hit the sell price
-        if self.current_candle['high'] >= split.target_sell_price:
+        # Check order status from exchange first
+        order = self.exchange.get_order(split.sell_order_uuid)
+        if not order:
+            return
+
+        is_filled = False
+        actual_sell_price = 0.0
+
+        if order.get('ord_type') == 'market':
+            # Market order is always filled immediately in MockExchange
+            if order.get('state') == 'done':
+                is_filled = True
+                actual_sell_price = float(order.get('price', 0))
+        else:
+            # Limit order simulation logic
+            # Check if High price hit the sell price
+            if split.target_sell_price and self.current_candle['high'] >= split.target_sell_price:
+                is_filled = True
+                actual_sell_price = split.target_sell_price # Assume filled at limit
+
+        if is_filled:
             # Sell filled
-            actual_sell_price = split.target_sell_price # Assume filled at limit
             
             buy_total = split.buy_amount
             buy_fee = buy_total * self.config.fee_rate
