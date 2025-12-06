@@ -492,15 +492,32 @@ def run_simulation(sim_config: SimulationConfig):    # Initialize Strategy
             strategy._check_create_new_buy_split(tick_price)
 
     # Collect results
+    # Collect results
     trades = strategy.db.trades
-    total_profit = sum(t['net_profit'] for t in trades)
+    total_realized_profit = sum(t['net_profit'] for t in trades)
+    
+    # Calculate Unrealized Profit for active splits
+    unrealized_profit = 0
+    if strategy.current_candle:
+        # Get last price (close)
+        c = strategy.current_candle
+        current_price = c.get('trade_price') or c.get('close') or c.get('c') or 0
+        current_price = float(current_price)
+        
+        for split in strategy.splits:
+            if split.status in ["BUY_FILLED", "PENDING_SELL"]:
+                # Calculate value change: (Current Price - Buy Price) * Volume
+                if split.actual_buy_price and split.buy_volume:
+                    diff = (current_price - split.actual_buy_price) * split.buy_volume
+                    unrealized_profit += diff
+
     trade_count = len(trades)
     
     return {
         "trades": trades,
-        "total_profit": total_profit,
+        "total_profit": total_realized_profit, # Realized only
         "trade_count": trade_count,
-        "final_balance": strategy.budget + total_profit, # Simple approx
+        "final_balance": strategy.budget + total_realized_profit + unrealized_profit,
         "splits": [s.model_dump() for s in strategy.splits], # Return final splits
         "config": strategy.config.model_dump(), # Return used config
         "debug_logs": sim_logs
