@@ -516,6 +516,7 @@ def run_simulation(sim_config: SimulationConfig):    # Initialize Strategy
     return {
         "trades": trades,
         "total_profit": total_realized_profit, # Realized only
+        "unrealized_profit": unrealized_profit,
         "trade_count": trade_count,
         "final_balance": strategy.budget + total_realized_profit + unrealized_profit,
         "splits": [s.model_dump() for s in strategy.splits], # Return final splits

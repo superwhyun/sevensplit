@@ -566,9 +566,14 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                             </button>
                         </div>
                         <div style={{ display: 'grid', gridTemplateColumns: 'auto auto', gap: '0.5rem 1rem', fontSize: '0.9rem' }}>
-                            <span style={{ color: '#94a3b8' }}>Total Profit:</span>
+                            <span style={{ color: '#94a3b8' }}>Realized Profit:</span>
                             <span style={{ fontWeight: 'bold', color: simResult.total_profit >= 0 ? '#10b981' : '#ef4444' }}>
                                 ₩{Math.round(simResult.total_profit).toLocaleString()}
+                            </span>
+
+                            <span style={{ color: '#94a3b8' }}>Unrealized Profit:</span>
+                            <span style={{ fontWeight: 'bold', color: (simResult.unrealized_profit || 0) >= 0 ? '#10b981' : '#ef4444' }}>
+                                ₩{Math.round(simResult.unrealized_profit || 0).toLocaleString()}
                             </span>
 
                             <span style={{ color: '#94a3b8' }}>Trades:</span>
