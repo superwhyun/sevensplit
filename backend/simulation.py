@@ -60,7 +60,16 @@ class MockExchange:
     def get_current_price(self, ticker):
         if self.strategy and self.strategy.current_candle:
             c = self.strategy.current_candle
-            price = c.get('trade_price') or c.get('close') or c.get('c')
+            
+            # Try to get Open and Close
+            open_price = c.get('opening_price') or c.get('open') or c.get('o')
+            close_price = c.get('trade_price') or c.get('close') or c.get('c')
+            
+            if open_price is not None and close_price is not None:
+                return (float(open_price) + float(close_price)) / 2
+            
+            # Fallback
+            price = close_price or open_price
             
             # DEBUG LOG: Check what keys are available if price is 0 or None
             if not price:
