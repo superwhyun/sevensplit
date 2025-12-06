@@ -61,8 +61,16 @@ class MockExchange:
         if self.strategy and self.strategy.current_candle:
             c = self.strategy.current_candle
             price = c.get('trade_price') or c.get('close') or c.get('c')
+            
+            # DEBUG LOG: Check what keys are available if price is 0 or None
+            if not price:
+                logging.warning(f"DEBUG: get_current_price failed. Candle keys: {list(c.keys())}, Candle: {c}")
+            
             if price:
                 return float(price)
+        else:
+            logging.warning("DEBUG: get_current_price failed. No current_candle set.")
+            
         return 0
     
     def normalize_price(self, price):
