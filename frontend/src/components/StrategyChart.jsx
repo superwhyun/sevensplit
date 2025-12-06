@@ -437,6 +437,25 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                     }
                 });
             }
+
+            // Also add markers for active splits (bought but not sold)
+            if (simResult && simResult.splits) {
+                simResult.splits.forEach(s => {
+                    if (s.bought_at) {
+                        const buyTime = parseUTCISO(s.bought_at);
+                        if (buyTime) {
+                            markers.push({
+                                time: buyTime,
+                                position: 'belowBar',
+                                color: '#eab308', // Yellow for active splits
+                                shape: 'arrowUp',
+                                text: '',
+                                size: 1
+                            });
+                        }
+                    }
+                });
+            }
         } else {
             if (splits && splits.length > 0) {
                 splits.forEach(split => {
