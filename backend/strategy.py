@@ -832,7 +832,19 @@ class SevenSplitStrategy(BaseStrategy):
             order = self.exchange.get_order(split.sell_order_uuid)
             if order and order.get('state') == 'done':
                 # Sell order filled
-                actual_sell_price = float(order.get('price', split.target_sell_price))
+                
+                # Calculate actual sell price from trades (especially for market orders)
+                trades = order.get('trades', [])
+                if trades and len(trades) > 0:
+                    total_funds = sum(float(t.get('funds', 0)) if t.get('funds') else float(t.get('price', 0)) * float(t.get('volume', 0)) for t in trades)
+                    total_volume = sum(float(t.get('volume', 0)) for t in trades)
+                    actual_sell_price = total_funds / total_volume if total_volume > 0 else 0.0
+                else:
+                    # Fallback for limit orders or mock
+                    actual_sell_price = float(order.get('price') or split.target_sell_price or 0.0)
+                
+                if actual_sell_price == 0.0:
+                    logging.warning(f"Sell filled but price is 0. Order: {order}")
 
                 # Calculate detailed profit breakdown
                 buy_total = split.buy_amount

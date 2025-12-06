@@ -89,7 +89,19 @@ class RSIStrategyLogic:
             
             if rsi_delta >= self.strategy.config.rsi_buy_first_threshold:
                 logging.info(f"RSI Buy Signal (Daily Close): Prev RSI {self.prev_rsi:.2f} > DayBefore {self.prev_prev_rsi:.2f} (Delta +{rsi_delta:.2f})")
-                buy_amount_splits = self.strategy.config.rsi_buy_first_amount
+                
+                # Check for duplicate buy on the same day (Prevent double buy on restart)
+                already_bought_today = False
+                for s in self.strategy.splits:
+                    if s.bought_at and s.bought_at.startswith(current_date_str):
+                        already_bought_today = True
+                        break
+                
+                if already_bought_today:
+                    logging.info(f"  -> Skip Buy: Already bought a split today ({current_date_str}).")
+                    buy_amount_splits = 0
+                else:
+                    buy_amount_splits = self.strategy.config.rsi_buy_first_amount
             else:
                 logging.info(f"    -> Delta too small ({rsi_delta:.2f} < {self.strategy.config.rsi_buy_first_threshold})")
             
