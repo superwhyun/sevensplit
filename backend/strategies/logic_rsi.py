@@ -69,18 +69,19 @@ class RSIStrategyLogic:
         logging.info(f"RSI Logic Tick [{current_date_str}]: Prev={self.prev_rsi:.2f}, PrevPrev={self.prev_prev_rsi:.2f}")
 
         # --- Buying Logic (Daily Delta - Confirmed Close) ---
-        # Condition: Yesterday's RSI (prev_rsi) is in Buy Zone AND Increased from Day Before (prev_prev_rsi)
-        # AND V-Shape Check: DayBefore >= Yesterday (It was going down or flat, then turned up)
+        # Condition: DayBefore RSI (prev_prev_rsi) was in Buy Zone AND Increased to Yesterday (prev_rsi)
+        # V-Shape Check: DayBefore < Yesterday (It turned up)
         
-        buy_cond_1 = self.prev_rsi < self.strategy.config.rsi_buy_max
-        buy_cond_2 = self.prev_prev_rsi >= self.prev_rsi
+        buy_cond_1 = self.prev_prev_rsi < self.strategy.config.rsi_buy_max
+        buy_cond_2 = self.prev_rsi > self.prev_prev_rsi
         
         # Calculate Delta (Yesterday - DayBefore)
         rsi_delta = self.prev_rsi - self.prev_prev_rsi
         
-        # DEBUG LOGGING
-        if buy_cond_1:
-             logging.info(f"  [Buy Check] Zone OK ({self.prev_rsi:.2f} < {self.strategy.config.rsi_buy_max}). V-Shape: {buy_cond_2} ({self.prev_prev_rsi:.2f} >= {self.prev_rsi:.2f}). Delta: {rsi_delta:.2f}")
+        # DEBUG LOGGING: Log whenever we are in Buy Zone (either Prev or PrevPrev is low)
+        if self.prev_rsi < self.strategy.config.rsi_buy_max or self.prev_prev_rsi < self.strategy.config.rsi_buy_max:
+             logging.info(f"  [Buy Zone Debug] Date={current_date_str}, Prev={self.prev_rsi:.2f}, PrevPrev={self.prev_prev_rsi:.2f}, MaxBuy={self.strategy.config.rsi_buy_max}")
+             logging.info(f"    -> Cond1(PrevPrev<Max): {buy_cond_1}, Cond2(Prev>PrevPrev): {buy_cond_2}, Delta: {rsi_delta:.2f}")
 
         if buy_cond_1 and buy_cond_2:
             buy_amount_splits = 0
@@ -89,7 +90,7 @@ class RSIStrategyLogic:
                 logging.info(f"RSI Buy Signal (Daily Close): Prev RSI {self.prev_rsi:.2f} > DayBefore {self.prev_prev_rsi:.2f} (Delta +{rsi_delta:.2f})")
                 buy_amount_splits = self.strategy.config.rsi_buy_first_amount
             else:
-                logging.info(f"  [Buy Check] Delta too small ({rsi_delta:.2f} < {self.strategy.config.rsi_buy_first_threshold})")
+                logging.info(f"    -> Delta too small ({rsi_delta:.2f} < {self.strategy.config.rsi_buy_first_threshold})")
             
             # Execute Buy
             if buy_amount_splits > 0:
@@ -118,7 +119,7 @@ class RSIStrategyLogic:
         
         # DEBUG LOGGING
         if sell_cond_1:
-            logging.info(f"  [Sell Check] Zone OK ({self.prev_prev_rsi:.2f} > {self.strategy.config.rsi_sell_min}). Inverted V: {sell_cond_2} ({self.prev_rsi:.2f} < {self.prev_prev_rsi:.2f}). Drop: {rsi_drop:.2f}")
+            logging.info(f"  [Sell Check] Zone OK (PrevPrev {self.prev_prev_rsi:.2f} > {self.strategy.config.rsi_sell_min}). Inverted V: {sell_cond_2} ({self.prev_rsi:.2f} < {self.prev_prev_rsi:.2f}). Drop: {rsi_drop:.2f}")
 
         if sell_cond_1 and sell_cond_2:
             sell_amount_splits = 0
