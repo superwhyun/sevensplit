@@ -59,7 +59,10 @@ class MockExchange:
     
     def get_current_price(self, ticker):
         if self.strategy and self.strategy.current_candle:
-            return self.strategy.current_candle.get('trade_price', 0)
+            c = self.strategy.current_candle
+            price = c.get('trade_price') or c.get('close') or c.get('c')
+            if price:
+                return float(price)
         return 0
     
     def normalize_price(self, price):
