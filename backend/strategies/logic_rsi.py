@@ -69,19 +69,19 @@ class RSIStrategyLogic:
         logging.info(f"RSI Logic Tick [{current_date_str}]: Prev={self.prev_rsi:.2f}, PrevPrev={self.prev_prev_rsi:.2f}")
 
         # --- Buying Logic (Daily Delta - Confirmed Close) ---
-        # Condition: DayBefore RSI (prev_prev_rsi) was in Buy Zone AND Increased to Yesterday (prev_rsi)
-        # V-Shape Check: DayBefore < Yesterday (It turned up)
+        # Condition: Rebounding (Prev > PrevPrev) BUT still in Buy Zone (Prev < Max Buy)
+        # User Request: "Max Buy RSI보다 아래인데, 어제(PrevPrev)보다 오늘(Prev)이 높은데, 아직 여전히 RSI값이 Max Buy RSI 이하인 경우"
         
-        buy_cond_1 = self.prev_prev_rsi < self.strategy.config.rsi_buy_max
+        buy_cond_1 = self.prev_rsi < self.strategy.config.rsi_buy_max
         buy_cond_2 = self.prev_rsi > self.prev_prev_rsi
         
         # Calculate Delta (Yesterday - DayBefore)
         rsi_delta = self.prev_rsi - self.prev_prev_rsi
         
-        # DEBUG LOGGING: Log whenever we are in Buy Zone (either Prev or PrevPrev is low)
-        if self.prev_rsi < self.strategy.config.rsi_buy_max or self.prev_prev_rsi < self.strategy.config.rsi_buy_max:
+        # DEBUG LOGGING: Log whenever we are in Buy Zone (Prev is low)
+        if self.prev_rsi < self.strategy.config.rsi_buy_max:
              logging.info(f"  [Buy Zone Debug] Date={current_date_str}, Prev={self.prev_rsi:.2f}, PrevPrev={self.prev_prev_rsi:.2f}, MaxBuy={self.strategy.config.rsi_buy_max}")
-             logging.info(f"    -> Cond1(PrevPrev<Max): {buy_cond_1}, Cond2(Prev>PrevPrev): {buy_cond_2}, Delta: {rsi_delta:.2f}")
+             logging.info(f"    -> Cond1(Prev<Max): {buy_cond_1}, Cond2(Prev>PrevPrev): {buy_cond_2}, Delta: {rsi_delta:.2f}")
 
         if buy_cond_1 and buy_cond_2:
             buy_amount_splits = 0
