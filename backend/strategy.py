@@ -217,7 +217,7 @@ class SevenSplitStrategy(BaseStrategy):
                     # Use market order for initial entry to ensure execution
                     self._create_buy_split(current_price, use_market_order=True)
 
-                    self._create_buy_split(current_price, use_market_order=True)
+
 
             # Sync pending orders on startup to handle bot restarts/crashes
             logging.info(f"Syncing pending orders for strategy {self.strategy_id}...")
@@ -613,6 +613,15 @@ class SevenSplitStrategy(BaseStrategy):
         # Calculate volume for limit order
         amount = self.config.investment_per_split
         
+        # DEBUG: Check real balance before ordering
+        try:
+            current_balance = self.exchange.get_balance("KRW")
+            logging.info(f"Attempting buy. Amount: {amount}, Current KRW Balance: {current_balance}, Budget: {self.budget}")
+            if current_balance < amount:
+                 logging.warning(f"Warning: Current balance ({current_balance}) is less than order amount ({amount})!")
+        except Exception as e:
+            logging.warning(f"Failed to check balance before buy: {e}")
+
         if amount < self.MIN_ORDER_AMOUNT_KRW:
             logging.error(f"Investment amount {amount} is less than minimum order amount ({self.MIN_ORDER_AMOUNT_KRW} KRW). Skipping.")
             return None
@@ -657,9 +666,12 @@ class SevenSplitStrategy(BaseStrategy):
             # Check for insufficient funds to trigger circuit breaker
             if "Insufficient funds" in error_msg or "insufficient_funds" in error_msg:
                 # Use shorter cool-down for Mock/Sim (60s), longer for Real (3600s)
-                # Note: strategy_mode is 'RSI' or 'Price', not 'Real'/'Mock'. We check exchange URL or env.
                 import os
-                is_mock = "localhost" in self.exchange.server_url or "127.0.0.1" in self.exchange.server_url or os.getenv("MODE", "").upper() == "MOCK"
+                # self.exchange is ExchangeService, so we access the inner exchange object
+                inner_exchange = getattr(self.exchange, 'exchange', self.exchange)
+                server_url = getattr(inner_exchange, 'server_url', '')
+                
+                is_mock = "localhost" in server_url or "127.0.0.1" in server_url or os.getenv("MODE", "").upper() == "MOCK"
                 cooldown = 60 if is_mock else 3600
                 
                 logging.error(f"Insufficient funds! Triggering cool-down for {cooldown}s. Error: {e}")
