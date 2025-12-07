@@ -584,7 +584,7 @@ class SevenSplitStrategy(BaseStrategy):
         """Create a new buy split at the given target price."""
         # Circuit Breaker: Check for insufficient funds cool-down
         if time.time() < self._insufficient_funds_until:
-            logging.debug(f"Skipping buy due to insufficient funds cool-down (until {datetime.fromtimestamp(self._insufficient_funds_until)})")
+            logging.warning(f"Skipping buy due to insufficient funds cool-down (until {datetime.fromtimestamp(self._insufficient_funds_until)})")
             return None
 
         if target_price < self.config.min_price:
@@ -654,9 +654,16 @@ class SevenSplitStrategy(BaseStrategy):
         except Exception as e:
             error_msg = str(e)
             # Check for insufficient funds to trigger circuit breaker
+            # Check for insufficient funds to trigger circuit breaker
             if "Insufficient funds" in error_msg or "insufficient_funds" in error_msg:
-                logging.error(f"Insufficient funds! Triggering cool-down for 1 hour. Error: {e}")
-                self._insufficient_funds_until = time.time() + 3600  # 1 hour cool-down
+                # Use shorter cool-down for Mock/Sim (60s), longer for Real (3600s)
+                # Note: strategy_mode is 'RSI' or 'Price', not 'Real'/'Mock'. We check exchange URL or env.
+                import os
+                is_mock = "localhost" in self.exchange.server_url or "127.0.0.1" in self.exchange.server_url or os.getenv("MODE", "").upper() == "MOCK"
+                cooldown = 60 if is_mock else 3600
+                
+                logging.error(f"Insufficient funds! Triggering cool-down for {cooldown}s. Error: {e}")
+                self._insufficient_funds_until = time.time() + cooldown
                 return None
                 
             logging.warning(f"Failed to create buy order at {target_price}: {e}")
