@@ -4,7 +4,7 @@ services:
   # User 1 Bot Instance
   bot-user1:
     build: .
-    image: sevensplit-bot:latest
+    image: sevensplit-bot:${IMAGE_TAG:-latest}
     container_name: sevensplit-user1
     restart: unless-stopped
     ports:
@@ -19,7 +19,7 @@ services:
 
   # User 2 Bot Instance (Example)
   # bot-user2:
-  #   image: sevensplit-bot:latest
+  #   image: sevensplit-bot:${IMAGE_TAG:-latest}
   #   container_name: sevensplit-user2
   #   restart: unless-stopped
   #   ports:
@@ -36,6 +36,7 @@ services:
     build: 
       context: .
       dockerfile: mock-exchange/Dockerfile
+    image: sevensplit-mock-exchange:${IMAGE_TAG:-latest}
     container_name: sevensplit-mock
     ports:
       - "5001:5001"

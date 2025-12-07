@@ -66,6 +66,25 @@ UPBIT_SECRET_KEY=your_actual_secret_key_here
 
 - **Dashboard**: http://localhost:5173
 
+### 🐳 Docker & Versioning
+
+You can run specific versions of the bot using Docker Compose.
+
+- **Run Latest Version** (Default):
+  ```bash
+  docker compose up -d
+  ```
+
+- **Run Specific Version**:
+  ```bash
+  IMAGE_TAG=1.0.0 docker compose up -d
+  ```
+
+- **Build Specific Version**:
+  ```bash
+  IMAGE_TAG=1.0.0 docker compose build
+  ```
+
 ## 🐳 Docker 배포 (멀티 유저 / 서버 운영)
 
 Docker를 사용하면 여러 개의 봇을 격리된 환경에서 안정적으로 운영할 수 있습니다.

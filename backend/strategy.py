@@ -24,6 +24,11 @@ class SevenSplitStrategy(BaseStrategy):
         self.last_sell_price = None # Track the last sell price for rebuy strategy
         self.budget = 0.0
         
+        # Constants
+        self.MIN_ORDER_AMOUNT_KRW = 5000
+        self.ORDER_TIMEOUT_SEC = 1800
+        self.RSI_UPDATE_INTERVAL_SEC = 1800
+        
         # Logic Modules
         self.price_logic = PriceStrategyLogic(self)
         self.rsi_logic = RSIStrategyLogic(self)
@@ -31,6 +36,10 @@ class SevenSplitStrategy(BaseStrategy):
         # Optimization: Staggered start for RSI to prevent 429 errors on startup
         self.start_time = time.time()
         self.initial_rsi_delay = random.uniform(5, 10) # Random delay between 5s and 10s
+        
+        # Circuit Breaker state
+        self._insufficient_funds_until = 0
+
         
         # Load state first to see if we have existing config
         state_loaded = self.load_state()
@@ -59,43 +68,17 @@ class SevenSplitStrategy(BaseStrategy):
         """Save state to database"""
         try:
             # Update strategy state
-            config_dict = self.config.model_dump()
-            self.db.update_strategy_state(
-                self.strategy_id,
-                investment_per_split=config_dict['investment_per_split'],
-                min_price=config_dict['min_price'],
-                max_price=config_dict['max_price'],
-                buy_rate=config_dict['buy_rate'],
-                sell_rate=config_dict['sell_rate'],
-                fee_rate=config_dict['fee_rate'],
-                tick_interval=config_dict['tick_interval'],
-                rebuy_strategy=config_dict['rebuy_strategy'],
-                max_trades_per_day=config_dict['max_trades_per_day'],
-                
-                # RSI Config
-                strategy_mode=config_dict['strategy_mode'],
-                rsi_period=config_dict['rsi_period'],
-                rsi_timeframe=config_dict['rsi_timeframe'],
-                rsi_buy_max=config_dict['rsi_buy_max'],
-                rsi_buy_first_threshold=config_dict['rsi_buy_first_threshold'],
-                rsi_buy_first_amount=config_dict['rsi_buy_first_amount'],
-                rsi_buy_next_threshold=config_dict['rsi_buy_next_threshold'],
-                rsi_buy_next_amount=config_dict['rsi_buy_next_amount'],
-                rsi_sell_min=config_dict['rsi_sell_min'],
-                rsi_sell_first_threshold=config_dict['rsi_sell_first_threshold'],
-                rsi_sell_first_amount=config_dict['rsi_sell_first_amount'],
-                rsi_sell_next_threshold=config_dict['rsi_sell_next_threshold'],
-                rsi_sell_next_amount=config_dict['rsi_sell_next_amount'],
-                
-                stop_loss=config_dict['stop_loss'],
-                max_holdings=config_dict['max_holdings'],
+            state_data = self.config.model_dump()
+            state_data.update({
+                'is_running': self.is_running,
+                'next_split_id': self.next_split_id,
+                'last_buy_price': self.last_buy_price,
+                'last_sell_price': self.last_sell_price,
+                'budget': self.budget
+            })
 
-                is_running=self.is_running,
-                next_split_id=self.next_split_id,
-                last_buy_price=self.last_buy_price,
-                last_sell_price=self.last_sell_price,
-                budget=self.budget
-            )
+            # Save efficiently using kwargs and model_dump
+            self.db.update_strategy_state(self.strategy_id, **state_data)
 
             # Sync splits to database
             db_splits = self.db.get_splits(self.strategy_id)
@@ -233,6 +216,12 @@ class SevenSplitStrategy(BaseStrategy):
                     logging.info(f"Starting strategy {self.strategy_id} at current price: {current_price}")
                     # Use market order for initial entry to ensure execution
                     self._create_buy_split(current_price, use_market_order=True)
+
+                    self._create_buy_split(current_price, use_market_order=True)
+
+            # Sync pending orders on startup to handle bot restarts/crashes
+            logging.info(f"Syncing pending orders for strategy {self.strategy_id}...")
+            self._sync_pending_orders()
 
             self.is_running = True
             self.save_state()
@@ -451,14 +440,14 @@ class SevenSplitStrategy(BaseStrategy):
             current_time = time.time()
             
             if current_time - self.start_time > self.initial_rsi_delay:
-                if current_time - self.rsi_logic.last_hourly_rsi_update >= 1800:
+                if current_time - self.rsi_logic.last_hourly_rsi_update >= self.RSI_UPDATE_INTERVAL_SEC:
                     self.calculate_hourly_rsi()
                     self.rsi_logic.last_hourly_rsi_update = current_time
 
             # Update Daily RSI
             # We now update this every 30 minutes to support "Intraday Dynamic RSI" strategies.
             # This allows the bot to react to intraday crashes where the projected Daily RSI dips below the threshold.
-            if current_time - self.rsi_logic.last_rsi_update >= 1800:
+            if current_time - self.rsi_logic.last_rsi_update >= self.RSI_UPDATE_INTERVAL_SEC:
                 self.calculate_rsi()
                 self.rsi_logic.last_rsi_update = current_time
 
@@ -512,9 +501,10 @@ class SevenSplitStrategy(BaseStrategy):
                     is_timeout = False
                     if split.created_at:
                         try:
+
                             created_dt = datetime.fromisoformat(split.created_at)
                             elapsed = (datetime.now() - created_dt).total_seconds()
-                            if elapsed > 1800: # 30 minutes
+                            if elapsed > self.ORDER_TIMEOUT_SEC: 
                                 is_timeout = True
                         except:
                             pass
@@ -575,8 +565,28 @@ class SevenSplitStrategy(BaseStrategy):
                     self.last_buy_price = None
                     self.save_state()
 
+    def _sync_pending_orders(self):
+        """Actively check status of all pending orders with the exchange."""
+        for split in self.splits:
+            if split.status == "PENDING_BUY" and split.buy_order_uuid:
+                try:
+                    self._check_buy_order(split)
+                except Exception as e:
+                    logging.warning(f"Error syncing buy order {split.buy_order_uuid}: {e}")
+            
+            elif split.status == "PENDING_SELL" and split.sell_order_uuid:
+                try:
+                    self._check_sell_order(split)
+                except Exception as e:
+                    logging.warning(f"Error syncing sell order {split.sell_order_uuid}: {e}")
+
     def _create_buy_split(self, target_price: float, use_market_order: bool = False):
         """Create a new buy split at the given target price."""
+        # Circuit Breaker: Check for insufficient funds cool-down
+        if time.time() < self._insufficient_funds_until:
+            logging.debug(f"Skipping buy due to insufficient funds cool-down (until {datetime.fromtimestamp(self._insufficient_funds_until)})")
+            return None
+
         if target_price < self.config.min_price:
             logging.warning(f"Target price {target_price} below min_price {self.config.min_price}. Skipping.")
             return None
@@ -600,8 +610,11 @@ class SevenSplitStrategy(BaseStrategy):
         # Calculate volume for limit order
         amount = self.config.investment_per_split
         
-        if amount < 5000:
-            logging.error(f"Investment amount {amount} is less than minimum order amount (5000 KRW). Skipping.")
+        # Calculate volume for limit order
+        amount = self.config.investment_per_split
+        
+        if amount < self.MIN_ORDER_AMOUNT_KRW:
+            logging.error(f"Investment amount {amount} is less than minimum order amount ({self.MIN_ORDER_AMOUNT_KRW} KRW). Skipping.")
             return None
 
         # Calculate volume ensuring it meets the minimum amount (round up to 8 decimal places)
@@ -639,6 +652,13 @@ class SevenSplitStrategy(BaseStrategy):
                     self.save_state()
                 return split
         except Exception as e:
+            error_msg = str(e)
+            # Check for insufficient funds to trigger circuit breaker
+            if "Insufficient funds" in error_msg or "insufficient_funds" in error_msg:
+                logging.error(f"Insufficient funds! Triggering cool-down for 1 hour. Error: {e}")
+                self._insufficient_funds_until = time.time() + 3600  # 1 hour cool-down
+                return None
+                
             logging.warning(f"Failed to create buy order at {target_price}: {e}")
             # Retry logic
             if "invalid_price" in str(e) or "400" in str(e):
@@ -673,7 +693,7 @@ class SevenSplitStrategy(BaseStrategy):
             try:
                 created_dt = datetime.fromisoformat(split.created_at)
                 elapsed = (datetime.now(timezone.utc) - created_dt).total_seconds()
-                if elapsed > 1800:  # 30 minutes timeout
+                if elapsed > self.ORDER_TIMEOUT_SEC:  # Timeout check
                     current_price = self.exchange.get_current_price(self.ticker)
                     # Check if current price is within max_price (if set)
                     if current_price and (self.config.max_price <= 0 or current_price <= self.config.max_price):
@@ -704,7 +724,6 @@ class SevenSplitStrategy(BaseStrategy):
             
             # Handle 'done' (Filled) OR 'cancel' (Partial Fill or Cancelled)
             if state == 'done' or state == 'cancel':
-                # Check executed volume
                 executed_vol = float(order.get('executed_volume', 0))
                 
                 if executed_vol > 0:
@@ -712,40 +731,14 @@ class SevenSplitStrategy(BaseStrategy):
                     split.status = "BUY_FILLED"
                     split.bought_at = datetime.now(timezone.utc).isoformat()
                     
-                    # Calculate actual buy price and volume from trades
-                    trades = order.get('trades', [])
-                    if trades:
-                        total_funds = sum(float(t.get('funds', 0)) for t in trades)
-                        total_volume = sum(float(t.get('volume', 0)) for t in trades)
-                        if total_volume > 0:
-                            split.actual_buy_price = total_funds / total_volume
-                            split.buy_volume = total_volume
-                        else:
-                            split.actual_buy_price = float(order.get('price', split.buy_price))
-                    else:
-                        # No trades data (legacy or error or cancelled with partial fill but no trades info returned?)
-                        # For Market Buy ('price'), order['price'] is the AMOUNT, not unit price!
-                        if order.get('ord_type') == 'price':
-                            paid_amount = float(order.get('price', 0)) # Target amount
-                            # If cancelled, paid_amount might be the original target, but we only spent executed_vol * avg_price
-                            # But we don't have avg_price easily if no trades.
-                            # Try to use 'locked' or 'remaining_fee' to reverse calc? Too complex.
-                            # Fallback: Use current price or split.buy_price as estimate if we can't calc
-                            if executed_vol > 0:
-                                 # We don't have total funds spent if no trades. 
-                                 # But usually 'done' order has trades. 'cancel' might not?
-                                 # Let's try to trust order['price'] if it's not market order, but this IS market order.
-                                 # If we can't calculate, log warning and use target price.
-                                 logging.warning(f"Market buy {state} with vol {executed_vol} but no trades data. Using target price.")
-                                 split.actual_buy_price = split.buy_price 
-                                 split.buy_volume = executed_vol
-                            else:
-                                 # Should be caught by executed_vol > 0 check, but just in case
-                                 split.actual_buy_price = split.buy_price
-                        else:
-                            # Limit order
-                            split.actual_buy_price = float(order.get('price', split.buy_price))
-                            split.buy_volume = executed_vol
+                    # Calculate actual buy price and volume using helper
+                    actual_price, volume = self._calculate_execution_metrics(order, fallback_price=split.buy_price)
+                    split.actual_buy_price = actual_price
+                    split.buy_volume = volume # Use actual volume from trades/order if available
+                    
+                    # If helper returned volume as 0 (weird edge case), fallback to executed_vol
+                    if split.buy_volume <= 0:
+                        split.buy_volume = executed_vol
 
                     logging.info(f"Buy order {state} for split {split.id}. Price: {split.actual_buy_price}, Vol: {split.buy_volume}")
                     self.save_state()
@@ -767,6 +760,35 @@ class SevenSplitStrategy(BaseStrategy):
                 self.save_state()
             else:
                 logging.error(f"Error checking buy order {split.buy_order_uuid}: {e}")
+
+    def _calculate_execution_metrics(self, order: dict, fallback_price: float) -> tuple[float, float]:
+        """
+        Calculate actual execution price and volume from order details.
+        Returns (actual_price, total_volume).
+        """
+        trades = order.get('trades', [])
+        if trades and len(trades) > 0:
+            total_funds = sum(float(t.get('funds', 0)) if t.get('funds') else float(t.get('price', 0)) * float(t.get('volume', 0)) for t in trades)
+            total_volume = sum(float(t.get('volume', 0)) for t in trades)
+            if total_volume > 0:
+                return (total_funds / total_volume), total_volume
+        
+        # Fallback if no trades data
+        # For executed_volume, rely on order['executed_volume'] which caller usually has, 
+        # but here we return what we can derive. If 0, caller handles.
+        executed_vol = float(order.get('executed_volume', 0))
+        
+        # Determine price
+        # For Market Buy ('price'), order['price'] is the AMOUNT, not unit price.
+        # But usually 'done' market orders should have trades. This is a deep fallback.
+        ord_type = order.get('ord_type')
+        if ord_type == 'price': # Market Buy
+             # We can't easily know unit price without trades. Use fallback.
+             return fallback_price, executed_vol
+        else:
+            # Limit order or Market Sell ('market') -> order['price'] is usually valid or None
+            price = float(order.get('price') or fallback_price or 0.0)
+            return price, executed_vol
 
     def _create_sell_order(self, split: SplitState):
         """Create sell order after buy is filled."""
@@ -815,75 +837,13 @@ class SevenSplitStrategy(BaseStrategy):
             order = self.exchange.get_order(split.sell_order_uuid)
             if order and order.get('state') == 'done':
                 # Sell order filled
-                
-                # Calculate actual sell price from trades (especially for market orders)
-                trades = order.get('trades', [])
-                if trades and len(trades) > 0:
-                    total_funds = sum(float(t.get('funds', 0)) if t.get('funds') else float(t.get('price', 0)) * float(t.get('volume', 0)) for t in trades)
-                    total_volume = sum(float(t.get('volume', 0)) for t in trades)
-                    actual_sell_price = total_funds / total_volume if total_volume > 0 else 0.0
-                else:
-                    # Fallback for limit orders or mock
-                    actual_sell_price = float(order.get('price') or split.target_sell_price or 0.0)
+                actual_sell_price, _ = self._calculate_execution_metrics(order, fallback_price=split.target_sell_price)
                 
                 if actual_sell_price == 0.0:
                     logging.warning(f"Sell filled but price is 0. Order: {order}")
 
-                # Calculate detailed profit breakdown
-                buy_total = split.buy_amount
-                buy_fee = buy_total * self.config.fee_rate
+                self._finalize_sell_trade(split, actual_sell_price)
 
-                sell_total = actual_sell_price * split.buy_volume
-                sell_fee = sell_total * self.config.fee_rate
-
-                total_fee = buy_fee + sell_fee
-                net_profit = sell_total - buy_total - total_fee
-                profit_rate = (net_profit / buy_total) * 100
-
-                # Save to database
-                trade_data = {
-                    "split_id": split.id,
-                    "buy_price": split.actual_buy_price,
-                    "sell_price": actual_sell_price,
-                    "coin_volume": split.buy_volume,
-                    "buy_amount": buy_total,
-                    "sell_amount": sell_total,
-                    "gross_profit": sell_total - buy_total,
-                    "total_fee": total_fee,
-                    "net_profit": net_profit,
-                    "profit_rate": profit_rate,
-                    "buy_order_id": split.buy_order_uuid,
-                    "sell_order_id": split.sell_order_uuid,
-                    "bought_at": datetime.fromisoformat(split.bought_at) if split.bought_at else None
-                }
-                self.db.add_trade(self.strategy_id, self.ticker, trade_data)
-
-                # Also keep in memory for quick access
-                self.trade_history.insert(0, {
-                    "split_id": split.id,
-                    "buy_price": split.actual_buy_price,
-                    "buy_amount": buy_total,
-                    "sell_price": actual_sell_price,
-                    "sell_amount": sell_total,
-                    "volume": split.buy_volume,
-                    "buy_fee": buy_fee,
-                    "sell_fee": sell_fee,
-                    "total_fee": total_fee,
-                    "gross_profit": sell_total - buy_total,
-                    "net_profit": net_profit,
-                    "profit_rate": profit_rate,
-                    "timestamp": datetime.now().isoformat(),
-                    "bought_at": split.bought_at
-                })
-
-                # Removed cap of 50 to ensure trade limit check works correctly
-                # if len(self.trade_history) > 50:
-                #     self.trade_history.pop()
-
-                split.status = "SELL_FILLED"
-                self.last_sell_price = actual_sell_price
-                logging.info(f"Sell order filled for split {split.id} at {actual_sell_price}. Net Profit: {net_profit} KRW ({profit_rate:.2f}%) after fees: {total_fee} KRW")
-                self.save_state()
         except Exception as e:
             # Handle 404 or "Order not found"
             error_msg = str(e)
@@ -897,44 +857,106 @@ class SevenSplitStrategy(BaseStrategy):
             else:
                 logging.error(f"Error checking sell order {split.sell_order_uuid}: {e}")
 
+    def _finalize_sell_trade(self, split: SplitState, actual_sell_price: float):
+        """Calculate stats and record completed trade."""
+        
+        # Calculate detailed profit breakdown
+        buy_total = split.buy_amount
+        buy_fee = buy_total * self.config.fee_rate
+
+        sell_total = actual_sell_price * split.buy_volume
+        sell_fee = sell_total * self.config.fee_rate
+
+        total_fee = buy_fee + sell_fee
+        net_profit = sell_total - buy_total - total_fee
+        profit_rate = (net_profit / buy_total) * 100
+
+        # Save to database
+        trade_data = {
+            "split_id": split.id,
+            "buy_price": split.actual_buy_price,
+            "sell_price": actual_sell_price,
+            "coin_volume": split.buy_volume,
+            "buy_amount": buy_total,
+            "sell_amount": sell_total,
+            "gross_profit": sell_total - buy_total,
+            "total_fee": total_fee,
+            "net_profit": net_profit,
+            "profit_rate": profit_rate,
+            "buy_order_id": split.buy_order_uuid,
+            "sell_order_id": split.sell_order_uuid,
+            "bought_at": datetime.fromisoformat(split.bought_at) if split.bought_at else None
+        }
+        self.db.add_trade(self.strategy_id, self.ticker, trade_data)
+
+        # Also keep in memory for quick access
+        self.trade_history.insert(0, {
+            "split_id": split.id,
+            "buy_price": split.actual_buy_price,
+            "buy_amount": buy_total,
+            "sell_price": actual_sell_price,
+            "sell_amount": sell_total,
+            "volume": split.buy_volume,
+            "buy_fee": buy_fee,
+            "sell_fee": sell_fee,
+            "total_fee": total_fee,
+            "gross_profit": sell_total - buy_total,
+            "net_profit": net_profit,
+            "profit_rate": profit_rate,
+            "timestamp": datetime.now().isoformat(),
+            "bought_at": split.bought_at
+        })
+
+        split.status = "SELL_FILLED"
+        self.last_sell_price = actual_sell_price
+        logging.info(f"Sell order filled for split {split.id} at {actual_sell_price}. Net Profit: {net_profit} KRW ({profit_rate:.2f}%) after fees: {total_fee} KRW")
+        self.save_state()
+
     def _check_create_new_buy_split(self, current_price: float):
         """Check if we should create a new buy split based on price drop and rebuy strategy."""
-
+        
         # Check if all positions are cleared
         has_active_positions = any(
             s.status in ["PENDING_BUY", "BUY_FILLED", "PENDING_SELL"]
             for s in self.splits
         )
 
-        # Handle different rebuy strategies when all positions are cleared
         if not has_active_positions:
-            if self.config.rebuy_strategy == "reset_on_clear":
-                # Strategy 1: Reset and start at current price
-                logging.info(f"All positions cleared. Resetting and starting at current price: {current_price}")
-                self.last_buy_price = None
-                # Use market order to ensure immediate re-entry
-                self._create_buy_split(current_price, use_market_order=True)
+            # Try to handle empty state logic
+            if self._handle_empty_positions(current_price):
                 return
-            elif self.config.rebuy_strategy == "last_sell_price":
-                # Strategy 2: Use last sell price as reference
-                if self.last_sell_price is not None:
-                    reference_price = self.last_sell_price
-                    logging.info(f"All positions cleared. Using last sell price {reference_price} as reference")
-                else:
-                    # Fallback to current price if no sell price
-                    reference_price = current_price
-                    logging.info(f"No last sell price, using current price: {current_price}")
-
-                next_buy_price = reference_price * (1 - self.config.buy_rate)
-                if current_price <= next_buy_price:
-                    # Buy at current price (not at next_buy_price)
-                    logging.info(f"Price dropped to {current_price} (trigger: {next_buy_price}), creating buy split at current price")
-                    # Use market order to ensure immediate re-entry
-                    self._create_buy_split(current_price, use_market_order=True)
-                return
-            # Strategy 3: "last_buy_price" - continue with existing logic below
 
         # Standard logic for ongoing positions or "last_buy_price" strategy
+        self._handle_active_positions(current_price)
+
+    def _handle_empty_positions(self, current_price: float) -> bool:
+        """Handle logic when no active positions exist. Returns True if action taken."""
+        if self.config.rebuy_strategy == "reset_on_clear":
+            # Strategy 1: Reset and start at current price
+            logging.info(f"All positions cleared. Resetting and starting at current price: {current_price}")
+            self.last_buy_price = None
+            self._create_buy_split(current_price, use_market_order=True)
+            return True
+            
+        elif self.config.rebuy_strategy == "last_sell_price":
+            # Strategy 2: Use last sell price as reference
+            reference_price = self.last_sell_price if self.last_sell_price is not None else current_price
+            
+            if self.last_sell_price is not None:
+                logging.info(f"All positions cleared. Using last sell price {reference_price} as reference")
+            else:
+                logging.info(f"No last sell price, using current price: {current_price}")
+
+            next_buy_price = reference_price * (1 - self.config.buy_rate)
+            if current_price <= next_buy_price:
+                # Buy at current price
+                logging.info(f"Price dropped to {current_price} (trigger: {next_buy_price}), creating buy split at current price")
+                self._create_buy_split(current_price, use_market_order=True)
+            return True
+        
+        return False
+
+    def _handle_active_positions(self, current_price: float):
         if self.last_buy_price is None:
             # No previous buy, create one at current price
             logging.info(f"No previous buy, creating first split at current price: {current_price}")
@@ -942,47 +964,49 @@ class SevenSplitStrategy(BaseStrategy):
             return
 
         # Calculate how many buy levels we've crossed
-        # Count the number of levels crossed, then buy that many splits at current price
-        reference_price = self.last_buy_price
+        levels_crossed = self._calculate_levels_crossed(self.last_buy_price, current_price)
+        
+        # Create multiple buy orders at current price
+        if levels_crossed > 0:
+            self._execute_batch_buy(current_price, levels_crossed)
+
+    def _calculate_levels_crossed(self, reference_price: float, current_price: float) -> int:
         levels_crossed = 0
         temp_price = reference_price
         
         while True:
             next_level = temp_price * (1 - self.config.buy_rate)
-            
-            # If current price is still above the next level, we're done
             if current_price > next_level:
                 break
             
             levels_crossed += 1
             temp_price = next_level
             
-            # Safety limit: don't create too many splits at once
+            # Safety limit
             if levels_crossed >= 10:
                 logging.warning(f"Price drop too severe. Limiting to 10 buy splits.")
                 break
+        return levels_crossed
+
+    def _execute_batch_buy(self, current_price: float, count: int):
+        # Check if we already have a pending buy at current price
+        has_pending_buy = any(
+            s.status == "PENDING_BUY" and abs(s.buy_price - current_price) / current_price < 0.001
+            for s in self.splits
+        )
         
-        # Create multiple buy orders at current price
-        if levels_crossed > 0:
-            # Check if we already have a pending buy at current price
-            has_pending_buy = any(
-                s.status == "PENDING_BUY" and abs(s.buy_price - current_price) / current_price < 0.001
-                for s in self.splits
-            )
-            
-            if has_pending_buy:
-                logging.debug(f"Already have pending buy near {current_price}, skipping")
-                return
-            
-            logging.info(f"Price dropped from {reference_price} to {current_price}, crossed {levels_crossed} levels. Creating {levels_crossed} buy splits at {current_price}")
-            
-            for i in range(levels_crossed):
-                split = self._create_buy_split(current_price)
-                if not split:
-                    # Failed to create split (e.g., insufficient balance), stop creating more
-                    logging.warning(f"Failed to create buy split {i+1}/{levels_crossed} at {current_price}, stopping")
-                    break
-                logging.info(f"Created buy split {i+1}/{levels_crossed} at {current_price}")
+        if has_pending_buy:
+            logging.debug(f"Already have pending buy near {current_price}, skipping")
+            return
+        
+        logging.info(f"Price dropped from {self.last_buy_price} to {current_price}, crossed {count} levels. Creating {count} buy splits at {current_price}")
+        
+        for i in range(count):
+            split = self._create_buy_split(current_price)
+            if not split:
+                logging.warning(f"Failed to create buy split {i+1}/{count}, stopping")
+                break
+            logging.info(f"Created buy split {i+1}/{count} at {current_price}")
 
 
 
