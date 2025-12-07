@@ -369,29 +369,7 @@ const Dashboard = () => {
         window.open(`${API_BASE_URL}/strategies/${selectedStrategyId}/export`, '_blank');
     };
 
-    const handleDebugRsi = async () => {
-        try {
-            const response = await fetch(`${API_BASE_URL}/debug/rsi`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    strategy_id: selectedStrategyId,
-                    rsi: parseFloat(debugRsiValue),
-                    prev_rsi: parseFloat(debugPrevRsiValue)
-                }),
-            });
 
-            if (!response.ok) throw new Error('Failed to set debug RSI');
-
-            alert(`RSI set to ${debugRsiValue} (Prev: ${debugPrevRsiValue}) for 1 minute.`);
-            setShowRsiDebugModal(false);
-        } catch (error) {
-            console.error('Error setting debug RSI:', error);
-            alert('Failed to set debug RSI');
-        }
-    };
 
     const handleRenameStrategy = () => {
         setIsRenameModalOpen(true);
@@ -658,26 +636,6 @@ const Dashboard = () => {
                             }}>
                                 <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                     <span>Current Price</span>
-                                    {status.mode === 'MOCK' && (
-                                        <button
-                                            onClick={() => {
-                                                setDebugRsiValue(status.rsi || 50);
-                                                setDebugPrevRsiValue(status.rsi || 50); // Default to current if available
-                                                setShowRsiDebugModal(true);
-                                            }}
-                                            style={{
-                                                background: 'none',
-                                                border: 'none',
-                                                cursor: 'pointer',
-                                                color: '#f59e0b',
-                                                fontSize: '0.8rem',
-                                                padding: '0 0.2rem'
-                                            }}
-                                            title="Debug RSI (Mock Only)"
-                                        >
-                                            ⚙️
-                                        </button>
-                                    )}
                                 </div>
                                 <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#3b82f6' }}>
                                     ₩{status.current_price?.toLocaleString()}
@@ -1212,98 +1170,7 @@ const Dashboard = () => {
                     </div>
                 </>
             )}
-            {/* RSI Debug Modal */}
-            {showRsiDebugModal && (
-                <div style={{
-                    position: 'fixed',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-                    display: 'flex',
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                    zIndex: 1000
-                }}>
-                    <div style={{
-                        backgroundColor: '#1e293b',
-                        padding: '1.5rem',
-                        borderRadius: '0.5rem',
-                        width: '300px',
-                        border: '1px solid #334155'
-                    }}>
-                        <h3 style={{ marginTop: 0, color: '#f8fafc', marginBottom: '1rem' }}>Debug RSI (Mock)</h3>
 
-                        <div style={{ marginBottom: '1rem' }}>
-                            <label style={{ display: 'block', color: '#94a3b8', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
-                                Current RSI
-                            </label>
-                            <input
-                                type="number"
-                                value={debugRsiValue}
-                                onChange={(e) => setDebugRsiValue(e.target.value)}
-                                style={{
-                                    width: '100%',
-                                    padding: '0.5rem',
-                                    backgroundColor: '#0f172a',
-                                    border: '1px solid #334155',
-                                    borderRadius: '0.25rem',
-                                    color: '#f8fafc'
-                                }}
-                            />
-                        </div>
-
-                        <div style={{ marginBottom: '1.5rem' }}>
-                            <label style={{ display: 'block', color: '#94a3b8', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
-                                Prev RSI (Yesterday)
-                            </label>
-                            <input
-                                type="number"
-                                value={debugPrevRsiValue}
-                                onChange={(e) => setDebugPrevRsiValue(e.target.value)}
-                                style={{
-                                    width: '100%',
-                                    padding: '0.5rem',
-                                    backgroundColor: '#0f172a',
-                                    border: '1px solid #334155',
-                                    borderRadius: '0.25rem',
-                                    color: '#f8fafc'
-                                }}
-                            />
-                        </div>
-
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-                            <button
-                                onClick={() => setShowRsiDebugModal(false)}
-                                style={{
-                                    padding: '0.5rem 1rem',
-                                    backgroundColor: 'transparent',
-                                    border: '1px solid #475569',
-                                    color: '#94a3b8',
-                                    borderRadius: '0.25rem',
-                                    cursor: 'pointer'
-                                }}
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={handleDebugRsi}
-                                style={{
-                                    padding: '0.5rem 1rem',
-                                    backgroundColor: '#3b82f6',
-                                    border: 'none',
-                                    color: 'white',
-                                    borderRadius: '0.25rem',
-                                    cursor: 'pointer'
-                                }}
-                            >
-                                Apply (1 min)
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
     );
 };

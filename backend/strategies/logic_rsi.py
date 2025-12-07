@@ -1,5 +1,4 @@
 import logging
-import time
 from datetime import datetime, timezone, timedelta
 
 class RSIStrategyLogic:
@@ -18,92 +17,104 @@ class RSIStrategyLogic:
         self.current_rsi_daily_short = None
         self.last_rsi_update = 0
         self.last_hourly_rsi_update = 0 # Track hourly RSI update for UI
+        self.last_rsi_update = 0
+        self.last_hourly_rsi_update = 0 # Track hourly RSI update for UI
         self.last_tick_date = None # Track execution by date (YYYY-MM-DD)
+        self.last_failed_buy_date = None # Track failed buy attempt date to prevent spam
 
     def tick(self, current_price: float, open_order_uuids: set):
         """RSI Daily Delta Strategy Logic"""
         self.strategy._manage_orders(open_order_uuids)
-        
-        # Determine current time (Simulation or Real)
-        # We need to ensure we are working with KST because Upbit daily close is 9 AM KST.
-        KST = timezone(timedelta(hours=9))
-        
-        # Default to system time, assume UTC if naive, then convert to KST
-        # Actually, datetime.now() returns local time. datetime.now(timezone.utc) returns UTC.
-        # Let's get UTC time first to be safe, then convert to KST.
-        now_utc = datetime.now(timezone.utc)
-        current_dt_kst = now_utc.astimezone(KST)
-        
-        # Check if running in simulation
-        if hasattr(self.strategy, 'current_candle') and self.strategy.current_candle:
-            ts = self.strategy.current_candle.get('timestamp')
-            if ts:
-                try:
-                    if isinstance(ts, (int, float)):
-                        if ts > 10000000000: ts = ts / 1000.0
-                        # Unix timestamp is always UTC
-                        dt_utc = datetime.fromtimestamp(ts, timezone.utc)
-                        current_dt_kst = dt_utc.astimezone(KST)
-                    elif isinstance(ts, str):
-                        # ISO string (usually UTC with Z)
-                        dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
-                        current_dt_kst = dt.astimezone(KST)
-                except Exception:
-                    pass
 
-        # Execute only once per day, after 9 AM KST
-        # In Simulation, skip hour check to handle timestamp jitter
-        if self.strategy.ticker != "SIM-TEST" and current_dt_kst.hour < 9:
-            return
+        # Get current time from strategy (polymorphic - works for both Real and Simulation)
+        current_dt_kst = self.strategy.get_current_time_kst()
 
+        # Execute frequently (every tick/30 mins) to catch intraday moves
+        # We still track date to prevent multiple buys per day if needed
         current_date_str = current_dt_kst.strftime("%Y-%m-%d")
-        if current_date_str == self.last_tick_date:
-            return
-            
-        self.last_tick_date = current_date_str
-        
+
         # Ensure we have enough history
-        if self.prev_rsi is None or self.prev_prev_rsi is None:
+        if self.prev_rsi is None:
+            logging.debug(f"RSI Logic Skip [{current_date_str}]: Not enough RSI history (prev={self.prev_rsi})")
             return
 
         # DEBUG LOGGING for Simulation
-        logging.info(f"RSI Logic Tick [{current_date_str}]: Prev={self.prev_rsi:.2f}, PrevPrev={self.prev_prev_rsi:.2f}")
+        logging.info(f"RSI Logic Tick [{current_date_str}]: Prev={self.prev_rsi:.2f}, Current_Daily={self.current_rsi_daily}")
 
-        # --- Buying Logic (Daily Delta - Confirmed Close) ---
-        # Condition: DayBefore (PrevPrev) was in Buy Zone AND Rebounded (Prev > PrevPrev)
-        # User Request: "Max Buy RSI 보다 아래로 내려가면 일단 매수 준비하고 있다가(PrevPrev < Max), 그 아래 값에서 상방으로 바뀌는 구간에 매수(Prev > PrevPrev)"
+        # --- Buying Logic (Intraday Dynamic) ---
+        # Condition 1: Yesterday (Prev) was in Buy Zone (Oversold)
+        # Condition 2: Today (Current) has rebounded by Threshold from Yesterday
         
-        buy_cond_1 = self.prev_prev_rsi < self.strategy.config.rsi_buy_max
-        buy_cond_2 = self.prev_rsi > self.prev_prev_rsi
+        buy_cond_1 = self.prev_rsi < self.strategy.config.rsi_buy_max
         
-        # Calculate Delta (Yesterday - DayBefore)
-        rsi_delta = self.prev_rsi - self.prev_prev_rsi
+        # Calculate Delta (Today - Yesterday)
+        # Note: current_rsi_daily is the "Projected" RSI based on current price
+        if self.current_rsi_daily is None:
+            logging.debug(f"RSI Logic Skip [{current_date_str}]: current_rsi_daily is None")
+            return
+
+        rsi_delta = self.current_rsi_daily - self.prev_rsi
+        buy_cond_2 = rsi_delta >= self.strategy.config.rsi_buy_first_threshold
         
-        # DEBUG LOGGING: Log whenever we are in Buy Zone (either Prev or PrevPrev is low)
-        if self.prev_rsi < self.strategy.config.rsi_buy_max or self.prev_prev_rsi < self.strategy.config.rsi_buy_max:
-             logging.info(f"  [Buy Zone Debug] Date={current_date_str}, Prev={self.prev_rsi:.2f}, PrevPrev={self.prev_prev_rsi:.2f}, MaxBuy={self.strategy.config.rsi_buy_max}")
-             logging.info(f"    -> Cond1(PrevPrev<Max): {buy_cond_1}, Cond2(Prev>PrevPrev): {buy_cond_2}, Delta: {rsi_delta:.2f}")
+        # DEBUG LOGGING
+        if buy_cond_1:
+             logging.debug(f"  [Buy Zone Check] Date={current_date_str}, Prev(Yest)={self.prev_rsi:.2f}, Curr(Today)={self.current_rsi_daily:.2f}, MaxBuy={self.strategy.config.rsi_buy_max}")
+             logging.debug(f"    -> Cond1(Prev<Max): {buy_cond_1}, Cond2(Curr>Prev+{self.strategy.config.rsi_buy_first_threshold}): {buy_cond_2} (Delta: {rsi_delta:.2f})")
 
         if buy_cond_1 and buy_cond_2:
             buy_amount_splits = 0
             
-            if rsi_delta >= self.strategy.config.rsi_buy_first_threshold:
-                logging.info(f"RSI Buy Signal (Daily Close): Prev RSI {self.prev_rsi:.2f} > DayBefore {self.prev_prev_rsi:.2f} (Delta +{rsi_delta:.2f})")
+            logging.info(f"RSI Buy Signal (Intraday): Prev RSI {self.prev_rsi:.2f} < Max {self.strategy.config.rsi_buy_max} AND Current {self.current_rsi_daily:.2f} > Prev + {self.strategy.config.rsi_buy_first_threshold}")
+            
+            # Check for duplicate buy on the same day (Prevent double buy on restart)
+            # if self.strategy.ticker == "SIM-TEST":
+            #          print(f"[{current_date_str} {current_dt_kst.strftime('%H:%M:%S')}] SIM DAILY: Price={current_price:.0f}, RSI({self.strategy.config.rsi_period}): Yest={self.prev_rsi:.1f} (Max {self.strategy.config.rsi_buy_max}), Today={self.current_rsi_daily:.1f}")
+
+            already_bought_today = False
+            
+            # Use persistent state
+            if self.strategy.last_buy_date == current_date_str:
+                already_bought_today = True
+            
+            if already_bought_today:
+                logging.debug(f"  -> Skip Buy: Already bought today ({current_date_str}).")
+                buy_amount_splits = 0
+            
+            # Also check if we already failed to buy today (e.g. Budget Exceeded)
+            if self.last_failed_buy_date == current_date_str:
+                logging.debug(f"  -> Skip Buy: Already failed to buy today ({current_date_str}).")
+                buy_amount_splits = 0
+                return # Skip logic entirely to prevent log spam
                 
-                # Check for duplicate buy on the same day (Prevent double buy on restart)
-                already_bought_today = False
-                for s in self.strategy.splits:
-                    if s.bought_at and s.bought_at.startswith(current_date_str):
-                        already_bought_today = True
-                        break
+            if buy_amount_splits > 0:
+                pass # Continue to logic
+            
+            # 1. Check Buy Condition (Only if we have budget and no active splits)
+            # Limit to 1 buy per day to prevent over-trading
+            if not already_bought_today and self.strategy.check_trade_limit():
+                # Check RSI condition
+                # Logic: 
+                # 1. Prev RSI (Yesterday) < Buy Max (e.g. 30) -> Oversold yesterday
+                # 2. Current RSI (Today) > Prev RSI + Threshold -> Rebounding today
                 
-                if already_bought_today:
-                    logging.info(f"  -> Skip Buy: Already bought a split today ({current_date_str}).")
-                    buy_amount_splits = 0
-                else:
-                    buy_amount_splits = self.strategy.config.rsi_buy_first_amount
-            else:
-                logging.info(f"    -> Delta too small ({rsi_delta:.2f} < {self.strategy.config.rsi_buy_first_threshold})")
+                if self.prev_rsi is not None and self.current_rsi_daily is not None:
+                    if self.prev_rsi <= self.strategy.config.rsi_buy_max:
+                        if self.current_rsi_daily >= self.prev_rsi + self.strategy.config.rsi_buy_first_threshold:
+                            # Buy Signal!
+                            if self.strategy.ticker == "SIM-TEST":
+                                print(f"[{current_date_str} {current_dt_kst.strftime('%H:%M:%S')}] SIM BUY SIGNAL! Confirmed: Prev({self.prev_rsi:.1f}) <= Max({self.strategy.config.rsi_buy_max}) AND Today({self.current_rsi_daily:.1f}) >= Prev+Thresh")
+                            result = self.strategy.buy(current_price)
+                            
+                            # If buy failed (e.g. Budget), mark today as failed to prevent retries
+                            if not result:
+                                self.last_failed_buy_date = current_date_str
+                                logging.info(f"[{current_date_str}] RSI Buy Failed (likely budget). Marking {current_date_str} as failed.")
+                            else:
+                                # Buy Successful -> Mark persistent date
+                                self.strategy.last_buy_date = current_date_str
+                                self.strategy.save_state()
+                            
+                            return
             
             # Execute Buy
             if buy_amount_splits > 0:
@@ -111,38 +122,59 @@ class RSIStrategyLogic:
                     # Check Max Holdings
                     current_holdings = len([s for s in self.strategy.splits if s.status != "SELL_FILLED"])
                     max_holdings = self.strategy.config.max_holdings
-                    
+
+                    logging.info(f"[{current_date_str} {current_dt_kst.strftime('%H:%M:%S')}] RSI Buy Execution: Attempting to buy {buy_amount_splits} splits (Holdings: {current_holdings}/{max_holdings})")
+
                     if current_holdings + buy_amount_splits <= max_holdings:
-                        for _ in range(buy_amount_splits):
+                        for idx in range(buy_amount_splits):
+                            logging.info(f"  -> Creating buy split {idx+1}/{buy_amount_splits} at {current_price}")
                             self.strategy._create_buy_split(current_price, use_market_order=True)
                     else:
                         logging.warning(f"Max holdings reached ({current_holdings}). Skipping RSI buy.")
+                else:
+                    logging.info(f"RSI Buy Skipped: Trade limit check failed")
+            else:
+                logging.debug(f"RSI Buy Skipped: buy_amount_splits = {buy_amount_splits}")
 
-        # --- Selling Logic (Daily Delta - Confirmed Close) ---
-        # Condition: DayBefore RSI (prev_prev_rsi) is in Sell Zone AND Decreased to Yesterday (prev_rsi)
-        # "Min Sell RSI 위에서 천장을 찍고 내려올때"
-        # Top was prev_prev. prev_prev > Min Sell RSI.
-        # Turned down: prev < prev_prev.
+        # --- Selling Logic (Intraday Dynamic) ---
+        # Condition 1: Yesterday (Prev) was in Sell Zone (Overbought)
+        # Condition 2: Today (Current) has dropped by Threshold from Yesterday
         
-        sell_cond_1 = self.prev_prev_rsi > self.strategy.config.rsi_sell_min
-        sell_cond_2 = self.prev_rsi < self.prev_prev_rsi
+        sell_cond_1 = self.prev_rsi > self.strategy.config.rsi_sell_min
         
-        # Calculate Delta (DayBefore - Yesterday) -> Positive means drop
-        rsi_drop = self.prev_prev_rsi - self.prev_rsi
+        # Calculate Drop (Yesterday - Today) -> Positive means drop
+        rsi_drop = self.prev_rsi - self.current_rsi_daily
+        sell_cond_2 = rsi_drop >= self.strategy.config.rsi_sell_first_threshold
         
         # DEBUG LOGGING
+        # if self.strategy.ticker == "SIM-TEST":
+             # Only print if near sell zone or debugging
+             # if sell_cond_1:
+             #     print(f"[{current_date_str} {current_dt_kst.strftime('%H:%M:%S')}] SIM SELL CHECK: Zone OK (Prev {self.prev_rsi:.0f} > {self.strategy.config.rsi_sell_min}). Drop: {rsi_drop:.0f} (Threshold: {self.strategy.config.rsi_sell_first_threshold})")
+
         if sell_cond_1:
-            logging.info(f"  [Sell Check] Zone OK (PrevPrev {self.prev_prev_rsi:.2f} > {self.strategy.config.rsi_sell_min}). Inverted V: {sell_cond_2} ({self.prev_rsi:.2f} < {self.prev_prev_rsi:.2f}). Drop: {rsi_drop:.2f}")
+            logging.debug(f"  [Sell Check] Zone OK (Prev {self.prev_rsi:.2f} > {self.strategy.config.rsi_sell_min}). Drop: {rsi_drop:.2f} (Threshold: {self.strategy.config.rsi_sell_first_threshold})")
+        else:
+            logging.debug(f"  [Sell Check] Not in sell zone (Prev {self.prev_rsi:.2f} <= {self.strategy.config.rsi_sell_min})")
+
+        # Check existing sell date
+        already_sold_today = False
+        if self.strategy.last_sell_date == current_date_str:
+             already_sold_today = True
 
         if sell_cond_1 and sell_cond_2:
+            if already_sold_today:
+                # if self.strategy.ticker == "SIM-TEST":
+                #      print(f"[{current_date_str} {current_dt_kst.strftime('%H:%M:%S')}] SIM SELL SKIP: Already sold today.")
+                logging.debug(f"RSI Sell Signal Ignored: Already sold today ({current_date_str})")
+                return
+
             sell_amount_splits = 0
             
-            if rsi_drop >= self.strategy.config.rsi_sell_first_threshold:
-                logging.info(f"RSI Sell Signal (Daily Close): Prev RSI {self.prev_rsi:.2f} < DayBefore {self.prev_prev_rsi:.2f} (Drop -{rsi_drop:.2f})")
-                # We don't set fixed amount here anymore, we calculate based on % later
-                sell_amount_splits = -1 # Flag to proceed
-            else:
-                logging.info(f"  [Sell Check] Drop too small ({rsi_drop:.2f} < {self.strategy.config.rsi_sell_first_threshold})")
+            logging.info(f"RSI Sell Signal (Intraday): Prev RSI {self.prev_rsi:.2f} > Min {self.strategy.config.rsi_sell_min} AND Current {self.current_rsi_daily:.2f} < Prev - {self.strategy.config.rsi_sell_first_threshold}")
+
+            # We don't set fixed amount here anymore, we calculate based on % later
+            sell_amount_splits = -1 # Flag to proceed
 
             # Execute Sell
             if sell_amount_splits != 0:
@@ -156,7 +188,11 @@ class RSIStrategyLogic:
 
                 # Filter by Min Profit
                 min_profit = self.strategy.config.sell_rate 
+                
+
                 candidates_with_profit = [item for item in candidates_with_profit if item[1] >= min_profit]
+                
+
                 
                 # Calculate Sell Amount based on Percentage
                 # rsi_sell_first_amount is now treated as Percentage (0-100)
@@ -178,10 +214,17 @@ class RSIStrategyLogic:
 
                 # Sort by Profit Descending
                 candidates_with_profit.sort(key=lambda item: item[1], reverse=True)
-                
+
                 # Take top N splits
                 to_sell = [item[0] for item in candidates_with_profit[:sell_amount_splits]]
-                
+
+                logging.info(f"RSI Sell Execution: Selling {len(to_sell)} splits out of {total_candidates} candidates")
+
+                if len(to_sell) > 0:
+                     # Update persistent sell date
+                     self.strategy.last_sell_date = current_date_str
+                     self.strategy.save_state()
+
                 for split in to_sell:
                     # Recalculate profit for logging (or use stored value)
                     profit_rate = (current_price - split.actual_buy_price) / split.actual_buy_price

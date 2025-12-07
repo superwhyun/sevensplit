@@ -332,6 +332,36 @@ class SevenSplitStrategy(BaseStrategy):
             
         return True
 
+    def buy(self, current_price: float) -> bool:
+        """
+        Execute RSI Buy Signal.
+        Buys 'rsi_buy_first_amount' splits at current price.
+        """
+        # Determine how many splits to buy
+        count = self.config.rsi_buy_first_amount
+        if count <= 0:
+            count = 1
+        
+        logging.info(f"RSI Buy Signal: Executing buy for {count} split(s) at {current_price}")
+        
+        success_count = 0
+        for i in range(count):
+            # Check Max Holdings
+            current_holdings = len([s for s in self.splits if s.status != "SELL_FILLED"])
+            if current_holdings >= self.config.max_holdings:
+                 logging.warning(f"Max holdings reached ({current_holdings}/{self.config.max_holdings}). Stop buying.")
+                 break
+            
+            # Create Split
+            # RSI Strategy uses Market Order for immediate execution
+            res = self._create_buy_split(current_price, use_market_order=True)
+            if res:
+                success_count += 1
+            else:
+                logging.warning(f"Failed to create buy split {i+1}/{count}")
+        
+        return success_count > 0
+
     def calculate_rsi(self):
         """Calculate RSI based on configured timeframe."""
         try:
@@ -372,23 +402,11 @@ class SevenSplitStrategy(BaseStrategy):
                 rsi_prev = calculate_rsi(closes[:-1], self.config.rsi_period)
                 rsi_short_prev = calculate_rsi(closes[:-1], 4)
                 
-                # Prev Prev (Day before yesterday, confirmed)
-                rsi_prev_prev = calculate_rsi(closes[:-2], self.config.rsi_period)
-                
+
+
                 self.rsi_logic.current_rsi = rsi_now
-                
-                # Adjust mapping for Simulation vs Real
-                # Real Mode: closes[-1] is "In Progress" (Today), closes[-2] is "Confirmed" (Yesterday)
-                # Simulation Mode: closes[-1] is "Confirmed" (Today/Current Step)
-                
-                if self.ticker == "SIM-TEST":
-                    # Simulation: Shift values so logic sees "Today Confirmed" as "prev_rsi"
-                    self.rsi_logic.prev_rsi = rsi_now
-                    self.rsi_logic.prev_prev_rsi = rsi_prev
-                else:
-                    # Real: Standard mapping
-                    self.rsi_logic.prev_rsi = rsi_prev
-                    self.rsi_logic.prev_prev_rsi = rsi_prev_prev
+                self.rsi_logic.prev_rsi = rsi_prev
+
                 
                 self.rsi_logic.current_rsi_short = rsi_short_now
                 self.rsi_logic.prev_rsi_short = rsi_short_prev
@@ -437,56 +455,12 @@ class SevenSplitStrategy(BaseStrategy):
                     self.calculate_hourly_rsi()
                     self.rsi_logic.last_hourly_rsi_update = current_time
 
-            # Update Daily RSI once per day after 9 AM KST
-            # We do this to get the confirmed daily close RSI.
-            KST = timezone(timedelta(hours=9))
-            
-            current_dt_kst = None
-            
-            # Check simulation time
-            if self.ticker == "SIM-TEST" and hasattr(self, 'current_candle') and self.current_candle:
-                ts = self.current_candle.get('timestamp')
-                if ts:
-                    try:
-                        if isinstance(ts, (int, float)):
-                            if ts > 10000000000: ts = ts / 1000.0
-                            dt_utc = datetime.fromtimestamp(ts, timezone.utc)
-                            current_dt_kst = dt_utc.astimezone(KST)
-                        elif isinstance(ts, str):
-                            dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
-                            current_dt_kst = dt.astimezone(KST)
-                    except Exception:
-                        pass
-            
-            if not current_dt_kst:
-                # Real mode (System Time)
-                now_utc = datetime.now(timezone.utc)
-                current_dt_kst = now_utc.astimezone(KST)
-            
-            # Check execution time
-            # In Real mode, we wait for 9 AM KST (Daily Close).
-            # In Simulation, timestamps might be slightly off (e.g. 08:59:59), so we process every candle.
-            is_simulation = (self.ticker == "SIM-TEST")
-            
-            if is_simulation or (current_dt_kst.hour >= 9 and current_time - self.start_time > self.initial_rsi_delay):
-                current_date_str = current_dt_kst.strftime("%Y-%m-%d")
-                
-                # Check if we need to update RSI data (calculate_rsi)
-                # We track the last update date to ensure we only calculate once per day
-                
-                last_update_ts = self.rsi_logic.last_rsi_update
-                needs_update = False
-                
-                if last_update_ts == 0:
-                    needs_update = True
-                else:
-                    last_update_dt = datetime.fromtimestamp(last_update_ts, KST)
-                    if last_update_dt.strftime("%Y-%m-%d") != current_date_str:
-                        needs_update = True
-                            
-                if needs_update:
-                    self.calculate_rsi()
-                    self.rsi_logic.last_rsi_update = current_dt_kst.timestamp()
+            # Update Daily RSI
+            # We now update this every 30 minutes to support "Intraday Dynamic RSI" strategies.
+            # This allows the bot to react to intraday crashes where the projected Daily RSI dips below the threshold.
+            if current_time - self.rsi_logic.last_rsi_update >= 1800:
+                self.calculate_rsi()
+                self.rsi_logic.last_rsi_update = current_time
 
             if not self.is_running:
                 return

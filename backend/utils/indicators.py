@@ -14,7 +14,8 @@ def calculate_rsi(prices: list, period: int = 14) -> float:
     """
     # Need at least period + 1 data points to calculate difference and initial average
     if not prices or len(prices) < period + 1:
-        logging.warning(f"Not enough data for RSI calculation: {len(prices) if prices else 0} < {period + 1}")
+        # Use DEBUG level to avoid log spam during simulation warmup
+        logging.debug(f"Not enough data for RSI calculation: {len(prices) if prices else 0} < {period + 1}")
         return None
         
     try:

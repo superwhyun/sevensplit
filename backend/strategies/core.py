@@ -49,3 +49,10 @@ class BaseStrategy(ABC):
     def get_state(self, current_price=None):
         """Get current strategy state for UI/API."""
         pass
+
+    def get_current_time_kst(self):
+        """Get current time in KST timezone. Can be overridden for simulation."""
+        from datetime import datetime, timezone, timedelta
+        KST = timezone(timedelta(hours=9))
+        now_utc = datetime.now(timezone.utc)
+        return now_utc.astimezone(KST)
