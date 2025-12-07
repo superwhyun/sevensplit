@@ -174,9 +174,12 @@ const Dashboard = () => {
                 } else if (!selectedStrategyId) {
                     setSelectedStrategyId(response.data[0].id);
                 }
+            } else {
+                setLoading(false);
             }
         } catch (error) {
             console.error('Error fetching strategies:', error);
+            setLoading(false);
         }
     };
 

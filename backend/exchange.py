@@ -162,9 +162,9 @@ class UpbitExchange(Exchange):
             
             # Check for error response content before raising
             if not resp.ok:
-                logging.error(f"Upbit API Error: {resp.status_code} {resp.text}")
-
-            resp.raise_for_status()
+                error_msg = f"Upbit API Error: {resp.status_code} {resp.text}"
+                logging.error(error_msg)
+                raise Exception(error_msg)
             
             # Log success only if NOT in mock mode (to reduce noise)
             # We determine mock mode by checking if server_url contains localhost or 127.0.0.1
