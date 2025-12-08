@@ -24,38 +24,18 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
         if (simResult) setShowResultPopup(true);
     }, [simResult]);
 
-    // Helper: Treat a KST time string (e.g. "2023-01-01T09:00:00") as if it were UTC
-    // This forces the chart to display "09:00" regardless of browser timezone
-    const parseKSTAsUTC = (kstString) => {
-        if (!kstString) return null;
-        // Remove any existing offset if present
-        const cleanStr = kstString.replace(/[+-]\d{2}:\d{2}$/, '').replace('Z', '');
-        return new Date(cleanStr + 'Z').getTime() / 1000;
-    };
-
-    // Helper: Shift a true UTC timestamp (or ISO) to KST-like timestamp
-    // e.g. 00:00 UTC -> 09:00 "Fake UTC"
-    const shiftToKST = (utcIsoOrTimestamp) => {
-        if (!utcIsoOrTimestamp) return null;
-        let ts = 0;
-        if (typeof utcIsoOrTimestamp === 'number') {
-            ts = utcIsoOrTimestamp;
-        } else {
-            const timeStr = utcIsoOrTimestamp.endsWith('Z') || utcIsoOrTimestamp.includes('+') ? utcIsoOrTimestamp : utcIsoOrTimestamp + 'Z';
-            ts = new Date(timeStr).getTime() / 1000;
-        }
-        return ts + (9 * 60 * 60);
+    // Helper: Parse exact UTC ISO string to Unix Timestamp
+    const parseUTC = (utcString) => {
+        if (!utcString) return null;
+        // Ensure 'Z' if missing (backend usually sends ISO-like strings which are effectively UTC)
+        const timeStr = utcString.endsWith('Z') || utcString.includes('+') ? utcString : utcString + 'Z';
+        return new Date(timeStr).getTime() / 1000;
     };
 
     useEffect(() => {
         const fetchCandles = async () => {
-            // Determine interval based on strategy mode
-            // Default to 'minutes/5' for PRICE mode, 'days' for RSI mode
             const interval = config?.strategy_mode?.toUpperCase() === 'RSI' ? 'days' : 'minutes/5';
 
-            // console.log(`[Chart] Fetching candles for ${ticker} (Mode: ${config?.strategy_mode}, Interval: ${interval})...`);
-
-            // If running on Vite dev server (port 5173), point to backend port 8000.
             const API_BASE_URL = window.location.port === '5173'
                 ? `http://${window.location.hostname}:8000`
                 : '';
@@ -70,12 +50,12 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                 });
                 const data = response.data;
 
-                // Sort by timestamp ascending
-                data.sort((a, b) => new Date(a.candle_date_time_kst) - new Date(b.candle_date_time_kst));
+                // Sort by candle_date_time_utc (always standard)
+                data.sort((a, b) => new Date(a.candle_date_time_utc) - new Date(b.candle_date_time_utc));
 
                 const candleData = data.map(d => ({
-                    // Use KST time string but treat as UTC to force chart to display KST time
-                    time: parseKSTAsUTC(d.candle_date_time_kst),
+                    // Use Real UTC Timestamp
+                    time: parseUTC(d.candle_date_time_utc),
                     open: d.opening_price,
                     high: d.high_price,
                     low: d.low_price,
@@ -83,7 +63,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                 }));
 
                 const volumeData = data.map(d => ({
-                    time: parseKSTAsUTC(d.candle_date_time_kst),
+                    time: parseUTC(d.candle_date_time_utc),
                     value: d.candle_acc_trade_volume,
                     color: d.trade_price >= d.opening_price ? 'rgba(38, 166, 154, 0.5)' : 'rgba(239, 83, 80, 0.5)',
                 }));
@@ -104,7 +84,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
 
     // Calculate RSI (Dual: 14 and 4)
     const calculateDualRSI = (data) => {
-        // Helper to calculate RSI for a specific period using Wilder's Smoothing (to match Upbit)
+        // Helper to calculate RSI for a specific period (Wilder's Smoothing)
         const calcRSI = (period) => {
             if (data.length < period + 1) return [];
 
@@ -119,7 +99,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                 losses.push(change < 0 ? Math.abs(change) : 0);
             }
 
-            // 2. Initial Average (SMA)
+            // 2. Initial Average
             let avgGain = gains.slice(0, period).reduce((a, b) => a + b, 0) / period;
             let avgLoss = losses.slice(0, period).reduce((a, b) => a + b, 0) / period;
 
@@ -127,11 +107,9 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             let rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
             let rsi = 100 - (100 / (1 + rs));
 
-            // The index in 'data' corresponding to this first RSI point is 'period'
-            // (since we started from index 1 for deltas, gains[period-1] corresponds to data[period])
             results.push({ time: data[period].time, value: rsi });
 
-            // 3. Wilder's Smoothing for subsequent points
+            // 3. Wilder's Smoothing
             for (let i = period; i < gains.length; i++) {
                 avgGain = (avgGain * (period - 1) + gains[i]) / period;
                 avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
@@ -139,7 +117,6 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                 rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
                 rsi = 100 - (100 / (1 + rs));
 
-                // gains[i] corresponds to data[i+1]
                 results.push({ time: data[i + 1].time, value: rsi });
             }
 
@@ -164,42 +141,26 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                 if (volumeSeriesRef.current && volumeData.length > 0) {
                     const displayVolumeData = volumeData.map(d => ({
                         ...d,
-                        color: d.value > 0 ? d.color : 'rgba(0,0,0,0)' // Hide zero volume?
+                        color: d.value > 0 ? d.color : 'rgba(0,0,0,0)'
                     }));
                     volumeSeriesRef.current.setData(displayVolumeData);
                 }
 
-                // Update RSI (Dual) - Only if in RSI mode
+                // Update RSI (Dual)
                 if (config?.strategy_mode?.toUpperCase() === 'RSI' && rsiSeries14Ref.current && rsiSeries4Ref.current) {
                     const { rsi14, rsi4 } = calculateDualRSI(candleData);
+                    rsiSeries14Ref.current.setData(rsi14);
+                    rsiSeries4Ref.current.setData(rsi4);
 
-                    // No offset needed if candleData.time is already UTC
-                    const rsi14DisplayData = rsi14.map(d => ({
-                        time: d.time,
-                        value: d.value
-                    }));
-                    const rsi4DisplayData = rsi4.map(d => ({
-                        time: d.time,
-                        value: d.value
-                    }));
-
-                    rsiSeries14Ref.current.setData(rsi14DisplayData);
-                    rsiSeries4Ref.current.setData(rsi4DisplayData);
-
-                    // Force re-apply RSI scale options to ensure visibility
                     chartRef.current.priceScale('rsi').applyOptions({
                         autoScale: false,
                         minValue: 0,
                         maxValue: 100,
-                        scaleMargins: {
-                            top: 0.7,
-                            bottom: 0,
-                        },
+                        scaleMargins: { top: 0.7, bottom: 0 },
                         visible: true,
-                        borderColor: '#ef4444', // Red border for debugging
+                        borderColor: '#ef4444',
                     });
                 } else if (config?.strategy_mode?.toUpperCase() !== 'RSI') {
-                    // Clear RSI data if not in RSI mode
                     if (rsiSeries14Ref.current) rsiSeries14Ref.current.setData([]);
                     if (rsiSeries4Ref.current) rsiSeries4Ref.current.setData([]);
                 }
@@ -239,6 +200,33 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                 borderColor: '#334155',
                 timeVisible: true,
                 secondsVisible: false,
+                // CUSTOM FORMATTER: Display KST (+9h) on X-Axis from UTC Data
+                tickMarkFormatter: (time, tickMarkType, locale) => {
+                    // 'time' is UTC timestamp from data.
+                    // We want to display it as KST.
+                    const date = new Date(time * 1000);
+                    // Add 9 hours
+                    const kstDate = new Date(date.getTime() + (9 * 60 * 60 * 1000));
+
+                    // Simple formatting to HH:mm or DD
+                    // tickMarkType: 0=Year, 1=Month, 2=DayOfMonth, 3=Time
+                    // We can check tickMarkType or just standard format
+
+                    const pad = (n) => n.toString().padStart(2, '0');
+                    const month = kstDate.getUTCMonth() + 1;
+                    const day = kstDate.getUTCDate();
+                    const hours = kstDate.getUTCHours();
+                    const minutes = kstDate.getUTCMinutes();
+
+                    if (tickMarkType === 2) { // Day
+                        return `${month}/${day}`;
+                    } else if (tickMarkType === 3) { // Time
+                        return `${pad(hours)}:${pad(minutes)}`;
+                    } else {
+                        // Fallback or Month/Year
+                        return `${kstDate.getUTCFullYear()}-${pad(month)}-${pad(day)}`;
+                    }
+                },
             },
             localization: {
                 locale: 'ko-KR',
@@ -300,10 +288,10 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
         chart.subscribeClick(param => {
             console.log("[StrategyChart] Click param:", param);
             if (onChartClickRef.current && param.time) {
-                console.log("[StrategyChart] Calling onChartClick with time:", param.time);
+                // The chart now uses Real UTC timestamps internally. 
+                // param.time is Real UTC. No offset needed.
+                console.log("[StrategyChart] Calling onChartClick with UTC time:", param.time);
                 onChartClickRef.current(param.time);
-            } else {
-                console.log("[StrategyChart] Click ignored (no time or handler)");
             }
         });
 
@@ -335,8 +323,8 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
 
         chart.priceScale('volume').applyOptions({
             scaleMargins: {
-                top: 0.5, // Start at 50% height
-                bottom: 0.3, // End at 70% height (aligned with price chart bottom)
+                top: 0.5,
+                bottom: 0.3,
             },
         });
 
@@ -346,11 +334,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             lineWidth: 2,
             priceScaleId: 'rsi',
             title: 'RSI(14)',
-            priceFormat: {
-                type: 'price',
-                precision: 1,
-                minMove: 0.1,
-            },
+            priceFormat: { type: 'price', precision: 1, minMove: 0.1 },
         });
         rsiSeries14Ref.current = rsiSeries14;
 
@@ -359,29 +343,12 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             lineWidth: 1,
             priceScaleId: 'rsi',
             title: 'RSI(4)',
-            priceFormat: {
-                type: 'price',
-                precision: 1,
-                minMove: 0.1,
-            },
+            priceFormat: { type: 'price', precision: 1, minMove: 0.1 },
         });
         rsiSeries4Ref.current = rsiSeries4;
 
-        // Add Threshold Lines to RSI Series
-        rsiSeries14.createPriceLine({
-            price: 70.0,
-            color: '#ef4444',
-            lineWidth: 1,
-            lineStyle: 2, // Dashed
-            axisLabelVisible: false,
-        });
-        rsiSeries14.createPriceLine({
-            price: 30.0,
-            color: '#10b981',
-            lineWidth: 1,
-            lineStyle: 2, // Dashed
-            axisLabelVisible: false,
-        });
+        rsiSeries14.createPriceLine({ price: 70.0, color: '#ef4444', lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
+        rsiSeries14.createPriceLine({ price: 30.0, color: '#10b981', lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
 
         const handleResize = () => {
             chart.applyOptions({ width: chartContainerRef.current.clientWidth });
@@ -395,63 +362,45 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
         };
     }, []);
 
-    // Combined Marker Effect
+    // Markers System (Using True UTC)
     useEffect(() => {
         if (!candlestickSeriesRef.current) return;
 
         const markers = [];
+
+        // Helper: No more timezone shifting needed. 
+        // Just explicit parsing if input is string to ensure safe Unix timestamp.
+        const ensureTimestamp = (val) => {
+            if (!val) return null;
+            if (typeof val === 'number') return val;
+            return parseUTC(val);
+        };
 
         if (isSimulating || simResult) {
             if (simResult && simResult.trades) {
                 simResult.trades.forEach(t => {
                     // Buy Marker
                     if (t.bought_at) {
-                        // Shift UTC timestamp to KST to match chart
-                        const buyTime = shiftToKST(t.bought_at);
+                        const buyTime = ensureTimestamp(t.bought_at);
                         if (buyTime) {
-                            markers.push({
-                                time: buyTime,
-                                position: 'belowBar',
-                                color: '#10b981', // Green
-                                shape: 'arrowUp',
-                                text: '',
-                                size: 1
-                            });
+                            markers.push({ time: buyTime, position: 'belowBar', color: '#10b981', shape: 'arrowUp', text: '', size: 1 });
                         }
                     }
-
                     // Sell Marker
                     if (t.timestamp) {
-                        // Shift UTC timestamp to KST to match chart
-                        const sellTime = shiftToKST(t.timestamp);
+                        const sellTime = ensureTimestamp(t.timestamp);
                         if (sellTime) {
-                            markers.push({
-                                time: sellTime,
-                                position: 'aboveBar',
-                                color: '#ef4444', // Red
-                                shape: 'arrowDown',
-                                text: '',
-                                size: 1
-                            });
+                            markers.push({ time: sellTime, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: '', size: 1 });
                         }
                     }
                 });
             }
-
-            // Also add markers for active splits (bought but not sold)
             if (simResult && simResult.splits) {
                 simResult.splits.forEach(s => {
                     if (s.bought_at) {
-                        const buyTime = shiftToKST(s.bought_at);
+                        const buyTime = ensureTimestamp(s.bought_at);
                         if (buyTime) {
-                            markers.push({
-                                time: buyTime,
-                                position: 'belowBar',
-                                color: '#eab308', // Yellow for active splits
-                                shape: 'arrowUp',
-                                text: '',
-                                size: 1
-                            });
+                            markers.push({ time: buyTime, position: 'belowBar', color: '#eab308', shape: 'arrowUp', text: '', size: 1 });
                         }
                     }
                 });
@@ -460,8 +409,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             if (splits && splits.length > 0) {
                 splits.forEach(split => {
                     if (split.bought_at) {
-                        // Split bought_at is UTC ISO from backend -> Shift to KST
-                        const time = shiftToKST(split.bought_at);
+                        const time = ensureTimestamp(split.bought_at);
                         if (time) {
                             markers.push({
                                 time: time,
@@ -475,34 +423,18 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                     }
                 });
             }
-
             if (tradeHistory && tradeHistory.length > 0) {
                 tradeHistory.forEach(trade => {
                     if (trade.timestamp) {
-                        const time = shiftToKST(trade.timestamp);
+                        const time = ensureTimestamp(trade.timestamp);
                         if (time) {
-                            markers.push({
-                                time: time,
-                                position: 'aboveBar',
-                                color: '#ef4444',
-                                shape: 'arrowDown',
-                                text: '',
-                                size: 1,
-                            });
+                            markers.push({ time: time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: '', size: 1 });
                         }
                     }
-
                     if (trade.bought_at) {
-                        const time = shiftToKST(trade.bought_at);
+                        const time = ensureTimestamp(trade.bought_at);
                         if (time) {
-                            markers.push({
-                                time: time,
-                                position: 'belowBar',
-                                color: '#10b981',
-                                shape: 'arrowUp',
-                                text: '',
-                                size: 1,
-                            });
+                            markers.push({ time: time, position: 'belowBar', color: '#10b981', shape: 'arrowUp', text: '', size: 1 });
                         }
                     }
                 });

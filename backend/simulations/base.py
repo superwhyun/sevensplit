@@ -39,6 +39,12 @@ class SimulationStrategy(SevenSplitStrategy):
         import time
         self.start_time = time.time()
         self.initial_rsi_delay = 0
+        
+        # Missing attributes from SevenSplitStrategy
+        self._insufficient_funds_until = 0
+        self.MIN_ORDER_AMOUNT_KRW = 5000
+        self.ORDER_TIMEOUT_SEC = 1800
+        self.RSI_UPDATE_INTERVAL_SEC = 1800
 
         # Initialize defaults if needed (similar to SevenSplitStrategy)
         if self.config.min_price == 0.0:

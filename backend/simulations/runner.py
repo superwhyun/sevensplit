@@ -90,6 +90,11 @@ def expand_daily_to_hourly(daily_candles):
                     ratio = (hour - phase2_end) / (24 - phase2_end)
                     price = l + (c - l) * ratio
             
+            # Limit: Do not generate future candles
+            # (Allows simulation up to 'now', avoiding confusing future trades)
+            if current_dt > datetime.now(timezone.utc):
+                 break
+
             hourly_candles.append({
                 'timestamp': current_dt.timestamp(),
                 'opening_price': price,
@@ -145,6 +150,12 @@ def run_simulation(sim_config: SimulationConfig):
         original_start_idx = start_idx
         start_idx = start_idx * 24
         
+        # Safety: If start_idx exceeds new length (due to future cropping), clamp it or adjust
+        if start_idx >= len(candles):
+            # If start index is beyond available data, try to simulate at least the last 24 hours if possible
+             start_idx = max(0, len(candles) - 24)
+             print(f"SIM WARNING: Adjusted start_index clamped to {start_idx} (Max available: {len(candles)})")
+
         # Build history from expanded candles (taking every 24th close, i.e., index 23, 47, ...)
         # Only up to the point before start_idx
         for i in range(23, start_idx, 24):
@@ -153,7 +164,7 @@ def run_simulation(sim_config: SimulationConfig):
                 price = c.get('trade_price') or c.get('close')
                 daily_closes_history.append(float(price))
                 
-        print(f"SIM: Adjusted start_index from {original_start_idx} (Days) to {start_idx} (Hours). Pre-filled {len(daily_closes_history)} daily history candles.")
+        # print(f"SIM: Adjusted start_index from {original_start_idx} (Days) to {start_idx} (Hours). Pre-filled {len(daily_closes_history)} daily history candles.")
     
     # Initialize strategy config using start_idx price
     sim_logs = []
@@ -176,21 +187,21 @@ def run_simulation(sim_config: SimulationConfig):
 
     # Pre-compute daily candles (keep for get_candles usage)
     if strategy.config.strategy_mode == "RSI":
-        print(f"SIM: Pre-computing daily candles...")
+        # print(f"SIM: Pre-computing daily candles...")
         daily_candles = strategy._precompute_daily_candles()
         msg = f"SIM: Pre-computed {len(daily_candles)} daily candles for RSI calculation"
         sim_logs.append(msg)
         logging.info(msg)
-        print(msg)
+        # print(msg)
         
     # Import indicators
     from utils.indicators import calculate_rsi
 
     # Run simulation loop
-    print(f"SIM: Starting simulation loop from {start_idx} to {len(candles)}")
+    # print(f"SIM: Starting simulation loop from {start_idx} to {len(candles)}")
     for i in range(start_idx, len(candles)):
-        if i % 100 == 0:
-            print(f"SIM: Processing candle {i}/{len(candles)}")
+        # if i % 100 == 0:
+        #     print(f"SIM: Processing candle {i}/{len(candles)}")
 
         candle = candles[i]
 
@@ -235,7 +246,8 @@ def run_simulation(sim_config: SimulationConfig):
             else:
                 next_buy_price = strategy.last_buy_price * (1 - strategy.config.buy_rate)
                 if candle['low'] <= next_buy_price:
-                    tick_price = next_buy_price
+                    # Use the Low price to trigger all levels crossed within this candle
+                    tick_price = candle['low']
                 else:
                     tick_price = candle['close']
 

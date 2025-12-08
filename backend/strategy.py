@@ -503,7 +503,7 @@ class SevenSplitStrategy(BaseStrategy):
                         try:
 
                             created_dt = datetime.fromisoformat(split.created_at)
-                            elapsed = (datetime.now() - created_dt).total_seconds()
+                            elapsed = (datetime.now(timezone.utc) - created_dt).total_seconds()
                             if elapsed > self.ORDER_TIMEOUT_SEC: 
                                 is_timeout = True
                         except:
