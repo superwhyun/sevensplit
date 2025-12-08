@@ -764,6 +764,16 @@ class SevenSplitStrategy(BaseStrategy):
                     if split.buy_volume <= 0:
                         split.buy_volume = executed_vol
 
+                    # Sync buy_price to actual for display consistency
+                    split.buy_price = split.actual_buy_price
+
+                    # Update strategy's last_buy_price if this is the latest split
+                    # This ensures next grid levels are calculated based on real execution price
+                    if self.splits:
+                        latest_split_id = max(s.id for s in self.splits)
+                        if split.id == latest_split_id:
+                            self.last_buy_price = split.actual_buy_price
+
                     logging.info(f"Buy order {state} for split {split.id}. Price: {split.actual_buy_price}, Vol: {split.buy_volume}")
                     self.save_state()
                 

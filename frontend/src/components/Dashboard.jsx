@@ -1100,7 +1100,13 @@ const Dashboard = () => {
                                                     const formatTime = (t) => {
                                                         if (!t) return '-';
                                                         if (typeof t === 'number') return new Date(t * 1000).toLocaleString();
-                                                        return new Date(t).toLocaleString();
+
+                                                        // Ensure UTC if missing timezone info
+                                                        let timeStr = t;
+                                                        if (!timeStr.endsWith('Z') && !timeStr.includes('+')) {
+                                                            timeStr += 'Z';
+                                                        }
+                                                        return new Date(timeStr).toLocaleString();
                                                     };
 
                                                     return (
