@@ -22,6 +22,7 @@ class SevenSplitStrategy(BaseStrategy):
         self.next_split_id = 1
         self.last_buy_price = None # Track the last buy price for creating next split
         self.last_sell_price = None # Track the last sell price for rebuy strategy
+        self.last_sell_date = None # Track the last sell date for daily limits
         self.budget = 0.0
         
         # Constants
@@ -503,6 +504,8 @@ class SevenSplitStrategy(BaseStrategy):
                         try:
 
                             created_dt = datetime.fromisoformat(split.created_at)
+                            if created_dt.tzinfo is None:
+                                created_dt = created_dt.replace(tzinfo=timezone.utc)
                             elapsed = (datetime.now(timezone.utc) - created_dt).total_seconds()
                             if elapsed > self.ORDER_TIMEOUT_SEC: 
                                 is_timeout = True
@@ -711,6 +714,8 @@ class SevenSplitStrategy(BaseStrategy):
         if split.status == "PENDING_BUY" and split.created_at:
             try:
                 created_dt = datetime.fromisoformat(split.created_at)
+                if created_dt.tzinfo is None:
+                    created_dt = created_dt.replace(tzinfo=timezone.utc)
                 elapsed = (datetime.now(timezone.utc) - created_dt).total_seconds()
                 if elapsed > self.ORDER_TIMEOUT_SEC:  # Timeout check
                     current_price = self.exchange.get_current_price(self.ticker)
