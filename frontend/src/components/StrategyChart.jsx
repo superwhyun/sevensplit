@@ -543,7 +543,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             border: '1px solid #334155'
         }}>
             <h3 style={{ margin: '0 0 1rem 0', color: '#f8fafc' }}>Price Chart {isSimulating ? '(SIMULATION MODE)' : ''}</h3>
-            <div ref={chartContainerRef} style={{ position: 'relative', height: '400px', width: '100%' }}>
+            <div ref={chartContainerRef} style={{ position: 'relative', height: '400px', width: '100%', touchAction: 'none' }}>
                 {simResult && showResultPopup && (
                     <div style={{
                         position: 'absolute',
