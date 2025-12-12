@@ -965,6 +965,7 @@ const Dashboard = () => {
                             {/* Price Chart */}
                             <div style={{ position: 'relative', zIndex: isSimulating ? 10000 : 1 }}>
                                 <StrategyChart
+                                    key={selectedStrategyId}
                                     ticker={status.ticker}
                                     splits={simResult ? simResult.splits : status.splits}
                                     config={simResult ? simResult.config : status.config}
