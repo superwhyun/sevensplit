@@ -15,9 +15,15 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
     const volumeSeriesRef = useRef();
     const rsiSeries14Ref = useRef();
     const rsiSeries4Ref = useRef();
+
+    // Data State
     const [candleData, setCandleData] = useState([]);
     const [volumeData, setVolumeData] = useState([]);
     const [showResultPopup, setShowResultPopup] = useState(true);
+
+    // Pagination State
+    const [isLoadingMore, setIsLoadingMore] = useState(false);
+    const [lastCandleTime, setLastCandleTime] = useState(null);
 
     // Reset popup visibility when simResult changes
     useEffect(() => {
@@ -32,59 +38,15 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
         return new Date(timeStr).getTime() / 1000;
     };
 
+    // Reset state when ticker changes
     useEffect(() => {
-        const fetchCandles = async () => {
-            const interval = config?.strategy_mode?.toUpperCase() === 'RSI' ? 'days' : 'minutes/5';
-
-            const API_BASE_URL = window.location.port === '5173'
-                ? `http://${window.location.hostname}:8000`
-                : '';
-
-            try {
-                const response = await axios.get(`${API_BASE_URL}/candles`, {
-                    params: {
-                        market: ticker,
-                        count: 200,
-                        interval: interval
-                    }
-                });
-                const data = response.data;
-
-                // Sort by candle_date_time_utc (always standard)
-                data.sort((a, b) => new Date(a.candle_date_time_utc) - new Date(b.candle_date_time_utc));
-
-                const candleData = data.map(d => ({
-                    // Use Real UTC Timestamp
-                    time: parseUTC(d.candle_date_time_utc),
-                    open: d.opening_price,
-                    high: d.high_price,
-                    low: d.low_price,
-                    close: d.trade_price,
-                }));
-
-                const volumeData = data.map(d => ({
-                    time: parseUTC(d.candle_date_time_utc),
-                    value: d.candle_acc_trade_volume,
-                    color: d.trade_price >= d.opening_price ? 'rgba(38, 166, 154, 0.5)' : 'rgba(239, 83, 80, 0.5)',
-                }));
-
-                setCandleData(candleData);
-                setVolumeData(volumeData);
-            } catch (error) {
-                console.error("Error fetching candles:", error);
-            }
-        };
-
-        if (ticker) {
-            fetchCandles();
-            const interval = setInterval(fetchCandles, 60000);
-            return () => clearInterval(interval);
-        }
-    }, [ticker, config.strategy_mode]); // Re-fetch when ticker or strategy mode changes
+        setCandleData([]);
+        setVolumeData([]);
+        setLastCandleTime(null);
+    }, [ticker]);
 
     // Calculate RSI (Dual: 14 and 4)
     const calculateDualRSI = (data) => {
-        // Helper to calculate RSI for a specific period (Wilder's Smoothing)
         const calcRSI = (period) => {
             if (data.length < period + 1) return [];
 
@@ -129,6 +91,125 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
         };
     };
 
+    const fetchCandles = async (to = null, isHistory = false) => {
+        const interval = config?.strategy_mode?.toUpperCase() === 'RSI' ? 'days' : 'minutes/5';
+
+        const API_BASE_URL = window.location.port === '5173'
+            ? `http://${window.location.hostname}:8000`
+            : '';
+
+        try {
+            const params = {
+                market: ticker,
+                count: 200,
+                interval: interval
+            };
+            if (to) {
+                params.to = to;
+            }
+
+            const response = await axios.get(`${API_BASE_URL}/candles`, { params });
+            const data = response.data;
+
+            if (!data || data.length === 0) return;
+
+            // Sort by time ascending
+            data.sort((a, b) => new Date(a.candle_date_time_utc) - new Date(b.candle_date_time_utc));
+
+            const newCandles = data.map(d => ({
+                time: parseUTC(d.candle_date_time_utc),
+                open: d.opening_price,
+                high: d.high_price,
+                low: d.low_price,
+                close: d.trade_price,
+            }));
+
+            const newVolumes = data.map(d => ({
+                time: parseUTC(d.candle_date_time_utc),
+                value: d.candle_acc_trade_volume,
+                color: d.trade_price >= d.opening_price ? 'rgba(38, 166, 154, 0.5)' : 'rgba(239, 83, 80, 0.5)',
+            }));
+
+            if (isHistory) {
+                // Prepend data
+                setCandleData(prev => {
+                    if (prev.length === 0) return newCandles;
+                    const firstExistingTime = prev[0].time;
+                    const uniqueNew = newCandles.filter(c => c.time < firstExistingTime);
+                    return [...uniqueNew, ...prev];
+                });
+                setVolumeData(prev => {
+                    if (prev.length === 0) return newVolumes;
+                    const firstExistingTime = prev[0].time;
+                    const uniqueNew = newVolumes.filter(v => v.time < firstExistingTime);
+                    return [...uniqueNew, ...prev];
+                });
+            } else {
+                // Initial load or normal refresh
+                setCandleData(prev => {
+                    if (prev.length === 0) return newCandles;
+                    // Merge new candles at the end
+                    const lastExistingTime = prev[prev.length - 1].time;
+                    const uniqueNew = newCandles.filter(c => c.time > lastExistingTime);
+                    return [...prev, ...uniqueNew];
+                });
+                setVolumeData(prev => {
+                    if (prev.length === 0) return newVolumes;
+                    const lastExistingTime = prev[prev.length - 1].time;
+                    const uniqueNew = newVolumes.filter(v => v.time > lastExistingTime);
+                    return [...prev, ...uniqueNew];
+                });
+            }
+
+        } catch (error) {
+            console.error("Error fetching candles:", error);
+        } finally {
+            setIsLoadingMore(false);
+        }
+    };
+
+    // Initial Fetch & Polling
+    useEffect(() => {
+        if (ticker) {
+            // Initial Fetch
+            fetchCandles();
+            // Polling
+            const interval = setInterval(() => fetchCandles(), 60000);
+            return () => clearInterval(interval);
+        }
+    }, [ticker, config.strategy_mode]);
+
+    // Infinite Scroll Logic
+    useEffect(() => {
+        if (!chartRef.current) return;
+
+        const handleVisibleLogicalRangeChange = (newVisibleLogicalRange) => {
+            if (newVisibleLogicalRange === null) return;
+
+            // If scrolled close to the start (left side)
+            if (newVisibleLogicalRange.from < 10 && !isLoadingMore) {
+                if (candleData.length > 0) {
+                    const firstTime = candleData[0].time;
+                    // Convert unix timestamp back to ISO UTC string for API
+                    const toTime = new Date(firstTime * 1000).toISOString();
+
+                    if (lastCandleTime !== toTime) {
+                        setIsLoadingMore(true);
+                        setLastCandleTime(toTime);
+                        fetchCandles(toTime, true);
+                    }
+                }
+            }
+        };
+
+        chartRef.current.timeScale().subscribeVisibleLogicalRangeChange(handleVisibleLogicalRangeChange);
+
+        return () => {
+            if (chartRef.current) {
+                chartRef.current.timeScale().unsubscribeVisibleLogicalRangeChange(handleVisibleLogicalRangeChange);
+            }
+        };
+    }, [candleData, isLoadingMore, lastCandleTime]);
 
     // Update chart data when candleData changes
     useEffect(() => {
@@ -165,7 +246,11 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                     if (rsiSeries4Ref.current) rsiSeries4Ref.current.setData([]);
                 }
 
-                chartRef.current.timeScale().fitContent();
+                // Only fit content on FIRST load (length <= 200) to avoid jumping when loading history
+                if (candleData.length <= 200) {
+                    chartRef.current.timeScale().fitContent();
+                }
+
             } catch (error) {
                 console.error("[Chart] Error setting data:", error);
             }

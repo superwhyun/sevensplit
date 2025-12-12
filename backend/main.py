@@ -430,9 +430,9 @@ def get_accounts():
         raise HTTPException(status_code=500, detail="Failed to fetch accounts")
 
 @app.get("/candles")
-def get_candles(market: str, count: int = 200, interval: str = "minutes/5"):
+def get_candles(market: str, count: int = 200, interval: str = "minutes/5", to: Optional[str] = None):
     try:
-        candles = exchange.get_candles(market, count, interval)
+        candles = exchange.get_candles(market, count, interval, to=to)
         return candles
     except Exception as e:
         logging.error(f"Failed to fetch candles: {e}")

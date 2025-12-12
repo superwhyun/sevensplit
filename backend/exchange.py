@@ -271,10 +271,13 @@ class UpbitExchange(Exchange):
             logging.error(f"get_current_prices failed: {e}")
             return {}
 
-    def get_candles(self, ticker, count=200, interval="minutes/5"):
+    def get_candles(self, ticker, count=200, interval="minutes/5", to=None):
         """Fetch candle data"""
         try:
-            return self._request('GET', f'/v1/candles/{interval}', params={'market': ticker, 'count': count}, auth=False)
+            params = {'market': ticker, 'count': count}
+            if to:
+                params['to'] = to
+            return self._request('GET', f'/v1/candles/{interval}', params=params, auth=False)
         except Exception as e:
             logging.error(f"get_candles failed: {e}")
             return []
