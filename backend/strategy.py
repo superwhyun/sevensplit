@@ -594,6 +594,10 @@ class SevenSplitStrategy(BaseStrategy):
             logging.warning(f"Target price {target_price} below min_price {self.config.min_price}. Skipping.")
             return None
 
+        if self.config.max_price > 0 and target_price > self.config.max_price:
+            logging.warning(f"Target price {target_price} above max_price {self.config.max_price}. Skipping.")
+            return None
+
         # Check Budget
         total_invested = sum(s.buy_amount for s in self.splits)
         if total_invested + self.config.investment_per_split > self.budget:
