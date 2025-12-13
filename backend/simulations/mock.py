@@ -54,6 +54,11 @@ class MockExchange:
         self.orders = {} # uuid -> order_dict
         self.balance_krw = 100000000.0 # Default large balance for sim
         self.balance_coin = 0.0
+
+    def get_balance(self, ticker="KRW"):
+        if ticker == "KRW":
+            return self.balance_krw
+        return self.balance_coin
     
     def get_current_price(self, ticker):
         if self.strategy and self.strategy.current_candle:

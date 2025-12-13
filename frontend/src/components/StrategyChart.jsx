@@ -15,6 +15,12 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
     const volumeSeriesRef = useRef();
     const rsiSeries14Ref = useRef();
     const rsiSeries4Ref = useRef();
+    const tickerRef = useRef(ticker);
+
+    // Keep tickerRef in sync with props
+    useEffect(() => {
+        tickerRef.current = ticker;
+    }, [ticker]);
 
     // Data State
     const [candleData, setCandleData] = useState([]);
@@ -109,6 +115,10 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             }
 
             const response = await axios.get(`${API_BASE_URL}/candles`, { params });
+
+            // Race condition check: discard if ticker changed
+            if (ticker !== tickerRef.current) return;
+
             const data = response.data;
 
             if (!data || data.length === 0) return;
