@@ -6,7 +6,14 @@ class PriceSimulationStrategy(SimulationStrategy):
     def __init__(self, config: StrategyConfig, budget: float, candles: List[Dict[str, Any]]):
         super().__init__(config, budget, candles)
         self.price_logic = PriceStrategyLogic(self)
+        self.sim_logs = []
         
+    def log_message(self, msg: str, level: str = "info"):
+        """Override to capture logs for simulation output."""
+        # Also print to console for debugging if needed, or rely on runner to handle
+        # logging.info(f"[SIM] {msg}") 
+        self.sim_logs.append(msg)
+
     def tick(self, current_price: float = None, open_orders: list = None):
         # Call base tick to establish common state and get open orders
         open_order_uuids = super().tick(current_price, open_orders)

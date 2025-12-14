@@ -134,6 +134,18 @@ const RenameStrategyModal = ({ isOpen, onClose, onRename, currentName }) => {
     );
 };
 
+const formatTime = (t) => {
+    if (!t) return '-';
+    if (typeof t === 'number') return new Date(t * 1000).toLocaleString();
+
+    // Ensure UTC if missing timezone info
+    let timeStr = t;
+    if (!timeStr.endsWith('Z') && !timeStr.includes('+')) {
+        timeStr += 'Z';
+    }
+    return new Date(timeStr).toLocaleString();
+};
+
 const Dashboard = () => {
     const [status, setStatus] = useState(null);
     const [portfolio, setPortfolio] = useState(null);
@@ -977,6 +989,11 @@ const Dashboard = () => {
                                         setIsSimulating(false);
                                     }}
                                     onChartClick={handleChartClick}
+                                    trailingBuyState={{
+                                        isWatching: simResult ? false : status.is_watching,
+                                        watchLowestPrice: simResult ? null : status.watch_lowest_price,
+                                        pendingBuyUnits: simResult ? 0 : status.pending_buy_units
+                                    }}
                                 />
                             </div>
 
@@ -999,6 +1016,8 @@ const Dashboard = () => {
                                         <tr style={{ borderBottom: '1px solid #334155', color: '#94a3b8' }}>
                                             <th style={{ padding: '1rem' }}>ID</th>
                                             <th style={{ padding: '1rem' }}>Status</th>
+                                            <th style={{ padding: '1rem' }}>Buy Time</th>
+                                            <th style={{ padding: '1rem' }}>Info</th>
                                             <th style={{ padding: '1rem' }}>Buy Price (vs Current)</th>
                                             <th style={{ padding: '1rem' }}>Sell Target (vs Current)</th>
                                             <th style={{ padding: '1rem' }}>Current P/L</th>
@@ -1036,6 +1055,33 @@ const Dashboard = () => {
                                                         }}>
                                                             {split.status}
                                                         </span>
+                                                    </td>
+                                                    <td style={{ padding: '1rem', fontSize: '0.85rem', color: '#cbd5e1' }}>
+                                                        {formatTime(split.bought_at)}
+                                                    </td>
+                                                    <td style={{ padding: '1rem' }}>
+                                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                                            {split.is_accumulated && (
+                                                                <span style={{
+                                                                    fontSize: '0.7rem',
+                                                                    backgroundColor: '#8b5cf6',
+                                                                    color: 'white',
+                                                                    padding: '0.1rem 0.4rem',
+                                                                    borderRadius: '0.2rem',
+                                                                    width: 'fit-content'
+                                                                }}>
+                                                                    Accumulated
+                                                                </span>
+                                                            )}
+                                                            {split.buy_rsi !== undefined && split.buy_rsi !== null && (
+                                                                <span style={{ fontSize: '0.75rem', color: '#cbd5e1' }}>
+                                                                    RSI: {split.buy_rsi.toFixed(1)}
+                                                                </span>
+                                                            )}
+                                                            {!split.is_accumulated && (split.buy_rsi === undefined || split.buy_rsi === null) && (
+                                                                <span style={{ fontSize: '0.75rem', color: '#64748b' }}>-</span>
+                                                            )}
+                                                        </div>
                                                     </td>
                                                     <td style={{ padding: '1rem' }}>
                                                         <div>₩{split.buy_price.toLocaleString()}</div>
@@ -1080,6 +1126,7 @@ const Dashboard = () => {
                                                     <th style={{ padding: '1rem' }}>Buy Time</th>
                                                     <th style={{ padding: '1rem' }}>Sell Time</th>
                                                     <th style={{ padding: '1rem' }}>Split</th>
+                                                    <th style={{ padding: '1rem' }}>Info</th>
                                                     <th style={{ padding: '1rem', textAlign: 'right' }}>Buy Amount</th>
                                                     <th style={{ padding: '1rem', textAlign: 'right' }}>Sell Amount</th>
                                                     <th style={{ padding: '1rem', textAlign: 'right' }}>Gross Profit</th>
@@ -1097,19 +1144,6 @@ const Dashboard = () => {
                                                     const netProfit = trade.net_profit || (grossProfit - totalFee);
                                                     const profitRate = trade.profit_rate || 0;
 
-                                                    // Helper to format time (handle both ISO string and unix timestamp)
-                                                    const formatTime = (t) => {
-                                                        if (!t) return '-';
-                                                        if (typeof t === 'number') return new Date(t * 1000).toLocaleString();
-
-                                                        // Ensure UTC if missing timezone info
-                                                        let timeStr = t;
-                                                        if (!timeStr.endsWith('Z') && !timeStr.includes('+')) {
-                                                            timeStr += 'Z';
-                                                        }
-                                                        return new Date(timeStr).toLocaleString();
-                                                    };
-
                                                     return (
                                                         <tr key={index} style={{ borderBottom: '1px solid #1e293b' }}>
                                                             <td style={{ padding: '1rem', fontSize: '0.875rem', color: '#94a3b8' }}>
@@ -1119,6 +1153,29 @@ const Dashboard = () => {
                                                                 {formatTime(trade.timestamp)}
                                                             </td>
                                                             <td style={{ padding: '1rem', fontWeight: 'bold' }}>#{trade.split_id}</td>
+                                                            <td style={{ padding: '1rem' }}>
+                                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', alignItems: 'flex-start' }}>
+                                                                    {trade.is_accumulated && (
+                                                                        <span style={{
+                                                                            fontSize: '0.7rem',
+                                                                            backgroundColor: '#8b5cf6',
+                                                                            color: 'white',
+                                                                            padding: '0.1rem 0.4rem',
+                                                                            borderRadius: '0.2rem'
+                                                                        }}>
+                                                                            Accumulated
+                                                                        </span>
+                                                                    )}
+                                                                    {trade.buy_rsi !== undefined && trade.buy_rsi !== null && (
+                                                                        <span style={{ fontSize: '0.75rem', color: '#cbd5e1' }}>
+                                                                            RSI: {trade.buy_rsi.toFixed(1)}
+                                                                        </span>
+                                                                    )}
+                                                                    {!trade.is_accumulated && (trade.buy_rsi === undefined || trade.buy_rsi === null) && (
+                                                                        <span style={{ fontSize: '0.75rem', color: '#64748b' }}>-</span>
+                                                                    )}
+                                                                </div>
+                                                            </td>
                                                             <td style={{ padding: '1rem', textAlign: 'right' }}>
                                                                 <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>
                                                                     ₩{Math.round(buyAmount).toLocaleString()}

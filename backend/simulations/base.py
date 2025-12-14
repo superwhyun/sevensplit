@@ -31,6 +31,11 @@ class SimulationStrategy(SevenSplitStrategy):
         
         # Sim specific
         self.current_candle = None
+        
+        # Trailing Buy State (Mirrors SevenSplitStrategy)
+        self.is_watching = False
+        self.watch_lowest_price = None
+        self.pending_buy_units = 0
 
         # Pre-computed daily candles cache for RSI calculation
         self._daily_candles_cache = None
@@ -245,13 +250,14 @@ class SimulationStrategy(SevenSplitStrategy):
             # But MockExchange returns simple trades, let's just stick to simulation price logic 
             # OR use executed details if we trust MockExchange completely.
             # Let's simple simulation logic: if done, it's done.
-        elif self.current_candle['low'] <= split.buy_price:
-             # Limit hit simulation
+        elif self.current_candle['close'] <= split.buy_price:
+             # Limit hit simulation (using Close)
              is_filled = True
 
         if is_filled:
             split.status = "BUY_FILLED"
-            split.actual_buy_price = split.buy_price # Assume filled at limit/target
+            # User request: Trade at 5m Close Price
+            split.actual_buy_price = float(self.current_candle['close']) 
             ts = self.current_candle.get('timestamp')
             if isinstance(ts, (int, float)):
                 if ts > 10000000000:
@@ -278,9 +284,10 @@ class SimulationStrategy(SevenSplitStrategy):
                 is_filled = True
                 actual_sell_price = float(order.get('price', 0))
         else:
-            if split.target_sell_price and self.current_candle['high'] >= split.target_sell_price:
+            if split.target_sell_price and self.current_candle['close'] >= split.target_sell_price:
                 is_filled = True
-                actual_sell_price = split.target_sell_price
+                # User request: Trade at 5m Close Price
+                actual_sell_price = float(self.current_candle['close'])
 
         if is_filled:
             # Safety check for NaN propagation

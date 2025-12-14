@@ -1,5 +1,6 @@
 from datetime import datetime
 import logging
+import pandas as pd
 
 class MockDB:
     def __init__(self):
@@ -156,7 +157,7 @@ class MockExchange:
         }
         return {'uuid': uuid}
 
-    def get_candles(self, ticker, count=200, interval="days"):
+    def get_candles(self, ticker, count=200, interval="days", to=None):
         """
         Mimic Exchange.get_candles for simulation.
         Returns pre-computed daily candles from strategy cache (much faster).
@@ -165,37 +166,134 @@ class MockExchange:
             return []
 
         # Get full history
-        daily_candles = self.strategy._precompute_daily_candles()
+        if "minutes" in interval:
+             # For minute intervals, use raw candles directly (assuming sim is running with minute data)
+             raw_history = self.strategy.candles
+        else:
+             # Default to Daily pre-computed for Days
+             raw_history = self.strategy._precompute_daily_candles()
         
-        # Filter based on current simulation time
+        # Determine strict cut-off time
+        cutoff_ts = float('inf')
+        
+        # 1. First bound by Simulation Current Time (to prevent lookahead)
         if self.strategy.current_candle:
-            # Get current simulation timestamp
-            current_ts = self.strategy.current_candle.get('timestamp') or self.strategy.current_candle.get('time')
-            
-            if current_ts:
-                # Handle ms/sec differences
-                if current_ts > 10000000000: current_ts /= 1000.0
+            c_ts = self.strategy.current_candle.get('timestamp') or self.strategy.current_candle.get('time')
+            if c_ts:
+                if c_ts > 10000000000: c_ts /= 1000.0
+                cutoff_ts = c_ts + 60 # Allow small buffer for current candle itself to be included? 
+                # Actually, current candle timestamp is usually the open time.
+                # If we want to include the current candle which is "closed" effectively in simulation (we are processing it),
+                # we should allow it. Upbit timestamps are Open Time.
+                # If current simulation tick is "Processing 12:00 Candle", it means 12:00 candle is DONE.
+                # So we should include 12:00 candle.
+                # If cutoff == 12:00, and dc_ts == 12:00. dc_ts <= cutoff (True).
+                # 12:05 candle > cutoff (False).
+                # So +0 or +epsilon is fine. +3600 was definitely huge lookahead.
+                cutoff_ts = c_ts + 1 # +1 sec to be safe against float precision
+        
+        # 2. Second bound by Pagination 'to' cursor (if provided)
+        if to:
+            try:
+                # 'to' is ISO string (e.g. 2023-10-27T10:00:00)
+                # Upbit 'to' excludes the candle at that exact time usually? Or includes?
+                # Usually 'to' means "older than this".
+                # But to be safe, we parse and use as upper bound.
+                dt_to = datetime.fromisoformat(to.replace('Z', '+00:00'))
+                ts_to = dt_to.timestamp()
                 
-                # Filter: Include candles where timestamp <= current_ts
-                # Note: daily_candles must have 'timestamp' added in _precompute_daily_candles
-                filtered_candles = []
-                for dc in daily_candles:
-                    dc_ts = dc.get('timestamp')
-                    if dc_ts:
-                        if dc_ts > 10000000000: dc_ts /= 1000.0
+                # Update cutoff if 'to' is earlier than current simulation time
+                if ts_to < cutoff_ts:
+                    cutoff_ts = ts_to
+            except Exception as e:
+                logging.warning(f"Failed to parse 'to' cursor in MockExchange: {e}")
+
+        # Filter candles
+        filtered_candles = []
+        for dc in raw_history:
+            dc_ts = dc.get('timestamp') or dc.get('time')
+            if dc_ts:
+                if dc_ts > 10000000000: dc_ts /= 1000.0
+                
+                # Check <= cutoff
+                # Note: Upbit 'to' fetches candles BEFORE 'to'.
+                # So checks should be strictly < ? 
+                # Let's say <= for now to ensure overlap isn't missed, main.py handles duplicates/sorting.
+                if dc_ts <= cutoff_ts: 
+                    filtered_candles.append(dc)
+                else:
+                    break # sorted list?
+            else:
+                filtered_candles.append(dc)
                         
-                        # Use a small buffer (e.g. +86400) or check strictly
-                        if dc_ts <= current_ts + 3600: # allow some clock skew or exact match
-                            filtered_candles.append(dc)
-                        else:
-                            break # sorted list, so we can stop
-                    else:
-                        filtered_candles.append(dc)
-                        
-                return filtered_candles[-count:]
+                if "minutes/15" in interval:
+                    # Logic to resample 5m/1m candles to 15m
+                    # This enables correct calculation of 15m RSI even if sim is running on 5m data
+                    try:
+                        if len(filtered_candles) >= 3:
+                           # Convert to DataFrame
+                           df = pd.DataFrame(filtered_candles)
+                           # Ensure timestamp is datetime
+                           # handle timestamp/time keys
+                           df['ts_val'] = df['timestamp'].fillna(df.get('time'))
+                           # Handle ms
+                           df['ts_val'] = df['ts_val'].apply(lambda x: x if x < 10000000000 else x / 1000.0)
+                           df['dt'] = pd.to_datetime(df['ts_val'], unit='s', utc=True)
+                           df.set_index('dt', inplace=True)
+                           
+                           # Ensure numeric columns
+                           for col in ['open', 'high', 'low', 'close', 'trade_price']:
+                               if col in df.columns:
+                                   df[col] = pd.to_numeric(df[col])
+                               elif col == 'trade_price' and 'close' in df.columns:
+                                   df['trade_price'] = df['close'] 
+                                   
+                           # Map keys if needed (Upbit keys are messy in sim)
+                           if 'trade_price' not in df.columns and 'close' in df.columns:
+                               df['trade_price'] = df['close']
+
+                           # Resample
+                           # OHLC agggregation
+                           agg_dict = {
+                               'open': 'first',
+                               'high': 'max',
+                               'low': 'min',
+                               'close': 'last',
+                               'trade_price': 'last'
+                           }
+                           # Filter only existing columns
+                           agg_dict = {k:v for k,v in agg_dict.items() if k in df.columns}
+                           
+                           resampled = df.resample('15min').agg(agg_dict).dropna()
+                           
+                           # Convert back to list of dicts
+                           # We need to preserve Upbit structure loosely
+                           final_candles = []
+                           for idx, row in resampled.iterrows():
+                               c = row.to_dict()
+                               c['timestamp'] = idx.timestamp()
+                               c['candle_date_time_utc'] = idx.isoformat()
+                               final_candles.append(c)
+                               
+                           return final_candles[-count:]
+                    except Exception as e:
+                         # Fallback to standard filtered if resampling fails (better than crash)
+                         logging.warning(f"Resampling failed in MockExchange: {e}")
+                         return filtered_candles[-count:]
+
+                # Debugging Trailing Buy RSI freeze
+        if "minutes/5" in interval and self.strategy and hasattr(self.strategy, 'log_message'):
+             last_ts = 0
+             if filtered_candles:
+                 last_c = filtered_candles[-1]
+                 last_ts = last_c.get('timestamp') or last_c.get('time') or 0
+             self.strategy.log_message(f"MOCK CANDLES: Cutoff={cutoff_ts}, Len={len(filtered_candles)}, TopTimestamp={last_ts}", level="debug")
+
+        # Default return for other intervals or if resampling not applicable
+        return filtered_candles[-count:]
         
         # Fallback if no current_candle (shouldn't happen in loop)
-        return daily_candles[-count:]
+        return raw_history[-count:]
     
     def cancel_order(self, uuid):
         if uuid in self.orders:
@@ -214,19 +312,19 @@ class MockExchange:
         # Check if limit order can be filled based on current candle
         if self.strategy and self.strategy.current_candle:
             candle = self.strategy.current_candle
-            low = candle.get('low_price')
-            high = candle.get('high_price')
+            low = candle.get('low_price') or candle.get('low')
+            high = candle.get('high_price') or candle.get('high')
             
             if order['ord_type'] == 'limit':
                 if order['side'] == 'bid':
                     # Buy Limit: Fill if Low <= Limit Price
-                    if low <= order['price']:
+                    if low is not None and low <= order['price']:
                         order['state'] = 'done'
                         # Assume filled at limit price (or better? conservative: limit price)
                         order['trades'] = [{'funds': order['price'] * order['volume'], 'volume': order['volume'], 'price': order['price']}]
                 elif order['side'] == 'ask':
                     # Sell Limit: Fill if High >= Limit Price
-                    if high >= order['price']:
+                    if high is not None and high >= order['price']:
                         order['state'] = 'done'
                         order['trades'] = [{'funds': order['price'] * order['volume'], 'volume': order['volume'], 'price': order['price']}]
         
@@ -234,4 +332,9 @@ class MockExchange:
 
     def get_orders(self, ticker=None, state='wait', page=1, limit=100):
         """Mock get_orders"""
+        # Force check details for all wait orders to ensure passive fills are processed
+        for uuid, order in list(self.orders.items()):
+            if order['state'] == 'wait':
+                 self.get_order(uuid) # Side-effect: updates state if filled
+
         return [o for o in self.orders.values() if o['state'] == state]

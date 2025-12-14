@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createChart, ColorType, CrosshairMode } from 'lightweight-charts';
 import axios from 'axios';
 
-const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], isSimulating = false, simResult, onSimulationComplete, onChartClick }) => {
+const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], isSimulating = false, simResult, onSimulationComplete, onChartClick, trailingBuyState }) => {
     const chartContainerRef = useRef();
     const chartRef = useRef();
     const onChartClickRef = useRef(onChartClick);
@@ -15,7 +15,12 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
     const volumeSeriesRef = useRef();
     const rsiSeries14Ref = useRef();
     const rsiSeries4Ref = useRef();
+    const rsiCursorLineRef = useRef();
     const tickerRef = useRef(ticker);
+
+    // Trailing Buy Indicator Refs
+    const lowestPriceLineRef = useRef();
+    const triggerPriceLineRef = useRef();
 
     // Keep tickerRef in sync with props
     useEffect(() => {
@@ -30,6 +35,9 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
     // Pagination State
     const [isLoadingMore, setIsLoadingMore] = useState(false);
     const [lastCandleTime, setLastCandleTime] = useState(null);
+
+    // Scaling State
+    const [isAutoScaling, setIsAutoScaling] = useState(true);
 
     // Reset popup visibility when simResult changes
     useEffect(() => {
@@ -238,20 +246,25 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                 }
 
                 // Update RSI (Dual)
-                if (config?.strategy_mode?.toUpperCase() === 'RSI' && rsiSeries14Ref.current && rsiSeries4Ref.current) {
+                // Show RSI if mode is RSI OR if Trailing Buy is enabled (which uses 5m RSI)
+                const showRSI = config?.strategy_mode?.toUpperCase() === 'RSI' || config?.use_trailing_buy;
+
+                if (showRSI && rsiSeries14Ref.current) {
                     const { rsi14, rsi4 } = calculateDualRSI(candleData);
                     rsiSeries14Ref.current.setData(rsi14);
-                    rsiSeries4Ref.current.setData(rsi4);
+
+                    // RSI(4) Removed as per user request
+                    // rsiSeries4Ref.current.setData(rsi4);
 
                     chartRef.current.priceScale('rsi').applyOptions({
                         autoScale: false,
                         minValue: 0,
                         maxValue: 100,
-                        scaleMargins: { top: 0.7, bottom: 0 },
+                        scaleMargins: { top: 0.7, bottom: 0.05 },
                         visible: true,
                         borderColor: '#ef4444',
                     });
-                } else if (config?.strategy_mode?.toUpperCase() !== 'RSI') {
+                } else {
                     if (rsiSeries14Ref.current) rsiSeries14Ref.current.setData([]);
                     if (rsiSeries4Ref.current) rsiSeries4Ref.current.setData([]);
                 }
@@ -266,6 +279,16 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             }
         }
     }, [candleData, volumeData, config.strategy_mode]);
+
+    // Handle AutoScaling Toggle
+    useEffect(() => {
+        if (!chartRef.current) return;
+        chartRef.current.priceScale('right').applyOptions({
+            autoScale: isAutoScaling,
+        });
+    }, [isAutoScaling]);
+
+    const targetSellLineRef = useRef();
 
     // Initialize Chart
     useEffect(() => {
@@ -325,57 +348,66 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             },
             localization: {
                 locale: 'ko-KR',
+                timeFormatter: (time) => {
+                    const date = new Date(time * 1000);
+                    // Add 9 hours for KST
+                    const kstDate = new Date(date.getTime() + 9 * 60 * 60 * 1000);
+
+                    const pad = (n) => n.toString().padStart(2, '0');
+                    return `${kstDate.getUTCFullYear()}-${pad(kstDate.getUTCMonth() + 1)}-${pad(kstDate.getUTCDate())} ${pad(kstDate.getUTCHours())}:${pad(kstDate.getUTCMinutes())}`;
+                }
             },
             width: chartContainerRef.current.clientWidth,
             height: 400,
         });
 
-        // Create Legend
-        const legend = document.createElement('div');
-        legend.style.position = 'absolute';
-        legend.style.left = '12px';
-        legend.style.top = '12px';
-        legend.style.zIndex = '1';
-        legend.style.fontSize = '14px';
-        legend.style.fontFamily = 'sans-serif';
-        legend.style.lineHeight = '18px';
-        legend.style.fontWeight = '300';
-        legend.style.color = '#cbd5e1';
-        chartContainerRef.current.appendChild(legend);
+        // Initialize rsiCursorLineRef
+        rsiCursorLineRef.current = null;
 
         chart.subscribeCrosshairMove(param => {
-            if (
-                param.point === undefined ||
-                !param.time ||
-                param.point.x < 0 ||
-                param.point.x > chartContainerRef.current.clientWidth ||
-                param.point.y < 0 ||
-                param.point.y > chartContainerRef.current.clientHeight
-            ) {
-                return;
+            // Update RSI Cursor Line
+            if (rsiSeries14Ref.current && rsiCursorLineRef.current) {
+                if (param.time && param.point) {
+                    const data = param.seriesData.get(rsiSeries14Ref.current);
+                    if (data && data.value !== undefined) {
+                        rsiCursorLineRef.current.applyOptions({
+                            price: data.value,
+                            axisLabelVisible: true,
+                        });
+                    } else {
+                        rsiCursorLineRef.current.applyOptions({ axisLabelVisible: false });
+                    }
+                } else {
+                    rsiCursorLineRef.current.applyOptions({ axisLabelVisible: false });
+                }
             }
 
-            let rsi14Val = '';
-            let rsi4Val = '';
+            // Update Target Sell Price Line
+            if (candlestickSeriesRef.current && targetSellLineRef.current && param.point) {
 
-            if (rsiSeries14Ref.current) {
-                const data = param.seriesData.get(rsiSeries14Ref.current);
-                if (data && data.value !== undefined) rsi14Val = data.value.toFixed(2);
-            }
-            if (rsiSeries4Ref.current) {
-                const data = param.seriesData.get(rsiSeries4Ref.current);
-                if (data && data.value !== undefined) rsi4Val = data.value.toFixed(2);
-            }
+                // Get Price from Y coordinate
+                const price = candlestickSeriesRef.current.coordinateToPrice(param.point.y);
 
-            if (rsi14Val || rsi4Val) {
-                legend.innerHTML = `
-                    <div style="display: flex; gap: 12px;">
-                        ${rsi14Val ? `<div style="color: #8b5cf6">RSI(14): <strong>${rsi14Val}</strong></div>` : ''}
-                        ${rsi4Val ? `<div style="color: #f59e0b">RSI(4): <strong>${rsi4Val}</strong></div>` : ''}
-                    </div>
-                `;
-            } else {
-                legend.innerHTML = '';
+                if (price && param.point.x >= 0 && param.point.y >= 0 &&
+                    param.point.x <= chartContainerRef.current.clientWidth &&
+                    param.point.y <= chartContainerRef.current.clientHeight) {
+
+                    const sellRate = configRef.current.sell_rate || 0.005; // Default 0.5%
+                    const targetPrice = price * (1 + sellRate);
+
+                    targetSellLineRef.current.applyOptions({
+                        price: targetPrice,
+                        title: `Target (+${(sellRate * 100).toFixed(1)}%)`,
+                        axisLabelVisible: true,
+                        lineVisible: true,
+                    });
+                } else {
+                    // Hide if out of bounds
+                    targetSellLineRef.current.applyOptions({
+                        axisLabelVisible: false,
+                        lineVisible: false
+                    });
+                }
             }
         });
 
@@ -385,7 +417,13 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             if (onChartClickRef.current && param.time) {
                 // The chart now uses Real UTC timestamps internally. 
                 // param.time is Real UTC. No offset needed.
-                console.log("[StrategyChart] Calling onChartClick with UTC time:", param.time);
+                const date = new Date(param.time * 1000);
+                const kstDate = new Date(date.getTime() + 9 * 60 * 60 * 1000);
+
+                const utcStr = date.toISOString().replace('T', ' ').slice(0, 19);
+                const kstStr = kstDate.toISOString().replace('T', ' ').slice(0, 19);
+
+                console.log(`[StrategyChart] Clicked Time - UTC: ${utcStr} | KST: ${kstStr} (Timestamp: ${param.time})`);
                 onChartClickRef.current(param.time);
             }
         });
@@ -406,6 +444,19 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             priceScaleId: 'right',
         });
         candlestickSeriesRef.current = candlestickSeries;
+
+        // Initialize Target Sell Line (Hidden initially)
+        const targetSellLine = candlestickSeries.createPriceLine({
+            price: 0,
+            color: '#22d3ee', // Cyan
+            lineWidth: 1,
+            lineStyle: 1, // Dotted/ShortDash (1=Dotted in some versions, check LWC docs: 0=Solid, 1=Dotted, 2=Dashed, 3=LargeDashed)
+            // LWC 3.8+: LineStyle.Dotted = 1
+            axisLabelVisible: false,
+            lineVisible: false,
+            title: 'Target',
+        });
+        targetSellLineRef.current = targetSellLine;
 
         const volumeSeries = chart.addHistogramSeries({
             color: '#26a69a',
@@ -428,19 +479,24 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             color: '#8b5cf6', // Purple
             lineWidth: 2,
             priceScaleId: 'rsi',
-            title: 'RSI(14)',
+            title: '', // Remove title to prevent axis label clutter
             priceFormat: { type: 'price', precision: 1, minMove: 0.1 },
+            lastValueVisible: false, // Hide default static last value label
         });
         rsiSeries14Ref.current = rsiSeries14;
 
-        const rsiSeries4 = chart.addLineSeries({
-            color: '#f59e0b', // Yellow/Orange
+        // Create Dynamic Cursor Line for RSI
+        // This line is invisible (transparent) but its axis label will show the cursor value
+        const rsiCursorLine = rsiSeries14.createPriceLine({
+            price: 50,
+            color: 'transparent', // Hide the line
             lineWidth: 1,
-            priceScaleId: 'rsi',
-            title: 'RSI(4)',
-            priceFormat: { type: 'price', precision: 1, minMove: 0.1 },
+            lineStyle: 2,
+            axisLabelVisible: false, // Hidden by default, shown on hover
+            axisLabelColor: '#8b5cf6', // Purple background
+            axisLabelTextColor: '#ffffff',
         });
-        rsiSeries4Ref.current = rsiSeries4;
+        rsiCursorLineRef.current = rsiCursorLine;
 
         rsiSeries14.createPriceLine({ price: 70.0, color: '#ef4444', lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
         rsiSeries14.createPriceLine({ price: 30.0, color: '#10b981', lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
@@ -456,6 +512,12 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             chart.remove();
         };
     }, []);
+
+    // Keep config in ref for closure access in chart callbacks
+    const configRef = useRef(config);
+    useEffect(() => {
+        configRef.current = config;
+    }, [config]);
 
     // Markers System (Using True UTC)
     useEffect(() => {
@@ -495,7 +557,15 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                     if (s.bought_at) {
                         const buyTime = ensureTimestamp(s.bought_at);
                         if (buyTime) {
-                            markers.push({ time: buyTime, position: 'belowBar', color: '#eab308', shape: 'arrowUp', text: '', size: 1 });
+                            // Active Splits (Holding) = Yellow
+                            markers.push({
+                                time: buyTime,
+                                position: 'belowBar',
+                                color: s.status === 'PENDING_SELL' ? '#eab308' : '#10b981',
+                                shape: 'arrowUp',
+                                text: '',
+                                size: 1
+                            });
                         }
                     }
                 });
@@ -509,7 +579,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                             markers.push({
                                 time: time,
                                 position: 'belowBar',
-                                color: split.status === 'PENDING_SELL' ? '#eab308' : '#10b981',
+                                color: split.status === 'PENDING_SELL' ? '#eab308' : '#10b981', // Yellow if holding
                                 shape: 'arrowUp',
                                 text: '',
                                 size: 1,
@@ -536,13 +606,147 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             }
         }
 
+        // Consolidate overlapping markers
         markers.sort((a, b) => a.time - b.time);
+
+        const consolidatedMarkers = [];
+        if (markers.length > 0) {
+            let currentGroup = [markers[0]];
+
+            for (let i = 1; i < markers.length; i++) {
+                const prev = markers[i - 1];
+                const curr = markers[i];
+
+                // Check if same time AND same type (shape/color)
+                // Note: We want to merge multiple BUYS at same time. 
+                // We typically don't merge Buy + Sell (though unrelated in this strategy usually)
+                if (curr.time === prev.time && curr.shape === prev.shape && curr.color === prev.color) {
+                    currentGroup.push(curr);
+                } else {
+                    // Flush current group
+                    const baseMarker = currentGroup[0];
+                    if (currentGroup.length > 1) {
+                        // Add text to indicate count, e.g. "x3"
+                        const countText = `x${currentGroup.length}`;
+                        // Append to existing text if any? Usually empty.
+                        baseMarker.text = baseMarker.text ? `${baseMarker.text} (${countText})` : countText;
+                        // Make slightly larger?
+                        baseMarker.size = 2;
+                    }
+                    consolidatedMarkers.push(baseMarker);
+                    currentGroup = [curr];
+                }
+            }
+            // Flush last group
+            const baseMarker = currentGroup[0];
+            if (currentGroup.length > 1) {
+                const countText = `x${currentGroup.length}`;
+                baseMarker.text = baseMarker.text ? `${baseMarker.text} (${countText})` : countText;
+                baseMarker.size = 2;
+            }
+            consolidatedMarkers.push(baseMarker);
+        }
+
         try {
-            candlestickSeriesRef.current.setMarkers(markers);
+            candlestickSeriesRef.current.setMarkers(consolidatedMarkers);
+
+            // HIGHLIGHT WATCH INTERVALS (Trailing Buy)
+            if (simResult && simResult.watch_intervals && simResult.watch_intervals.length > 0 && candleData.length > 0) {
+                const updatedData = candleData.map(c => {
+                    // Check if this candle is inside any watch interval
+                    const isWatching = simResult.watch_intervals.some(interval => {
+                        const start = interval.start; // seconds?
+                        const end = interval.end || 9999999999;
+                        // Upbit candles are in seconds in frontend (parseUTC returns seconds)
+                        // simResult intervals are from runner.py which got them from 'candle.get("time")' (Seconds or MS?)
+                        // WE MUST CHECK UNITS. runner.py uses 'candle.get("timestamp") or candle.get("time")'.
+                        // sim_config loading normalizes them.
+                        // But wait, earlier bug was ms. runner.py detects this.
+                        // Let's assume runner normalized them or they are what they are.
+                        // Frontend 'c.time' is seconds.
+                        // If runner intervals are MS, we fail.
+                        // Runner 'current_watch_start' comes from `candle.get('timestamp')`.
+                        // In runner loop, `candle` is from `sim_config.candles`.
+                        // If we didn't normalize them in place, they might be mixed.
+                        // BUT we fixed the `is_daily` check, not the data source itself.
+                        // Wait, `runner.py` DOES NOT normalize the source `candles` list in place for everyone, only extract variables.
+                        // Actually `runner.py` line 225: `candle['timestamp'] = candle['time']`.
+                        // Upbit `timestamp` is MS. `time` is usually MS string?
+                        // Let's protect against unit mismatch:
+                        // If interval > 10000000000, assume MS and divide by 1000.
+
+                        let startSec = start > 10000000000 ? start / 1000 : start;
+                        let endSec = end > 10000000000 ? end / 1000 : end;
+
+                        return c.time >= startSec && c.time <= endSec;
+                    });
+
+                    if (isWatching) {
+                        return {
+                            ...c,
+                            color: '#eab308', // Yellow
+                            wickColor: '#eab308',
+                            borderColor: '#eab308'
+                        };
+                    }
+                    return c;
+                });
+                // Re-set data with colors
+                candlestickSeriesRef.current.setData(updatedData);
+            }
+
         } catch (e) {
             console.error("Error setting markers:", e);
         }
     }, [splits, tradeHistory, candleData, isSimulating, simResult]);
+
+    // Draw Trailing Buy Lines
+    useEffect(() => {
+        if (!candlestickSeriesRef.current || !config) return;
+
+        // Cleanup Helper
+        const removeLines = () => {
+            if (lowestPriceLineRef.current) {
+                candlestickSeriesRef.current.removePriceLine(lowestPriceLineRef.current);
+                lowestPriceLineRef.current = null;
+            }
+            if (triggerPriceLineRef.current) {
+                candlestickSeriesRef.current.removePriceLine(triggerPriceLineRef.current);
+                triggerPriceLineRef.current = null;
+            }
+        };
+
+        if (trailingBuyState && trailingBuyState.isWatching && trailingBuyState.watchLowestPrice) {
+            removeLines(); // Clear old to redraw (simple approach)
+
+            const lowPrice = trailingBuyState.watchLowestPrice;
+            const reboundPercent = config.trailing_buy_rebound_percent || 1.0;
+            const triggerPrice = lowPrice * (1 + reboundPercent / 100);
+
+            // 1. Lowest Price Line (Gray Dashed)
+            lowestPriceLineRef.current = candlestickSeriesRef.current.createPriceLine({
+                price: lowPrice,
+                color: '#94a3b8',
+                lineWidth: 1,
+                lineStyle: 2, // Dashed
+                axisLabelVisible: true,
+                title: 'Lowest',
+            });
+
+            // 2. Trigger Price Line (Yellow Dashed)
+            triggerPriceLineRef.current = candlestickSeriesRef.current.createPriceLine({
+                price: triggerPrice,
+                color: '#eab308',
+                lineWidth: 2,
+                lineStyle: 1, // Solid? or Dashed? Let's use ShortDash
+                axisLabelVisible: true,
+                title: `Buy Trigger (${reboundPercent}%)`,
+            });
+        } else {
+            removeLines();
+        }
+
+    }, [trailingBuyState, config, candleData]); // Re-run when state/config changes
 
     return (
         <div style={{
@@ -612,6 +816,35 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                         </div>
                     </div>
                 )}
+
+                {/* Scale Lock Toggle Button */}
+                <button
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        setIsAutoScaling(!isAutoScaling);
+                    }}
+                    title={isAutoScaling ? "Click to Lock Scale" : "Click to Auto Scale"}
+                    style={{
+                        position: 'absolute',
+                        top: '8px',
+                        right: '10px',
+                        zIndex: 20,
+                        backgroundColor: isAutoScaling ? 'rgba(30, 41, 59, 0.8)' : '#eab308',
+                        color: isAutoScaling ? '#94a3b8' : 'white',
+                        border: '1px solid #475569',
+                        borderRadius: '4px',
+                        padding: '2px 6px', // Smaller padding
+                        cursor: 'pointer',
+                        fontSize: '12px', // Smaller font
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        fontWeight: '600'
+                    }}
+                >
+                    <span>{isAutoScaling ? '🔓' : '🔒'}</span>
+                    <span style={{ fontSize: '11px' }}>{isAutoScaling ? 'Auto' : 'Locked'}</span>
+                </button>
             </div>
         </div>
     );

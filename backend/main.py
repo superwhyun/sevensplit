@@ -499,8 +499,9 @@ def simulate_strategy(sim_config: SimulationConfig):
         result = run_simulation(sim_config)
         return result
     except Exception as e:
+        import traceback
         logging.error(f"Simulation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"{str(e)}\n{traceback.format_exc()}")
 
 class SimulationRequest(BaseModel):
     start_time: str # ISO format
@@ -510,38 +511,194 @@ def simulate_strategy_from_time(strategy_id: int, req: SimulationRequest):
     """Run simulation for a specific strategy starting from a given time"""
     logging.info(f"Received simulation request for strategy {strategy_id} from {req.start_time}")
     
-    strategy = strategy_service.get_strategy(strategy_id)
-    if not strategy:
-        # Try to load from DB if not in memory (though it should be)
-        s_rec = db.get_strategy(strategy_id)
-        if not s_rec:
-            logging.error(f"Strategy {strategy_id} not found in DB")
-            raise HTTPException(status_code=404, detail="Strategy not found")
-        # Create a temp config from DB record
-        config = StrategyConfig(
-            buy_rate=0.01, # Default
-            sell_rate=0.01 # Default
-        )
-        ticker = s_rec.ticker
-        budget = s_rec.budget
-    else:
-        config = strategy.config
-        ticker = strategy.ticker
-        budget = strategy.budget
+    # Always load simulation params from DB to ensure fresh config/budget
+    # In-memory strategy object might have stale budget or un-synced state
+    s_rec = db.get_strategy(strategy_id)
+    if not s_rec:
+        logging.error(f"Strategy {strategy_id} not found in DB")
+        raise HTTPException(status_code=404, detail="Strategy not found")
+        
+    # Create StrategyConfig by copying fields from SQLAlchemy model
+    # Note: s_rec is an SQLAlchemy model instance, not a dict
+    config_dict = {
+        'investment_per_split': s_rec.investment_per_split,
+        'min_price': s_rec.min_price,
+        'max_price': s_rec.max_price,
+        'buy_rate': s_rec.buy_rate,
+        'sell_rate': s_rec.sell_rate,
+        'fee_rate': s_rec.fee_rate,
+        'tick_interval': s_rec.tick_interval,
+        'rebuy_strategy': s_rec.rebuy_strategy,
+        'max_trades_per_day': s_rec.max_trades_per_day,
+        
+        # RSI Config
+        'strategy_mode': s_rec.strategy_mode,
+        'rsi_period': s_rec.rsi_period,
+        'rsi_timeframe': s_rec.rsi_timeframe,
+
+        # RSI Buying
+        'rsi_buy_max': s_rec.rsi_buy_max,
+        'rsi_buy_first_threshold': s_rec.rsi_buy_first_threshold,
+        'rsi_buy_first_amount': s_rec.rsi_buy_first_amount,
+        'rsi_buy_next_threshold': s_rec.rsi_buy_next_threshold,
+        'rsi_buy_next_amount': s_rec.rsi_buy_next_amount,
+
+        # RSI Selling
+        'rsi_sell_min': s_rec.rsi_sell_min,
+        'rsi_sell_first_threshold': s_rec.rsi_sell_first_threshold,
+        'rsi_sell_first_amount': s_rec.rsi_sell_first_amount,
+        'rsi_sell_next_threshold': s_rec.rsi_sell_next_threshold,
+        'rsi_sell_next_amount': s_rec.rsi_sell_next_amount,
+
+        # Risk
+        'stop_loss': s_rec.stop_loss,
+        'max_holdings': s_rec.max_holdings,
+
+        # Trailing Buy
+        'use_trailing_buy': s_rec.use_trailing_buy,
+        'trailing_buy_rebound_percent': s_rec.trailing_buy_rebound_percent
+    }
+    
+    config = StrategyConfig(**config_dict)
+
+    ticker = s_rec.ticker
+    budget = s_rec.budget
+    
+    # DEBUG: Log what we loaded
+    logging.info(f"SIM START: Loaded Strategy {strategy_id} ({ticker}) from DB. Budget={budget}")
 
     # Fetch candles
     # Determine interval based on strategy mode
     interval = "days" if config.strategy_mode == "RSI" else "minutes/5"
     
+    # Fetch candles with pagination to cover start_time
+    # Upbit API returns latest first. We need to fetch backwards until we cover start_time.
+    # We will fetch up to 2000 candles (10 pages) to avoid abuse.
+    
+    start_dt = None
     try:
-        logging.info(f"Fetching candles for {ticker} (Mode: {config.strategy_mode}, Interval: {interval})")
-        candles = exchange.get_candles(ticker, count=200, interval=interval)
+        start_dt = datetime.fromisoformat(req.start_time.replace('Z', '+00:00'))
+    except:
+        pass
+
+    candles = []
+    to_cursor = None
+    max_pages = 20
+    pages_fetched = 0
+    fetch_logs = []
+    
+    try:
+        logging.info(f"Fetching candles for {ticker} (Mode: {config.strategy_mode}, Interval: {interval}) starting search from {start_dt}")
+        
+        while pages_fetched < max_pages:
+            logging.info(f"Fetching page {pages_fetched+1} (to={to_cursor})")
+            batch = exchange.get_candles(ticker, count=200, interval=interval, to=to_cursor)
+            
+            if not batch:
+                break
+                
+            # Prepend because batch is sorted desc by API usually? 
+            # Upbit returns [latest, ..., oldest] ? No, Upbit returns [latest, ..., oldest] usually?
+            # Actually Upbit /candles/minutes/5 returns:
+            # [ {timestamp: t_latest}, {timestamp: t_prev}, ... ]
+            # So batch[0] is latest, batch[-1] is oldest.
+            
+            # We want chronological order in our final list: [oldest, ..., latest]
+            # So we should prepend batch reversed?
+            # Let's check existing code: candles.sort(key=lambda x: x['candle_date_time_kst'])
+            # So order doesn't matter for the list construction as long as we sort later.
+            
+            # Log batch info
+            if batch:
+                latest_in_batch = batch[0]['candle_date_time_kst']
+                oldest_in_batch_log = batch[-1]['candle_date_time_kst']
+                msg = f"FETCH: Page {pages_fetched}, Count={len(batch)}, Range=[{latest_in_batch} ... {oldest_in_batch_log}]"
+                fetch_logs.append(msg)
+                logging.info(msg)
+            
+            candles.extend(batch)
+            
+            # Check oldest in this batch
+            # Upbit returns sorted by time DESC (latest first)
+            # So the last item is the oldest in this batch.
+            oldest_in_batch = batch[-1]
+            oldest_dt_str = oldest_in_batch['candle_date_time_utc'] or oldest_in_batch['candle_date_time_kst']
+            # Convert to aware UTC
+            # Convert to aware UTC
+            if oldest_dt_str.endswith('Z'):
+                 oldest_dt = datetime.fromisoformat(oldest_dt_str.replace('Z', '+00:00'))
+            else:
+                 # Assume ISO
+                 oldest_dt = datetime.fromisoformat(oldest_dt_str)
+                 # Force UTC if naive
+                 if oldest_dt.tzinfo is None:
+                     oldest_dt = oldest_dt.replace(tzinfo=timezone.utc)
+                 
+                 # Double check if we can get better precision from explicit UTC field
+                 if 'candle_date_time_utc' in oldest_in_batch:
+                      dt_utc = datetime.fromisoformat(oldest_in_batch['candle_date_time_utc'].replace('Z', '+00:00'))
+                      if dt_utc.tzinfo is None:
+                          dt_utc = dt_utc.replace(tzinfo=timezone.utc)
+                      oldest_dt = dt_utc
+            
+            # Prepare 'to' for next batch (oldest timestamp formatted string)
+            # Upbit 'to' expects ISO string.
+            to_cursor = oldest_in_batch['candle_date_time_utc'] # Use UTC for 'to' if available
+            
+            pages_fetched += 1
+            
+            # Check coverage
+            if start_dt and oldest_dt <= start_dt:
+                # We reached the start time.
+                # BUT we need history ("warmup data") for indicators like RSI to be accurate.
+                # Let's verify how many candles we have BEFORE start_dt.
+                # List 'candles' is currently growing with older pages appended.
+                # The 'batch' we just added contains candles around 'oldest_dt'.
+                
+                # Count candles strictly older than start_dt
+                # This is approximate because we haven't sorted 'candles' yet, but 'batch' is older than previous batches.
+                # So basically everything in 'batch' (or subsequent batches) is older than start_dt effectively?
+                # No, the first batch crossing start_dt has some older, some newer.
+                # Subsequent batches are ALL older.
+                
+                # Check total rough count of older candles
+                # Since 'candles' collects pages (Reverse Order of Time if pages are prepended? No, extended.)
+                # We need to be careful about list structure.
+                # Current logic: candles.extend(batch).
+                # Batch 0: [Latest ... T_start+100]
+                # Batch 1: [T_start+99 ... T_start-100] -> oldest_dt < start_dt is TRUE here.
+                # At this point, we have ~100 candles older than start_dt.
+                # We want 200.
+                
+                # So:
+                older_count = sum(1 for c in candles if (c.get('candle_date_time_utc') or c.get('candle_date_time_kst')) < req.start_time) # comparing strings ok? ISO format yes.
+                
+                # String comparison is risky if timezones differ (Z vs +00:00).
+                # But let's rely on simple page count after crossing.
+                # If we just crossed, let's fetch 1 more page (200 candles) to be safe?
+                pass 
+                
+            # If we already covered start_dt deep enough?
+            # Let's use a simpler heuristic:
+            # If oldest_dt is significantly older than start_dt (e.g. 1 day/200 candles worth), break.
+            buffer_time = timedelta(days=1) if interval == "minutes/5" else timedelta(days=20)
+            if start_dt and oldest_dt < (start_dt - buffer_time):
+                 logging.info(f"Buffered enough history ({oldest_dt} < {start_dt} - buffer). Stopping.")
+                 break
+
+            if len(batch) < 200:
+                # No more data available
+                break
+                
         if not candles:
              logging.error("No candles returned from exchange")
              raise HTTPException(status_code=500, detail="Failed to fetch candles")
-        logging.info(f"Fetched {len(candles)} candles")
+             
+        logging.info(f"Fetched total {len(candles)} candles")
+        
     except Exception as e:
-        logging.error(f"Error fetching candles: {e}")
+        import traceback
+        logging.error(f"Error fetching candles: {e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Error fetching candles: {str(e)}")
     
     # Sort candles by time
@@ -564,12 +721,18 @@ def simulate_strategy_from_time(strategy_id: int, req: SimulationRequest):
             c_dt = c_dt_naive.replace(tzinfo=kst_tz)
             
             # Compare
+            # start_dt is UTC. c_dt is KST. Both aware. Comparison works.
+            # LOGGING
+            if i < 5 or i % 100 == 0:
+                 logging.info(f"SIM SEARCH: idx={i}, candle_kst={candle['candle_date_time_kst']}, c_dt_utc={c_dt.astimezone(timezone.utc)}, start_dt={start_dt}")
+
             if interval == "days":
                 # Compare dates (local date in KST vs local date of start_time in KST?)
                 # start_dt is UTC. Convert to KST to compare "days" correctly.
                 start_dt_kst = start_dt.astimezone(kst_tz)
                 if c_dt.date() >= start_dt_kst.date():
                     start_index = i
+                    logging.warning(f"SIM START FOUND (days): idx={i}, candle_kst={candle['candle_date_time_kst']}, c_dt_utc={c_dt.astimezone(timezone.utc)} >= start_dt_kst={start_dt_kst}")
                     break
             else:
                 # Compare full datetime
@@ -594,10 +757,13 @@ def simulate_strategy_from_time(strategy_id: int, req: SimulationRequest):
 
     try:
         result = run_simulation(sim_config)
+        if 'debug_logs' in result:
+             result['debug_logs'].extend(fetch_logs)
         return result
     except Exception as e:
+        import traceback
         logging.error(f"Simulation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"{str(e)}\n{traceback.format_exc()}")
 
 @app.post("/reset")
 def reset_strategy(cmd: CommandRequest):

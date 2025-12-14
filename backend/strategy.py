@@ -64,6 +64,17 @@ class SevenSplitStrategy(BaseStrategy):
                     
                 logging.info(f"Initialized default config for {ticker} (Strategy {strategy_id}): min_price={self.config.min_price}, max_price={self.config.max_price}")
                 self.save_state()
+                
+    def log_message(self, msg: str, level: str = "info"):
+        """Centralized logging method to allow simulation hooking."""
+        if level == "error":
+            logging.error(msg)
+        elif level == "warning":
+            logging.warning(msg)
+        elif level == "debug":
+            logging.debug(msg)
+        else:
+            logging.info(msg)
 
     def save_state(self):
         """Save state to database"""
@@ -174,7 +185,9 @@ class SevenSplitStrategy(BaseStrategy):
                     buy_volume=db_split.coin_volume or 0.0,
                     target_sell_price=db_split.target_sell_price,
                     created_at=db_split.created_at.isoformat() if db_split.created_at else None,
-                    bought_at=db_split.buy_filled_at.isoformat() if db_split.buy_filled_at else None
+                    bought_at=db_split.buy_filled_at.isoformat() if db_split.buy_filled_at else None,
+                    is_accumulated=db_split.is_accumulated,
+                    buy_rsi=db_split.buy_rsi
                 )
                 self.splits.append(split)
 
@@ -194,7 +207,9 @@ class SevenSplitStrategy(BaseStrategy):
                     'net_profit': t.net_profit,
                     'profit_rate': t.profit_rate,
                     'timestamp': t.timestamp.isoformat() if t.timestamp else None,
-                    'bought_at': t.bought_at.isoformat() if t.bought_at else None
+                    'timestamp': t.timestamp.isoformat() if t.timestamp else None,
+                    'bought_at': t.bought_at.isoformat() if t.bought_at else None,
+                    'buy_rsi': t.buy_rsi
                 })
 
             return True
@@ -216,7 +231,8 @@ class SevenSplitStrategy(BaseStrategy):
                     # Classic Mode: Buy immediately if no splits
                     logging.info(f"Starting strategy {self.strategy_id} at current price: {current_price}")
                     # Use market order for initial entry to ensure execution
-                    self._create_buy_split(current_price, use_market_order=True)
+                    rsi_15m = self.get_rsi_15m()
+                    self._create_buy_split(current_price, use_market_order=True, buy_rsi=rsi_15m)
 
 
 
@@ -432,6 +448,40 @@ class SevenSplitStrategy(BaseStrategy):
         except Exception as e:
             logging.error(f"Failed to calculate Hourly RSI: {e}")
 
+    def get_rsi_15m(self) -> float:
+        """Calculate 15-minute RSI for Accumulation info"""
+        try:
+            # Fetch 15m candles
+            candles = self.exchange.get_candles(self.ticker, interval="minutes/15", count=100)
+            if not candles or len(candles) < 15:
+                return None
+            
+            closes = [float(c.get('trade_price') or c.get('close')) for c in candles]
+            
+            # Simple RSI calculation or import
+            rsi = calculate_rsi(closes, 14)
+            return rsi
+        except Exception as e:
+            logging.warning(f"Failed to calculate 15m RSI: {e}")
+            return None
+
+    def get_rsi_5m(self) -> float:
+        """Calculate 5-minute RSI for Trailing Buy Filter"""
+        try:
+            # Fetch 5m candles
+            candles = self.exchange.get_candles(self.ticker, interval="minutes/5", count=100)
+            if not candles or len(candles) < 15:
+                return None
+            
+            closes = [float(c.get('trade_price') or c.get('close')) for c in candles]
+            
+            # Simple RSI calculation or import
+            rsi = calculate_rsi(closes, 14)
+            return rsi
+        except Exception as e:
+            logging.warning(f"Failed to calculate 5m RSI: {e}")
+            return None
+
     def tick(self, current_price: float = None, open_orders: list = None):
         """Main tick function called periodically to check and update splits."""
         with self.lock:
@@ -583,7 +633,7 @@ class SevenSplitStrategy(BaseStrategy):
                 except Exception as e:
                     logging.warning(f"Error syncing sell order {split.sell_order_uuid}: {e}")
 
-    def _create_buy_split(self, target_price: float, use_market_order: bool = False):
+    def _create_buy_split(self, target_price: float, use_market_order: bool = False, buy_rsi: float = None):
         """Create a new buy split at the given target price."""
         # Circuit Breaker: Check for insufficient funds cool-down
         if time.time() < self._insufficient_funds_until:
@@ -608,7 +658,8 @@ class SevenSplitStrategy(BaseStrategy):
             id=self.next_split_id,
             status="PENDING_BUY",
             buy_price=target_price,
-            created_at=datetime.now(timezone.utc).isoformat()
+            created_at=datetime.now(timezone.utc).isoformat(),
+            buy_rsi=buy_rsi
         )
 
         # Normalize price to valid tick size
@@ -923,7 +974,9 @@ class SevenSplitStrategy(BaseStrategy):
             "profit_rate": profit_rate,
             "buy_order_id": split.buy_order_uuid,
             "sell_order_id": split.sell_order_uuid,
-            "bought_at": datetime.fromisoformat(split.bought_at) if split.bought_at else None
+            "bought_at": datetime.fromisoformat(split.bought_at) if split.bought_at else None,
+            "is_accumulated": split.is_accumulated,
+            "buy_rsi": split.buy_rsi
         }
         self.db.add_trade(self.strategy_id, self.ticker, trade_data)
 
@@ -942,7 +995,8 @@ class SevenSplitStrategy(BaseStrategy):
             "net_profit": net_profit,
             "profit_rate": profit_rate,
             "timestamp": datetime.now().isoformat(),
-            "bought_at": split.bought_at
+            "bought_at": split.bought_at,
+            "buy_rsi": split.buy_rsi
         })
 
         split.status = "SELL_FILLED"
@@ -950,101 +1004,7 @@ class SevenSplitStrategy(BaseStrategy):
         logging.info(f"Sell order filled for split {split.id} at {actual_sell_price}. Net Profit: {net_profit} KRW ({profit_rate:.2f}%) after fees: {total_fee} KRW")
         self.save_state()
 
-    def _check_create_new_buy_split(self, current_price: float):
-        """Check if we should create a new buy split based on price drop and rebuy strategy."""
-        
-        # Check if all positions are cleared
-        has_active_positions = any(
-            s.status in ["PENDING_BUY", "BUY_FILLED", "PENDING_SELL"]
-            for s in self.splits
-        )
 
-        if not has_active_positions:
-            # Try to handle empty state logic
-            if self._handle_empty_positions(current_price):
-                return
-
-        # Standard logic for ongoing positions or "last_buy_price" strategy
-        self._handle_active_positions(current_price)
-
-    def _handle_empty_positions(self, current_price: float) -> bool:
-        """Handle logic when no active positions exist. Returns True if action taken."""
-        if self.config.rebuy_strategy == "reset_on_clear":
-            # Strategy 1: Reset and start at current price
-            logging.info(f"All positions cleared. Resetting and starting at current price: {current_price}")
-            self.last_buy_price = None
-            self._create_buy_split(current_price, use_market_order=True)
-            return True
-            
-        elif self.config.rebuy_strategy == "last_sell_price":
-            # Strategy 2: Use last sell price as reference
-            reference_price = self.last_sell_price if self.last_sell_price is not None else current_price
-            
-            if self.last_sell_price is not None:
-                logging.info(f"All positions cleared. Using last sell price {reference_price} as reference")
-            else:
-                logging.info(f"No last sell price, using current price: {current_price}")
-
-            next_buy_price = reference_price * (1 - self.config.buy_rate)
-            if current_price <= next_buy_price:
-                # Buy at current price
-                logging.info(f"Price dropped to {current_price} (trigger: {next_buy_price}), creating buy split at current price")
-                self._create_buy_split(current_price, use_market_order=True)
-            return True
-        
-        return False
-
-    def _handle_active_positions(self, current_price: float):
-        if self.last_buy_price is None:
-            # No previous buy, create one at current price
-            logging.info(f"No previous buy, creating first split at current price: {current_price}")
-            self._create_buy_split(current_price)
-            return
-
-        # Calculate how many buy levels we've crossed
-        levels_crossed = self._calculate_levels_crossed(self.last_buy_price, current_price)
-        
-        # Create multiple buy orders at current price
-        if levels_crossed > 0:
-            self._execute_batch_buy(current_price, levels_crossed)
-
-    def _calculate_levels_crossed(self, reference_price: float, current_price: float) -> int:
-        levels_crossed = 0
-        temp_price = reference_price
-        
-        while True:
-            next_level = temp_price * (1 - self.config.buy_rate)
-            if current_price > next_level:
-                break
-            
-            levels_crossed += 1
-            temp_price = next_level
-            
-            # Safety limit
-            if levels_crossed >= 10:
-                logging.warning(f"Price drop too severe. Limiting to 10 buy splits.")
-                break
-        return levels_crossed
-
-    def _execute_batch_buy(self, current_price: float, count: int):
-        # Check if we already have a pending buy at current price
-        has_pending_buy = any(
-            s.status == "PENDING_BUY" and abs(s.buy_price - current_price) / current_price < 0.001
-            for s in self.splits
-        )
-        
-        if has_pending_buy:
-            logging.debug(f"Already have pending buy near {current_price}, skipping")
-            return
-        
-        logging.info(f"Price dropped from {self.last_buy_price} to {current_price}, crossed {count} levels. Creating {count} buy splits at {current_price}")
-        
-        for i in range(count):
-            split = self._create_buy_split(current_price)
-            if not split:
-                logging.warning(f"Failed to create buy split {i+1}/{count}, stopping")
-                break
-            logging.info(f"Created buy split {i+1}/{count} at {current_price}")
 
 
 

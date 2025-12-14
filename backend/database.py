@@ -54,13 +54,22 @@ class Strategy(Base):
 
     # Risk Management
     stop_loss = Column(Float, nullable=False, default=-10.0) # Percentage (e.g. -10.0)
-    max_holdings = Column(Integer, nullable=False, default=20)
 
     # Runtime state
     is_running = Column(Boolean, default=False)
     next_split_id = Column(Integer, default=1)
     last_buy_price = Column(Float, nullable=True)
     last_sell_price = Column(Float, nullable=True)
+    max_holdings = Column(Integer, default=20, nullable=False)
+    
+    # Trailing Buy Configuration
+    use_trailing_buy = Column(Boolean, default=False, nullable=False)
+    trailing_buy_rebound_percent = Column(Float, default=0.2, nullable=False)
+
+    # Trailing Buy State
+    is_watching = Column(Boolean, default=False, nullable=False)
+    watch_lowest_price = Column(Float, nullable=True)
+    pending_buy_units = Column(Integer, default=0, nullable=False)    # Accumulated buy units
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.now)
@@ -74,7 +83,7 @@ class Strategy(Base):
 class Split(Base):
     """Active trading splits"""
     __tablename__ = 'splits'
-
+    
     id = Column(Integer, primary_key=True)
     strategy_id = Column(Integer, ForeignKey('strategies.id'), nullable=False, index=True)
     ticker = Column(String(20), nullable=False)
@@ -85,6 +94,8 @@ class Split(Base):
     target_sell_price = Column(Float, nullable=False)
     investment_amount = Column(Float, nullable=False)
     coin_volume = Column(Float, nullable=True)
+    is_accumulated = Column(Boolean, default=False, nullable=False)
+    buy_rsi = Column(Float, nullable=True)
 
     # Order IDs
     buy_order_id = Column(String(100), nullable=True)
@@ -102,7 +113,7 @@ class Split(Base):
 class Trade(Base):
     """Completed trade history"""
     __tablename__ = 'trades'
-
+    
     id = Column(Integer, primary_key=True)
     strategy_id = Column(Integer, ForeignKey('strategies.id'), nullable=False, index=True)
     ticker = Column(String(20), nullable=False)
@@ -120,6 +131,8 @@ class Trade(Base):
     total_fee = Column(Float, nullable=False)
     net_profit = Column(Float, nullable=False)
     profit_rate = Column(Float, nullable=False)
+    is_accumulated = Column(Boolean, default=False, nullable=False)
+    buy_rsi = Column(Float, nullable=True)
 
     # Order IDs
     buy_order_id = Column(String(100), nullable=True)
@@ -270,6 +283,80 @@ class DatabaseManager:
             except Exception as e:
                 print(f"Migration warning (strategies RSI): {e}")
 
+            # 4. Check strategies.is_watching (Trailing Buy State Migration)
+            try:
+                result = conn.execute(text("PRAGMA table_info(strategies)"))
+                columns = [row[1] for row in result.fetchall()]
+                
+                # State Variables
+                new_state_columns = [
+                    ('is_watching', "BOOLEAN DEFAULT FALSE NOT NULL"),
+                    ('watch_lowest_price', "FLOAT"),
+                    ('pending_buy_units', "INTEGER DEFAULT 0 NOT NULL")
+                ]
+                for col_name, col_def in new_state_columns:
+                    if col_name not in columns:
+                        print(f"Migrating: Adding {col_name} to strategies table")
+                        conn.execute(text(f"ALTER TABLE strategies ADD COLUMN {col_name} {col_def}"))
+                
+                # Config Variables
+                new_config_columns = [
+                    ('use_trailing_buy', "BOOLEAN DEFAULT FALSE NOT NULL"),
+                    ('trailing_buy_rebound_percent', "FLOAT DEFAULT 0.2 NOT NULL")
+                ]
+                for col_name, col_def in new_config_columns:
+                    if col_name not in columns:
+                        print(f"Migrating: Adding {col_name} to strategies table")
+                        conn.execute(text(f"ALTER TABLE strategies ADD COLUMN {col_name} {col_def}"))
+
+                conn.commit()
+            except Exception as e:
+                print(f"Migration warning (strategies Trailing Buy): {e}")
+                columns = [row[1] for row in result.fetchall()]
+                
+                # List of new columns for Trailing Buy
+                trailing_columns = [
+                    ('is_watching', "BOOLEAN DEFAULT 0"),
+                    ('watch_lowest_price', "FLOAT"),
+                    ('pending_buy_units', "INTEGER DEFAULT 0")
+                ]
+
+                for col_name, col_def in trailing_columns:
+                    if col_name not in columns:
+                        print(f"Migrating: Adding {col_name} to strategies table (Trailing Buy)")
+                        conn.execute(text(f"ALTER TABLE strategies ADD COLUMN {col_name} {col_def}"))
+                
+                conn.commit()
+            except Exception as e:
+                print(f"Migration warning (strategies Trailing Buy): {e}")
+
+            # 5. Check splits.is_accumulated (Observability Migration)
+            try:
+                result = conn.execute(text("PRAGMA table_info(splits)"))
+                columns = [row[1] for row in result.fetchall()]
+                
+                observability_cols = [
+                    ('is_accumulated', "BOOLEAN DEFAULT FALSE NOT NULL"),
+                    ('buy_rsi', "FLOAT")
+                ]
+                for col_name, col_def in observability_cols:
+                    if col_name not in columns:
+                        print(f"Migrating: Adding {col_name} to splits table")
+                        conn.execute(text(f"ALTER TABLE splits ADD COLUMN {col_name} {col_def}"))
+                
+                # Check trades table as well
+                result = conn.execute(text("PRAGMA table_info(trades)"))
+                columns = [row[1] for row in result.fetchall()]
+                
+                for col_name, col_def in observability_cols:
+                    if col_name not in columns:
+                        print(f"Migrating: Adding {col_name} to trades table")
+                        conn.execute(text(f"ALTER TABLE trades ADD COLUMN {col_name} {col_def}"))
+
+                conn.commit()
+            except Exception as e:
+                print(f"Migration warning (Observability): {e}")
+
     def get_session(self) -> Session:
         """Get a new database session"""
         return self.SessionLocal()
@@ -321,6 +408,10 @@ class DatabaseManager:
                 session.commit()
         finally:
             session.close()
+
+    def update_strategy(self, strategy_id: int, **kwargs):
+        """Alias for update_strategy_state"""
+        return self.update_strategy_state(strategy_id, **kwargs)
 
     def update_strategy_state(self, strategy_id: int, **kwargs):
         """Update strategy state"""

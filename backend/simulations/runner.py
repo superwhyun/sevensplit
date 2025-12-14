@@ -115,13 +115,18 @@ def run_simulation(sim_config: SimulationConfig):
     candles = sim_config.candles
     is_daily = False
     if len(candles) >= 2:
-        t1 = candles[0].get('timestamp') or candles[0].get('time')
-        t2 = candles[1].get('timestamp') or candles[1].get('time')
+        c1 = candles[0]
+        c2 = candles[1]
+        t1 = c1.get('timestamp') or c1.get('time')
+        t2 = c2.get('timestamp') or c2.get('time')
+        
+        # Normalize to seconds if in milliseconds
+        if t1 and t1 > 10000000000: t1 /= 1000.0
+        if t2 and t2 > 10000000000: t2 /= 1000.0
         # print(f"SIM DEBUG: t1={t1}, t2={t2}, type={type(t1)}")
         
         if t1 and t2:
             diff = abs(t2 - t1)
-            if diff > 10000000000: diff /= 1000.0 # ms fix
             # print(f"SIM DEBUG: diff={diff}")
             if diff >= 80000: # ~24 hours
                 is_daily = True
@@ -143,6 +148,9 @@ def run_simulation(sim_config: SimulationConfig):
 
     candles = sim_config.candles
     start_idx = sim_config.start_index
+    sim_logs = [] # Init here to capture early logs
+    
+    sim_logs.append(f"DEBUG: Runner received start_idx={start_idx}, total_candles={len(candles)}, is_daily={is_daily}")
 
     # Handle expand adjustment for start_index
     daily_closes_history = []
@@ -167,13 +175,15 @@ def run_simulation(sim_config: SimulationConfig):
         # print(f"SIM: Adjusted start_index from {original_start_idx} (Days) to {start_idx} (Hours). Pre-filled {len(daily_closes_history)} daily history candles.")
     
     # Initialize strategy config using start_idx price
-    sim_logs = []
+    # Initialize strategy config using start_idx price
+    # sim_logs initialized above
     if start_idx < len(candles):
         start_price = candles[start_idx].get('close') or candles[start_idx].get('trade_price')
     else:
         start_price = 0
             
-    msg = f"SIM: Start Price: {start_price}, Start Index: {start_idx}/{len(candles)}"
+    start_ts_str = candles[start_idx].get('candle_date_time_kst') or candles[start_idx].get('candle_date_time_utc')
+    msg = f"SIM: Start Price: {start_price}, Start Index: {start_idx}/{len(candles)}, Start Time: {start_ts_str}"
     sim_logs.append(msg)
     
     if strategy.config.min_price == 0.0 and start_price:
@@ -184,6 +194,11 @@ def run_simulation(sim_config: SimulationConfig):
     else:
         msg = f"SIM: Config min={strategy.config.min_price}, max={strategy.config.max_price}, mode={strategy.config.strategy_mode}"
         sim_logs.append(msg)
+        
+    # DEBUG: Log Trailing Buy Config
+    msg = f"SIM: Trailing Buy Config: Use={strategy.config.use_trailing_buy}, Rebound={strategy.config.trailing_buy_rebound_percent}"
+    sim_logs.append(msg)
+    print(msg) # Print to console for immediate check
 
     # Pre-compute daily candles (keep for get_candles usage)
     if strategy.config.strategy_mode == "RSI":
@@ -196,6 +211,11 @@ def run_simulation(sim_config: SimulationConfig):
         
     # Import indicators
     from utils.indicators import calculate_rsi
+    
+    # Track Trailing Buy Watch Intervals
+    watch_intervals = []
+    was_watching = False
+    current_watch_start = None
 
     # Run simulation loop
     # print(f"SIM: Starting simulation loop from {start_idx} to {len(candles)}")
@@ -241,19 +261,33 @@ def run_simulation(sim_config: SimulationConfig):
             
         # Price Grid Logic (Classic) initialization
         if strategy.config.strategy_mode != "RSI":
-            if strategy.last_buy_price is None:
-                tick_price = candle['open']
-            else:
-                next_buy_price = strategy.last_buy_price * (1 - strategy.config.buy_rate)
-                if candle['low'] <= next_buy_price:
-                    # Use the Low price to trigger all levels crossed within this candle
-                    tick_price = candle['low']
-                else:
-                    tick_price = candle['close']
+            # Track Watch Intervals (Trailing Buy)
+            is_currently_watching = getattr(strategy.price_logic, 'is_watching', False)
+            
+            if is_currently_watching and not was_watching:
+                # Start of a watch period
+                raw_ts = candle.get('timestamp') or candle.get('time')
+                if raw_ts and raw_ts > 10000000000: raw_ts /= 1000.0
+                current_watch_start = raw_ts
+                
+            elif not is_currently_watching and was_watching:
+                # End of a watch period
+                if current_watch_start:
+                    raw_end = candle.get('timestamp') or candle.get('time')
+                    if raw_end and raw_end > 10000000000: raw_end /= 1000.0
+                    watch_intervals.append({'start': current_watch_start, 'end': raw_end})
+                    current_watch_start = None
+            
+            was_watching = is_currently_watching
 
         # Run strategy tick
         try:
             strategy.tick(current_price=tick_price)
+            
+            # Capture simulation logs from strategy (if any)
+            if hasattr(strategy, 'sim_logs') and strategy.sim_logs:
+                sim_logs.extend(strategy.sim_logs)
+                strategy.sim_logs = []
         except Exception as e:
             print(f"SIM ERROR: Strategy tick failed at step {i}: {e}")
             import traceback
@@ -281,7 +315,7 @@ def run_simulation(sim_config: SimulationConfig):
                 strategy._check_sell_order(split)
         
         if strategy.config.strategy_mode != "RSI":
-            strategy._check_create_new_buy_split(tick_price)
+            strategy.price_logic._check_create_new_buy_split(tick_price)
 
     # Collect results
     # Collect results
@@ -328,7 +362,7 @@ def run_simulation(sim_config: SimulationConfig):
     return {
         "trades": trades,
         "trade_count": len(trades),
-        "logs": sim_logs,
+        "debug_logs": sim_logs,
         "total_realized_profit": total_realized_profit,
         "total_profit": total_realized_profit, # Frontend expects this key
         "unrealized_profit": unrealized_profit,

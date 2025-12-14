@@ -35,6 +35,10 @@ class StrategyConfig(BaseModel):
     stop_loss: float = -10.0
     max_holdings: int = 20
 
+    # Trailing Buy Configuration
+    use_trailing_buy: bool = False
+    trailing_buy_rebound_percent: float = 0.2 # 0.2% Rebound threshold (default)
+
 class SplitState(BaseModel):
     id: int
     status: str = "PENDING_BUY" # PENDING_BUY, BUY_FILLED, PENDING_SELL, SELL_FILLED
@@ -47,3 +51,5 @@ class SplitState(BaseModel):
     target_sell_price: float = 0.0 # Target sell price
     created_at: Optional[str] = None
     bought_at: Optional[str] = None
+    is_accumulated: bool = False
+    buy_rsi: Optional[float] = None

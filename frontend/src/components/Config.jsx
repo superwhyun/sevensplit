@@ -30,14 +30,15 @@ const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
 
     const handleChange = (e) => {
         setIsEditing(true);
-        const { name, value } = e.target;
+        const { name, value, type, checked } = e.target;
 
         // Fields that should be treated as floats/ints directly
         const floatFields = [
             'fee_rate', 'buy_rate', 'sell_rate', 'tick_interval',
             'rsi_buy_max', 'rsi_buy_first_threshold', 'rsi_buy_next_threshold',
             'rsi_sell_min', 'rsi_sell_first_threshold', 'rsi_sell_next_threshold',
-            'stop_loss'
+            'stop_loss',
+            'trailing_buy_rebound_percent'
         ];
 
         const intFields = [
@@ -47,7 +48,12 @@ const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
             'max_holdings'
         ];
 
-        if (floatFields.includes(name)) {
+        if (type === 'checkbox') {
+            setFormData(prev => ({ ...prev, [name]: checked }));
+        } else if (name === 'use_trailing_buy') {
+            // Checkbox fallback if type check fails (unlikely in React but safe)
+            setFormData(prev => ({ ...prev, [name]: checked }));
+        } else if (floatFields.includes(name)) {
             setFormData(prev => ({ ...prev, [name]: parseFloat(value) }));
         } else if (intFields.includes(name)) {
             setFormData(prev => ({ ...prev, [name]: parseInt(value) }));
@@ -153,6 +159,42 @@ const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
                     <option value="last_buy_price">Continue from Last Buy</option>
                 </select>
             </div>
+
+            {/* Trailing Buy Settings */}
+            <div style={{ marginTop: '1.5rem', marginBottom: '0.5rem', fontWeight: 'bold', color: '#fbbf24', borderTop: '1px solid #334155', paddingTop: '1rem' }}>
+                Trailing Buy (Low-Risk Entry)
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: '1rem' }}>
+                <input
+                    type="checkbox"
+                    id="use_trailing_buy"
+                    name="use_trailing_buy"
+                    checked={formData.use_trailing_buy || false}
+                    onChange={handleChange}
+                    style={{ width: '1.25rem', height: '1.25rem', marginRight: '0.75rem', accentColor: '#fbbf24' }}
+                />
+                <label htmlFor="use_trailing_buy" style={{ margin: 0, cursor: 'pointer', color: formData.use_trailing_buy ? '#fbbf24' : '#94a3b8' }}>
+                    Enable Trailing Buy (RSI Filter)
+                </label>
+            </div>
+
+            {formData.use_trailing_buy && (
+                <div className="input-group" style={{ paddingLeft: '2rem', borderLeft: '2px solid #fbbf24' }}>
+                    <label>Rebound Threshold (% to trigger buy)</label>
+                    <input
+                        type="number"
+                        step="0.1"
+                        name="trailing_buy_rebound_percent"
+                        value={formData.trailing_buy_rebound_percent ?? 0.2}
+                        onChange={handleChange}
+                        placeholder="0.2"
+                    />
+                    <small style={{ color: '#94a3b8', fontSize: '0.75rem', display: 'block', marginTop: '0.25rem' }}>
+                        Buys after price rebounds by <strong>{formData.trailing_buy_rebound_percent ?? 0.2}%</strong> from the lowest point during a drop.
+                    </small>
+                </div>
+            )}
         </>
     );
 
@@ -249,7 +291,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
             </div>
             <form onSubmit={handleSubmit}>
                 {/* Strategy Mode Toggle */}
-                <div style={{ marginBottom: '1.5rem', display: 'flex', gap: '1rem', padding: '0.5rem', background: '#1e293b', borderRadius: '0.5rem' }}>
+                <div style={{ marginBottom: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '0.75rem', background: '#1e293b', borderRadius: '0.5rem' }}>
                     <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer', color: formData.strategy_mode === 'PRICE' ? '#60a5fa' : '#94a3b8' }}>
                         <input
                             type="radio"
