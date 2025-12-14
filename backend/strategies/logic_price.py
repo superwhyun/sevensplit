@@ -152,9 +152,14 @@ class PriceStrategyLogic:
                 self.strategy.save_state()
             else:
                 # Immediate Buy (Standard Grid OR Trailing Active but RSI is safe)
-                logging.info(f"Buy Trigger: Price met target. Trailing={is_trailing_active}, RSI={rsi_5m}. Executing.")
+                # User request: In Normal Mode, do NOT batch buy. Limit to 1 to avoid "Panic Buy" appearance.
+                if levels_crossed > 1:
+                     self.strategy.log_message(f"Normal Mode Drop: Levels crossed {levels_crossed}, but clamping to 1 (RSI {rsi_5m:.1f} Safe).")
+                     levels_crossed = 1 
+                
+                self.strategy.log_message(f"Buy Trigger: Price met target. Trailing={is_trailing_active}, RSI={rsi_5m}. Executing {levels_crossed}.")
                 rsi_15m = self.strategy.get_rsi_15m()
-                self._execute_batch_buy(current_price, levels_crossed, buy_rsi=rsi_15m, is_accumulated=(levels_crossed>1))
+                self._execute_batch_buy(current_price, levels_crossed, buy_rsi=rsi_15m, is_accumulated=False)
 
     def _calculate_levels_crossed(self, reference_price: float, current_price: float) -> int:
         levels_crossed = 0

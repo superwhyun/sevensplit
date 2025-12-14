@@ -86,7 +86,10 @@ class SevenSplitStrategy(BaseStrategy):
                 'next_split_id': self.next_split_id,
                 'last_buy_price': self.last_buy_price,
                 'last_sell_price': self.last_sell_price,
-                'budget': self.budget
+                'budget': self.budget,
+                'is_watching': self.is_watching,
+                'watch_lowest_price': self.watch_lowest_price,
+                'pending_buy_units': self.pending_buy_units
             })
 
             # Save efficiently using kwargs and model_dump
@@ -161,14 +164,23 @@ class SevenSplitStrategy(BaseStrategy):
                 rsi_sell_next_amount=getattr(state, 'rsi_sell_next_amount', 1),
                 
                 stop_loss=getattr(state, 'stop_loss', -10.0),
-                max_holdings=getattr(state, 'max_holdings', 20)
+                max_holdings=getattr(state, 'max_holdings', 20),
+                
+                # Trailing Buy
+                use_trailing_buy=getattr(state, 'use_trailing_buy', False),
+                trailing_buy_rebound_percent=getattr(state, 'trailing_buy_rebound_percent', 0.2)
             )
 
             self.is_running = state.is_running
             self.next_split_id = state.next_split_id
             self.last_buy_price = state.last_buy_price
             self.last_sell_price = state.last_sell_price
+            self.last_buy_price = state.last_buy_price
+            self.last_sell_price = state.last_sell_price
             self.budget = state.budget
+            self.is_watching = getattr(state, 'is_watching', False)
+            self.watch_lowest_price = getattr(state, 'watch_lowest_price', None)
+            self.pending_buy_units = getattr(state, 'pending_buy_units', 0)
 
             # Load splits
             db_splits = self.db.get_splits(self.strategy_id)
