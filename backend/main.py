@@ -556,7 +556,8 @@ def simulate_strategy_from_time(strategy_id: int, req: SimulationRequest):
 
         # Trailing Buy
         'use_trailing_buy': s_rec.use_trailing_buy,
-        'trailing_buy_rebound_percent': s_rec.trailing_buy_rebound_percent
+        'trailing_buy_rebound_percent': s_rec.trailing_buy_rebound_percent,
+        'trailing_buy_batch': getattr(s_rec, 'trailing_buy_batch', True)
     }
     
     config = StrategyConfig(**config_dict)

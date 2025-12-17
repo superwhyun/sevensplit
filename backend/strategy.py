@@ -168,7 +168,8 @@ class SevenSplitStrategy(BaseStrategy):
                 
                 # Trailing Buy
                 use_trailing_buy=getattr(state, 'use_trailing_buy', False),
-                trailing_buy_rebound_percent=getattr(state, 'trailing_buy_rebound_percent', 0.2)
+                trailing_buy_rebound_percent=getattr(state, 'trailing_buy_rebound_percent', 0.2),
+                trailing_buy_batch=getattr(state, 'trailing_buy_batch', True)
             )
 
             self.is_running = state.is_running

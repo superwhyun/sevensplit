@@ -193,6 +193,23 @@ const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
                     <small style={{ color: '#94a3b8', fontSize: '0.75rem', display: 'block', marginTop: '0.25rem' }}>
                         Buys after price rebounds by <strong>{formData.trailing_buy_rebound_percent ?? 0.2}%</strong> from the lowest point during a drop.
                     </small>
+
+                    <div style={{ display: 'flex', alignItems: 'center', marginTop: '1rem' }}>
+                        <input
+                            type="checkbox"
+                            id="trailing_buy_batch"
+                            name="trailing_buy_batch"
+                            checked={formData.trailing_buy_batch !== false}
+                            onChange={handleChange}
+                            style={{ width: '1.25rem', height: '1.25rem', marginRight: '0.75rem', accentColor: '#fbbf24' }}
+                        />
+                        <label htmlFor="trailing_buy_batch" style={{ margin: 0, cursor: 'pointer', color: formData.trailing_buy_batch !== false ? '#fbbf24' : '#94a3b8' }}>
+                            Allow Batch Buy (Accumulate Splits)
+                        </label>
+                    </div>
+                    <small style={{ color: '#94a3b8', fontSize: '0.75rem', display: 'block', marginTop: '0.25rem' }}>
+                        If enabled, buys multiple splits at once if price dropped significantly. If disabled, buys only one split.
+                    </small>
                 </div>
             )}
         </>

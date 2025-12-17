@@ -99,6 +99,13 @@ class PriceStrategyLogic:
             if is_rebound_ok and is_rsi_ok:
                 # Trigger Buy!
                 levels_crossed = self._calculate_levels_crossed(self.strategy.last_buy_price, current_price)
+                
+                # Check Batch Buy Config
+                if not self.strategy.config.trailing_buy_batch:
+                    if levels_crossed > 1:
+                        self.strategy.log_message(f"Trailing Buy: Batch buy disabled. Reducing {levels_crossed} splits to 1.", level="info")
+                        levels_crossed = 1
+
                 if levels_crossed > 0:
                      self.strategy.log_message(f"Trailing Buy [TRIGGER]: Rebound({current_price}>={rebound_target:.1f}) AND RSI({rsi_5m:.1f})>30. Executing {levels_crossed} buys.")
                      rsi_15m = self.strategy.get_rsi_15m()

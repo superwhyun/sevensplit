@@ -65,6 +65,7 @@ class Strategy(Base):
     # Trailing Buy Configuration
     use_trailing_buy = Column(Boolean, default=False, nullable=False)
     trailing_buy_rebound_percent = Column(Float, default=0.2, nullable=False)
+    trailing_buy_batch = Column(Boolean, default=True, nullable=False)
 
     # Trailing Buy State
     is_watching = Column(Boolean, default=False, nullable=False)
@@ -290,7 +291,7 @@ class DatabaseManager:
                 
                 # State Variables
                 new_state_columns = [
-                    ('is_watching', "BOOLEAN DEFAULT FALSE NOT NULL"),
+                    ('is_watching', "BOOLEAN DEFAULT False NOT NULL"),
                     ('watch_lowest_price', "FLOAT"),
                     ('pending_buy_units', "INTEGER DEFAULT 0 NOT NULL")
                 ]
@@ -302,7 +303,8 @@ class DatabaseManager:
                 # Config Variables
                 new_config_columns = [
                     ('use_trailing_buy', "BOOLEAN DEFAULT FALSE NOT NULL"),
-                    ('trailing_buy_rebound_percent', "FLOAT DEFAULT 0.2 NOT NULL")
+                    ('trailing_buy_rebound_percent', "FLOAT DEFAULT 0.2 NOT NULL"),
+                    ('trailing_buy_batch', "BOOLEAN DEFAULT TRUE NOT NULL")
                 ]
                 for col_name, col_def in new_config_columns:
                     if col_name not in columns:

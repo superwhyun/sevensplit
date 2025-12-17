@@ -1,0 +1,70 @@
+{
+  "strategy_config": {
+    "investment_per_split": 10000,
+    "buy_rate": 0.005,
+    "sell_rate": 0.005,
+    "strategy_mode": "PRICE",
+    "rsi_buy_max": 100.0,
+    "min_price": 0.0,
+    "max_price": 0.0
+  },
+  "candles": [
+    {
+      "timestamp": 1735700400.0,
+      "candle_date_time_kst": "2025-01-01T12:00:00",
+      "open": 100000,
+      "high": 100000,
+      "low": 100000,
+      "close": 100000,
+      "trade_price": 100000
+    },
+    {
+      "timestamp": 1735700700.0,
+      "candle_date_time_kst": "2025-01-01T12:05:00",
+      "open": 99400,
+      "high": 99400,
+      "low": 99400,
+      "close": 99400,
+      "trade_price": 99400
+    },
+    {
+      "timestamp": 1735701000.0,
+      "candle_date_time_kst": "2025-01-01T12:10:00",
+      "open": 98000,
+      "high": 98000,
+      "low": 98000,
+      "close": 98000,
+      "trade_price": 98000
+    },
+    {
+      "timestamp": 1735701300.0,
+      "candle_date_time_kst": "2025-01-01T12:15:00",
+      "open": 98300,
+      "high": 98300,
+      "low": 98300,
+      "close": 98300,
+      "trade_price": 98300
+    },
+    {
+      "timestamp": 1735701600.0,
+      "candle_date_time_kst": "2025-01-01T12:20:00",
+      "open": 98600,
+      "high": 98600,
+      "low": 98600,
+      "close": 98600,
+      "trade_price": 98600
+    },
+    {
+      "timestamp": 1735701900.0,
+      "candle_date_time_kst": "2025-01-01T12:25:00",
+      "open": 100000,
+      "high": 100000,
+      "low": 100000,
+      "close": 100000,
+      "trade_price": 100000
+    }
+  ],
+  "start_index": 0,
+  "ticker": "SIM-TEST",
+  "budget": 1000000
+}
