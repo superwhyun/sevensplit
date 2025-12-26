@@ -181,6 +181,20 @@ const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
 
             {formData.use_trailing_buy && (
                 <div className="input-group" style={{ paddingLeft: '2rem', borderLeft: '2px solid #fbbf24' }}>
+                    <div className="input-group">
+                        <label>Watch Mode RSI Threshold (Max)</label>
+                        <input
+                            type="number"
+                            name="rsi_buy_max"
+                            value={formData.rsi_buy_max ?? 30}
+                            onChange={handleChange}
+                            placeholder="30"
+                        />
+                        <small style={{ color: '#94a3b8', fontSize: '0.75rem', display: 'block', marginTop: '0.25rem' }}>
+                            If RSI(5m) is below this value (default 30), the bot enters <strong>Watch Mode</strong> instead of buying immediately.
+                        </small>
+                    </div>
+
                     <label>Rebound Threshold (% to trigger buy)</label>
                     <input
                         type="number"

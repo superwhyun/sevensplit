@@ -368,5 +368,6 @@ def run_simulation(sim_config: SimulationConfig):
         "unrealized_profit": unrealized_profit,
         "final_balance": final_balance, # Approximate
         "splits": [s.__dict__ for s in strategy.splits], # Return active splits
-        "config": strategy.config.model_dump()
+        "config": strategy.config.model_dump(),
+        "watch_intervals": watch_intervals
     }

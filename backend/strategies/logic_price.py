@@ -65,8 +65,8 @@ class PriceStrategyLogic:
         if self.strategy.last_buy_price is None:
             # No previous buy, create one at current price
             logging.info(f"No previous buy, creating first split at current price: {current_price}")
-            rsi_15m = self.strategy.get_rsi_15m()
-            self.strategy._create_buy_split(current_price, buy_rsi=rsi_15m)
+            rsi_5m = self.strategy.get_rsi_5m()
+            self.strategy._create_buy_split(current_price, buy_rsi=rsi_5m)
             return
 
         # Config
@@ -94,7 +94,9 @@ class PriceStrategyLogic:
             
             if is_rebound_ok:
                 rsi_5m = self.strategy.get_rsi_5m()
-                is_rsi_ok = (rsi_5m is not None and rsi_5m > 30.0)
+                # Use Configured Threshold
+                threshold = self.strategy.config.rsi_buy_max
+                is_rsi_ok = (rsi_5m is not None and rsi_5m > threshold)
 
             if is_rebound_ok and is_rsi_ok:
                 # Trigger Buy!
@@ -105,11 +107,14 @@ class PriceStrategyLogic:
                     if levels_crossed > 1:
                         self.strategy.log_message(f"Trailing Buy: Batch buy disabled. Reducing {levels_crossed} splits to 1.", level="info")
                         levels_crossed = 1
+                
+                # Double Check Fail-safe for logging
+                rsi_val = rsi_5m if rsi_5m is not None else 0.0
 
                 if levels_crossed > 0:
-                     self.strategy.log_message(f"Trailing Buy [TRIGGER]: Rebound({current_price}>={rebound_target:.1f}) AND RSI({rsi_5m:.1f})>30. Executing {levels_crossed} buys.")
-                     rsi_15m = self.strategy.get_rsi_15m()
-                     self._execute_batch_buy(current_price, levels_crossed, buy_rsi=rsi_15m, is_accumulated=(levels_crossed > 1))
+                     self.strategy.log_message(f"Trailing Buy [TRIGGER]: Rebound({current_price}>={rebound_target:.1f}) AND RSI({rsi_val:.1f})>{threshold}. Executing {levels_crossed} buys.")
+                     # Use 5m RSI for record
+                     self._execute_batch_buy(current_price, levels_crossed, buy_rsi=rsi_val, is_accumulated=(levels_crossed > 1))
                 else:
                      logging.info(f"Trailing Buy [RESET]: Rebound met but price {current_price} is above target {next_buy_level}. No buy needed.")
                 
@@ -120,7 +125,8 @@ class PriceStrategyLogic:
             else:
                 # Waiting
                 if is_rebound_ok and not is_rsi_ok:
-                     logging.debug(f"Trailing Buy [WAIT]: Rebound OK({current_price}) but RSI({rsi_5m:.1f}) <= 30.")
+                     val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
+                     logging.debug(f"Trailing Buy [WAIT]: Rebound OK({current_price}) but RSI({val_str}) <= {self.strategy.config.rsi_buy_max}.")
                 elif not is_rebound_ok:
                      # Log the Hold reason
                      self.strategy.log_message(f"Trailing Buy [HOLD]: Current {current_price} < Target {rebound_target:.1f}. Waiting for rebound.", level="debug")
@@ -133,8 +139,9 @@ class PriceStrategyLogic:
                  # Check if we should buy immediately
                  levels_crossed = self._calculate_levels_crossed(self.strategy.last_buy_price, current_price)
                  if levels_crossed > 0:
-                     rsi_15m = self.strategy.get_rsi_15m()
-                     self._execute_batch_buy(current_price, levels_crossed, buy_rsi=rsi_15m)
+                     # Use 5m RSI
+                     rsi_5m = self.strategy.get_rsi_5m()
+                     self._execute_batch_buy(current_price, levels_crossed, buy_rsi=rsi_5m)
             return
 
         # --- B. Normal Mode (Checking for new drop) ---
@@ -143,30 +150,42 @@ class PriceStrategyLogic:
             rsi_5m = self.strategy.get_rsi_5m()
             
             # --- DEBUG LOGGING ---
-            self.strategy.log_message(f"DEBUG CHECK: Drop Detected. Levels={levels_crossed}, TrailingActive={is_trailing_active}, RSI(5m)={rsi_5m}, Price={current_price}", level="debug")
+            rsi_val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
+            self.strategy.log_message(f"DEBUG CHECK: Drop Detected. Levels={levels_crossed}, TrailingActive={is_trailing_active}, RSI(5m)={rsi_val_str}, Price={current_price}", level="debug")
             # ---------------------
             
             should_watch = False
             if is_trailing_active:
-                if rsi_5m is not None and rsi_5m <= 30.0:
+                threshold = self.strategy.config.rsi_buy_max
+                
+                # Fail-safe: If RSI is None, assume unsafe and watch
+                if rsi_5m is None:
+                    should_watch = True
+                    self.strategy.log_message("Trailing Buy: RSI(5m) is None. Enforcing Watch Mode for safety.", level="warning")
+                elif rsi_5m <= threshold:
                     should_watch = True
             
             if should_watch:
                 # Enter Watch Mode
                 self.is_watching = True
                 self.watch_lowest_price = current_price
-                self.strategy.log_message(f"Trailing Buy [START]: Price target met but RSI(5m) {rsi_5m:.1f} <= 30. Entering Watch Mode.")
+                
+                rsi_val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
+                self.strategy.log_message(f"Trailing Buy [START]: Price target met but RSI(5m) {rsi_val_str} <= {threshold}. Entering Watch Mode.")
                 self.strategy.save_state()
             else:
                 # Immediate Buy (Standard Grid OR Trailing Active but RSI is safe)
                 # User request: In Normal Mode, do NOT batch buy. Limit to 1 to avoid "Panic Buy" appearance.
                 if levels_crossed > 1:
-                     self.strategy.log_message(f"Normal Mode Drop: Levels crossed {levels_crossed}, but clamping to 1 (RSI {rsi_5m:.1f} Safe).")
+                     val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
+                     self.strategy.log_message(f"Normal Mode Drop: Levels crossed {levels_crossed}, but clamping to 1 (RSI {val_str} Safe).")
                      levels_crossed = 1 
                 
-                self.strategy.log_message(f"Buy Trigger: Price met target. Trailing={is_trailing_active}, RSI={rsi_5m}. Executing {levels_crossed}.")
-                rsi_15m = self.strategy.get_rsi_15m()
-                self._execute_batch_buy(current_price, levels_crossed, buy_rsi=rsi_15m, is_accumulated=False)
+                val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
+                self.strategy.log_message(f"Buy Trigger: Price met target. Trailing={is_trailing_active}, RSI={val_str}. Executing {levels_crossed}.")
+                
+                # Use 5m RSI instead of 15m
+                self._execute_batch_buy(current_price, levels_crossed, buy_rsi=rsi_5m, is_accumulated=False)
 
     def _calculate_levels_crossed(self, reference_price: float, current_price: float) -> int:
         levels_crossed = 0
