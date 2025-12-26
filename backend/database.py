@@ -199,6 +199,21 @@ class MockOrder(Base):
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+class SystemEvent(Base):
+    """System events log (persistent)"""
+    __tablename__ = 'system_events'
+
+    id = Column(Integer, primary_key=True)
+    strategy_id = Column(Integer, ForeignKey('strategies.id'), nullable=False, index=True)
+    level = Column(String(20), nullable=False) # INFO, WARNING, ERROR
+    event_type = Column(String(50), nullable=False) # WATCH_START, WATCH_END, SYSTEM_ERROR, etc.
+    message = Column(Text, nullable=False)
+    timestamp = Column(DateTime, default=datetime.now, index=True)
+
+    # Relationship
+    strategy = relationship("Strategy")
+
+
 class DatabaseManager:
     """Database manager for SevenSplit bot"""
 
@@ -358,6 +373,22 @@ class DatabaseManager:
                 conn.commit()
             except Exception as e:
                 print(f"Migration warning (Observability): {e}")
+
+            # 6. Check system_events (New Table)
+            try:
+                # We can explicitly create it if missing, but create_all usually handles it.
+                # However, for migration robustness:
+                result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='system_events'"))
+                if not result.fetchone():
+                    print("Migrating: Creating system_events table")
+                    # Let SQLAlchemy create_all handle it on next restart, or do it here?
+                    # Base.metadata.create_all(self.engine) is called in __init__.
+                    # So if we are running this update, the table might not exist until restart.
+                    # But since this is a code update, the server will restart. 
+                    # So create_all in __init__ will catch it.
+                    pass
+            except Exception:
+                pass
 
     def get_session(self) -> Session:
         """Get a new database session"""
@@ -723,6 +754,66 @@ class DatabaseManager:
             if order:
                 session.delete(order)
                 session.commit()
+        finally:
+            session.close()
+
+    # System Event Operations
+    def add_event(self, strategy_id: int, level: str, event_type: str, message: str):
+        """Add a system event with log rotation (max 200)"""
+        session = self.get_session()
+        try:
+            # 1. Insert new event
+            event = SystemEvent(
+                strategy_id=strategy_id,
+                level=level,
+                event_type=event_type,
+                message=message,
+                timestamp=datetime.now()
+            )
+            session.add(event)
+            
+            # 2. Check and rotate (Keep max 200 per strategy)
+            # Optimization: Only check occasionally or check every time? 200 is small.
+            count = session.query(SystemEvent).filter_by(strategy_id=strategy_id).count()
+            if count > 200:
+                # Delete oldest (count - 200 + buffer)
+                # Let's delete excess
+                num_to_delete = count - 200
+                if num_to_delete > 0:
+                    subq = session.query(SystemEvent.id).\
+                        filter_by(strategy_id=strategy_id).\
+                        order_by(SystemEvent.timestamp.asc()).\
+                        limit(num_to_delete).subquery()
+                    
+                    session.query(SystemEvent).filter(SystemEvent.id.in_(subq)).delete(synchronize_session=False)
+
+            session.commit()
+            return event
+        except Exception as e:
+            print(f"Failed to add event: {e}")
+            session.rollback()
+        finally:
+            session.close()
+
+    def get_events(self, strategy_id: int, page: int = 1, limit: int = 10):
+        """Get events with pagination"""
+        session = self.get_session()
+        try:
+            query = session.query(SystemEvent).filter_by(strategy_id=strategy_id).order_by(SystemEvent.timestamp.desc())
+            
+            total = query.count()
+            
+            # Pagination
+            offset = (page - 1) * limit
+            events = query.offset(offset).limit(limit).all()
+            
+            return {
+                "events": events,
+                "total": total,
+                "page": page,
+                "limit": limit,
+                "total_pages": (total + limit - 1) // limit
+            }
         finally:
             session.close()
 

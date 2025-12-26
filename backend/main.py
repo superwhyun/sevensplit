@@ -237,6 +237,15 @@ def delete_strategy(strategy_id: int):
         logging.error(f"Failed to delete strategy: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/strategies/{strategy_id}/events")
+def get_strategy_events(strategy_id: int, page: int = 1, limit: int = 10):
+    """Get system events for a strategy"""
+    try:
+        return db.get_events(strategy_id, page=page, limit=limit)
+    except Exception as e:
+        logging.error(f"Failed to fetch events: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch events")
+
 @app.get("/strategies/{strategy_id}/export")
 def export_trades(strategy_id: int):
     """Export trades to CSV"""

@@ -36,12 +36,13 @@ class PriceStrategyLogic:
 
     def _handle_empty_positions(self, current_price: float) -> bool:
         """Handle logic when no active positions exist. Returns True if action taken."""
+        should_buy = False
+        reference_price_log = ""
+
         if self.strategy.config.rebuy_strategy == "reset_on_clear":
             # Strategy 1: Reset and start at current price
-            logging.info(f"All positions cleared. Resetting and starting at current price: {current_price}")
-            self.strategy.last_buy_price = None
-            self.strategy._create_buy_split(current_price, use_market_order=True)
-            return True
+            should_buy = True
+            reference_price_log = f"Reset on clear (Start Price: {current_price})"
             
         elif self.strategy.config.rebuy_strategy == "last_sell_price":
             # Strategy 2: Use last sell price as reference
@@ -53,18 +54,67 @@ class PriceStrategyLogic:
                 logging.info(f"No last sell price, using current price: {current_price}")
 
             next_buy_price = reference_price * (1 - self.strategy.config.buy_rate)
+            
             if current_price <= next_buy_price:
-                # Buy at current price
-                logging.info(f"Price dropped to {current_price} (trigger: {next_buy_price}), creating buy split at current price")
-                self.strategy._create_buy_split(current_price, use_market_order=True)
-            return True
+                should_buy = True
+                reference_price_log = f"Price drop from last sell {reference_price} -> {current_price}"
+
+        if should_buy:
+             # Safety Check: Enforce Trailing Buy (RSI) even for re-entry
+             if self.strategy.config.use_trailing_buy:
+                 rsi_5m = self.strategy.get_rsi_5m()
+                 threshold = self.strategy.config.rsi_buy_max
+                 
+                 # Logic mirroring _handle_active_positions guard
+                 should_watch = False
+                 if rsi_5m is None: # Fail-safe
+                     should_watch = True
+                 elif rsi_5m <= threshold:
+                     should_watch = True
+                 
+                 if should_watch:
+                     self.is_watching = True
+                     self.watch_lowest_price = current_price
+                     rsi_val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
+                     self.strategy.log_event("WARNING", "WATCH_START", f"Trailing Buy [START]: Re-entry trigger met but RSI(5m) {rsi_val_str} <= {threshold}. Entering Watch Mode.")
+                     self.strategy.save_state()
+                     return True # Handled (entered watch mode)
+            
+             # If safe or trailing off, execute buy
+             logging.info(f"{reference_price_log}. Creating buy split at current price")
+             # Use 5m RSI
+             rsi_5m = self.strategy.get_rsi_5m()
+             self.strategy._create_buy_split(current_price, use_market_order=True, buy_rsi=rsi_5m)
+             # Also update last_buy_price conceptually if needed? 
+             # _create_buy_split updates last_buy_price.
+             return True
         
         return False
 
     def _handle_active_positions(self, current_price: float):
         if self.strategy.last_buy_price is None:
-            # No previous buy, create one at current price
-            logging.info(f"No previous buy, creating first split at current price: {current_price}")
+            # No previous buy, check check safety before creating one
+            
+            # Safety Check: Enforce Trailing Buy (RSI) for First Buy
+            if self.strategy.config.use_trailing_buy:
+                 rsi_5m = self.strategy.get_rsi_5m()
+                 threshold = self.strategy.config.rsi_buy_max
+                 
+                 should_watch = False
+                 if rsi_5m is None:
+                     should_watch = True
+                 elif rsi_5m <= threshold:
+                     should_watch = True
+                 
+                 if should_watch:
+                     self.is_watching = True
+                     self.watch_lowest_price = current_price
+                     rsi_val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
+                     self.strategy.log_event("WARNING", "WATCH_START", f"Trailing Buy [START]: First Buy trigger but RSI(5m) {rsi_val_str} <= {threshold}. Entering Watch Mode.")
+                     self.strategy.save_state()
+                     return
+
+            logging.info(f"No previous buy, and conditions safe (or trailing off). Creating first split at current price: {current_price}")
             rsi_5m = self.strategy.get_rsi_5m()
             self.strategy._create_buy_split(current_price, buy_rsi=rsi_5m)
             return
@@ -112,7 +162,10 @@ class PriceStrategyLogic:
                 rsi_val = rsi_5m if rsi_5m is not None else 0.0
 
                 if levels_crossed > 0:
-                     self.strategy.log_message(f"Trailing Buy [TRIGGER]: Rebound({current_price}>={rebound_target:.1f}) AND RSI({rsi_val:.1f})>{threshold}. Executing {levels_crossed} buys.")
+                     self.is_watching = False
+                     self.watch_lowest_price = None
+                     self.strategy.log_event("INFO", "WATCH_END", f"Trailing Buy [TRIGGER]: RSI {rsi_5m:.1f} > {threshold}. Executing buy.")
+                     self.strategy.save_state()
                      # Use 5m RSI for record
                      self._execute_batch_buy(current_price, levels_crossed, buy_rsi=rsi_val, is_accumulated=(levels_crossed > 1))
                 else:
@@ -161,7 +214,7 @@ class PriceStrategyLogic:
                 # Fail-safe: If RSI is None, assume unsafe and watch
                 if rsi_5m is None:
                     should_watch = True
-                    self.strategy.log_message("Trailing Buy: RSI(5m) is None. Enforcing Watch Mode for safety.", level="warning")
+                    self.strategy.log_event("WARNING", "SYSTEM_WARNING", "Trailing Buy: RSI(5m) is None. Enforcing Watch Mode for safety.")
                 elif rsi_5m <= threshold:
                     should_watch = True
             
@@ -169,9 +222,8 @@ class PriceStrategyLogic:
                 # Enter Watch Mode
                 self.is_watching = True
                 self.watch_lowest_price = current_price
-                
                 rsi_val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
-                self.strategy.log_message(f"Trailing Buy [START]: Price target met but RSI(5m) {rsi_val_str} <= {threshold}. Entering Watch Mode.")
+                self.strategy.log_event("WARNING", "WATCH_START", f"Trailing Buy [START]: Price target met but RSI(5m) {rsi_val_str} <= {threshold}. Entering Watch Mode.")
                 self.strategy.save_state()
             else:
                 # Immediate Buy (Standard Grid OR Trailing Active but RSI is safe)

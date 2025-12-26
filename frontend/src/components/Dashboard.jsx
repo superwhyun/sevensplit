@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import axios from 'axios';
 import StrategyChart from './StrategyChart';
 import Config from './Config';
+import EventLog from './EventLog';
 import './Dashboard.css';
 
 const AddStrategyModal = ({ isOpen, onClose, onAdd }) => {
@@ -996,6 +997,12 @@ const Dashboard = () => {
                                     }}
                                 />
                             </div>
+
+                            {/* System Event Log */}
+                            <EventLog
+                                strategyId={selectedStrategyId}
+                                apiBaseUrl={API_BASE_URL}
+                            />
 
                             {/* Grid Status List */}
                             <div className="card" style={{ maxHeight: '600px', overflowY: 'auto', overflowX: 'auto' }}>

@@ -76,6 +76,17 @@ class SevenSplitStrategy(BaseStrategy):
         else:
             logging.info(msg)
 
+    def log_event(self, level: str, event_type: str, message: str):
+        """Log critical system event to database and console."""
+        # 1. Console Log
+        self.log_message(f"[{event_type}] {message}", level=level.lower())
+        
+        # 2. DB Persistence
+        try:
+            self.db.add_event(self.strategy_id, level, event_type, message)
+        except Exception as e:
+            logging.error(f"Failed to persist event: {e}")
+
     def save_state(self):
         """Save state to database"""
         try:
@@ -115,7 +126,9 @@ class SevenSplitStrategy(BaseStrategy):
                     'coin_volume': split.buy_volume,
                     'buy_order_id': split.buy_order_uuid,
                     'sell_order_id': split.sell_order_uuid,
-                    'buy_filled_at': datetime.fromisoformat(split.bought_at) if split.bought_at else None
+                    'buy_filled_at': datetime.fromisoformat(split.bought_at) if split.bought_at else None,
+                    'is_accumulated': split.is_accumulated,
+                    'buy_rsi': split.buy_rsi
                 }
 
                 if split.id in db_split_ids:
@@ -203,6 +216,23 @@ class SevenSplitStrategy(BaseStrategy):
                     buy_rsi=db_split.buy_rsi
                 )
                 self.splits.append(split)
+
+            # CRITICAL FIX: Restore last_buy_price if missing (e.g. from legacy DB or load error)
+            # This prevents the bot from treating valid active splits as "First Buy" and ignoring RSI logic.
+            if self.last_buy_price is None and self.splits:
+                # Find the split with highest ID (latest) or highest price? 
+                # Usually last buy is the one with highest ID or highest price depending on logic.
+                # Grid logic -> Last buy is usually the lowest price if we are buying down.
+                # But wait, next level is calculated from last_buy_price * (1 - buy_rate).
+                # So last_buy_price should be the PRICE of the LAST EXECUTED BUY.
+                # Let's find the split with the largest ID (most recently created/bought).
+                latest_split = max(self.splits, key=lambda s: s.id)
+                if latest_split.actual_buy_price > 0:
+                    self.last_buy_price = latest_split.actual_buy_price
+                    logging.info(f"Restored missing last_buy_price from split history: {self.last_buy_price}")
+                else:
+                     self.last_buy_price = latest_split.buy_price
+                     logging.info(f"Restored missing last_buy_price from split history (using target price): {self.last_buy_price}")
 
             # Load recent trade history for limit checking (last 200 should be enough for 24h check)
             trades = self.db.get_trades(self.strategy_id, limit=200)
@@ -413,7 +443,18 @@ class SevenSplitStrategy(BaseStrategy):
                 # Calling on sliced lists is inefficient but simple for now.
                 # Actually, let's use the fact that we need rsi[-1], rsi[-2], rsi[-3]
                 
-                # Current (Today, incomplete if mid-day)
+                # FIX: Ensure chronological order (Upbit returns reverse)
+                if len(candles) > 1:
+                     c0 = candles[0]
+                     c_last = candles[-1]
+                     t0 = c0.get('timestamp') or c0.get('time') or c0.get('candle_date_time_kst')
+                     t_last = c_last.get('timestamp') or c_last.get('time') or c_last.get('candle_date_time_kst')
+                     
+                     # Simple string/float comparison
+                     if str(t0) > str(t_last):
+                         candles.reverse()
+                         
+                closes = [float(c['trade_price']) for c in candles]
                 rsi_now = calculate_rsi(closes, self.config.rsi_period)
                 rsi_short_now = calculate_rsi(closes, 4)
                 
@@ -445,7 +486,15 @@ class SevenSplitStrategy(BaseStrategy):
             # Fetch Hourly Candles (e.g., 60 minutes)
             candles = self.exchange.get_candles(self.ticker, count=200, interval="minutes/60")
             if candles:
-                candles.sort(key=lambda x: x['candle_date_time_kst'])
+                # FIX: Ensure chronological order
+                if len(candles) > 1:
+                     c0 = candles[0]
+                     c_last = candles[-1]
+                     t0 = c0.get('timestamp') or c0.get('candle_date_time_kst') or 0
+                     t_last = c_last.get('timestamp') or c_last.get('candle_date_time_kst') or 0
+                     if str(t0) > str(t_last):
+                         candles.reverse()
+
                 closes = [float(c['trade_price']) for c in candles]
                 
                 # Calculate RSI (14 and 4)
@@ -469,6 +518,15 @@ class SevenSplitStrategy(BaseStrategy):
             if not candles or len(candles) < 15:
                 return None
             
+            # FIX: Ensure chronological order
+            if len(candles) > 1:
+                 c0 = candles[0]
+                 c_last = candles[-1]
+                 t0 = c0.get('timestamp') or c0.get('candle_date_time_kst') or 0
+                 t_last = c_last.get('timestamp') or c_last.get('candle_date_time_kst') or 0
+                 if str(t0) > str(t_last):
+                     candles.reverse()
+
             closes = [float(c.get('trade_price') or c.get('close')) for c in candles]
             
             # Simple RSI calculation or import
@@ -486,6 +544,15 @@ class SevenSplitStrategy(BaseStrategy):
             if not candles or len(candles) < 15:
                 return None
             
+            # FIX: Ensure chronological order
+            if len(candles) > 1:
+                 c0 = candles[0]
+                 c_last = candles[-1]
+                 t0 = c0.get('timestamp') or c0.get('candle_date_time_kst') or 0
+                 t_last = c_last.get('timestamp') or c_last.get('candle_date_time_kst') or 0
+                 if str(t0) > str(t_last):
+                     candles.reverse()
+
             closes = [float(c.get('trade_price') or c.get('close')) for c in candles]
             
             # Simple RSI calculation or import

@@ -78,6 +78,13 @@ class SimulationStrategy(SevenSplitStrategy):
         # Fallback to parent implementation (real time)
         return super().get_current_time_kst()
 
+    def log_event(self, level: str, event_type: str, message: str):
+        """
+        Override parent log_event to avoid writing to DB (SystemEvent) during simulation.
+        Just log to simulation logs via log_message.
+        """
+        self.log_message(f"[{event_type}] {message}", level=level.lower())
+
     def _precompute_daily_candles(self):
         """
         Pre-compute all daily candles from hourly simulation data once at initialization.
@@ -329,7 +336,9 @@ class SimulationStrategy(SevenSplitStrategy):
                 "net_profit": net_profit,
                 "profit_rate": profit_rate,
                 "timestamp": sell_datetime,
-                "bought_at": split.bought_at
+                "bought_at": split.bought_at,
+                "is_accumulated": split.is_accumulated,
+                "buy_rsi": split.buy_rsi
             })
             
             split.status = "SELL_FILLED"

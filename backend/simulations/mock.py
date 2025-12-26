@@ -290,10 +290,10 @@ class MockExchange:
              self.strategy.log_message(f"MOCK CANDLES: Cutoff={cutoff_ts}, Len={len(filtered_candles)}, TopTimestamp={last_ts}", level="debug")
 
         # Default return for other intervals or if resampling not applicable
-        return filtered_candles[-count:]
+        return filtered_candles[-count:][::-1]
         
         # Fallback if no current_candle (shouldn't happen in loop)
-        return raw_history[-count:]
+        return raw_history[-count:][::-1]
     
     def cancel_order(self, uuid):
         if uuid in self.orders:
