@@ -9,6 +9,18 @@ class PriceStrategyLogic:
         self.is_watching = False
         self.watch_lowest_price = None
 
+    def validate_buy(self, price: float) -> bool:
+        """Validate buy price against strategy constraints (Price Range)."""
+        if price < self.strategy.config.min_price:
+            logging.warning(f"Price Logic: Target price {price} below min_price {self.strategy.config.min_price}. Skipping.")
+            return False
+            
+        if self.strategy.config.max_price > 0 and price > self.strategy.config.max_price:
+            logging.warning(f"Price Logic: Target price {price} above max_price {self.strategy.config.max_price}. Skipping.")
+            return False
+            
+        return True
+
     def tick(self, current_price: float, open_order_uuids: set):
         """Original Price Grid Strategy Logic"""
         self.strategy._manage_orders(open_order_uuids)

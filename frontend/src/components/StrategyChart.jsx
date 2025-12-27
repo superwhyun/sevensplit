@@ -18,6 +18,9 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
     const rsiCursorLineRef = useRef();
     const tickerRef = useRef(ticker);
 
+    const rsiBuyLineRef = useRef();
+    const rsiSellLineRef = useRef();
+
     // Trailing Buy Indicator Refs
     const lowestPriceLineRef = useRef();
     const triggerPriceLineRef = useRef();
@@ -498,8 +501,25 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
         });
         rsiCursorLineRef.current = rsiCursorLine;
 
-        rsiSeries14.createPriceLine({ price: 70.0, color: '#ef4444', lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
-        rsiSeries14.createPriceLine({ price: 30.0, color: '#10b981', lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
+        const rsiSellLine = rsiSeries14.createPriceLine({
+            price: configRef.current.rsi_sell_min || 70.0,
+            color: '#ef4444',
+            lineWidth: 1,
+            lineStyle: 2,
+            axisLabelVisible: false,
+            title: 'Sell Zone',
+        });
+        rsiSellLineRef.current = rsiSellLine;
+
+        const rsiBuyLine = rsiSeries14.createPriceLine({
+            price: configRef.current.rsi_buy_max || 30.0,
+            color: '#10b981',
+            lineWidth: 1,
+            lineStyle: 2,
+            axisLabelVisible: false,
+            title: 'Buy Zone',
+        });
+        rsiBuyLineRef.current = rsiBuyLine;
 
         const handleResize = () => {
             chart.applyOptions({ width: chartContainerRef.current.clientWidth });
@@ -561,7 +581,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                             markers.push({
                                 time: buyTime,
                                 position: 'belowBar',
-                                color: s.status === 'PENDING_SELL' ? '#eab308' : '#10b981',
+                                color: '#eab308', // Active Splits (Holding) = Yellow
                                 shape: 'arrowUp',
                                 text: '',
                                 size: 1
@@ -747,6 +767,26 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
         }
 
     }, [trailingBuyState, config, candleData]); // Re-run when state/config changes
+
+    // Update RSI Threshold Lines when config changes
+    useEffect(() => {
+        if (!config) return;
+
+        const buyMax = config.rsi_buy_max ?? 30.0;
+        const sellMin = config.rsi_sell_min ?? 70.0;
+
+        if (rsiBuyLineRef.current) {
+            rsiBuyLineRef.current.applyOptions({
+                price: Number(buyMax),
+            });
+        }
+
+        if (rsiSellLineRef.current) {
+            rsiSellLineRef.current.applyOptions({
+                price: Number(sellMin),
+            });
+        }
+    }, [config]);
 
     return (
         <div style={{

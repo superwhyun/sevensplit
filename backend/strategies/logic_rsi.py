@@ -20,6 +20,11 @@ class RSIStrategyLogic:
         self.last_tick_date = None # Track execution by date (YYYY-MM-DD)
         self.last_failed_buy_date = None # Track failed buy attempt date to prevent spam
 
+    def validate_buy(self, price: float) -> bool:
+        """Validate buy price against strategy constraints (RSI: Ignore Price Range)."""
+        # RSI strategy trusts the indicator, so we ignore min_price/max_price limits.
+        return True
+
     def tick(self, current_price: float, open_order_uuids: set):
         """RSI Daily Delta Strategy Logic"""
         self.strategy._manage_orders(open_order_uuids)
@@ -38,6 +43,19 @@ class RSIStrategyLogic:
 
         # DEBUG LOGGING for Simulation
         logging.info(f"RSI Logic Tick [{current_date_str}]: Prev={self.prev_rsi:.2f}, Current_Daily={self.current_rsi_daily}")
+
+        # Reset daily high/low if date changed
+        if self.last_tick_date != current_date_str:
+            self.rsi_highest = 0.0
+            self.rsi_lowest = 100.0
+            self.last_tick_date = current_date_str
+            
+        # Update Intraday High/Low
+        if self.current_rsi_daily is not None:
+             if self.current_rsi_daily > self.rsi_highest:
+                 self.rsi_highest = self.current_rsi_daily
+             if self.current_rsi_daily < self.rsi_lowest:
+                 self.rsi_lowest = self.current_rsi_daily
 
         # --- Buying Logic (Intraday Dynamic) ---
         self._process_buy_logic(current_price, current_date_str, current_dt_kst)
@@ -73,6 +91,21 @@ class RSIStrategyLogic:
             # Use persistent state
             if self.strategy.last_buy_date == current_date_str:
                 already_bought_today = True
+
+            # ROBUSTNESS FIX: Double check active splits memory (Source of Truth)
+            # This handles cases where last_buy_date variable might be out of sync (e.g. Simulation reset)
+            if not already_bought_today:
+                for split in self.strategy.splits:
+                    if split.status in ["BUY_FILLED", "PENDING_SELL"] and split.bought_at:
+                        # Parse bought_at (ISO string or timestamp)
+                        try:
+                            bought_str = str(split.bought_at)
+                            if bought_str.startswith(current_date_str):
+                                already_bought_today = True
+                                self.strategy.last_buy_date = current_date_str # Sync variable
+                                break
+                        except:
+                            pass
             
             if already_bought_today:
                 logging.debug(f"  -> Skip Buy: Already bought today ({current_date_str}).")
@@ -89,10 +122,16 @@ class RSIStrategyLogic:
                 # Check RSI condition again (Redundant but safe)
                 if self.prev_rsi is not None and self.current_rsi_daily is not None:
                     if self.prev_rsi <= self.strategy.config.rsi_buy_max:
-                        if self.current_rsi_daily >= self.prev_rsi + self.strategy.config.rsi_buy_first_threshold:
+                        # [Modified] Golden Cross Condition: 
+                        # 1. Rebound Amount >= Threshold
+                        # 2. Current RSI > Max Threshold (Must strictly cross the line)
+                        is_rebound = self.current_rsi_daily >= self.prev_rsi + self.strategy.config.rsi_buy_first_threshold
+                        is_golden_cross = self.current_rsi_daily > self.strategy.config.rsi_buy_max
+                        
+                        if is_rebound and is_golden_cross:
                             # Buy Signal!
                             if self.strategy.ticker == "SIM-TEST":
-                                print(f"[{current_date_str} {current_dt_kst.strftime('%H:%M:%S')}] SIM BUY SIGNAL! Confirmed: Prev({self.prev_rsi:.1f}) <= Max({self.strategy.config.rsi_buy_max}) AND Today({self.current_rsi_daily:.1f}) >= Prev+Thresh")
+                                print(f"[{current_date_str} {current_dt_kst.strftime('%H:%M:%S')}] SIM BUY SIGNAL! Confirmed: Prev({self.prev_rsi:.1f}) <= Max({self.strategy.config.rsi_buy_max}) AND Today({self.current_rsi_daily:.1f}) > Max (Golden Cross)")
                             result = self.strategy.buy(current_price, buy_rsi=self.current_rsi_daily)
                             
                             # If buy failed (e.g. Budget), mark today as failed to prevent retries
@@ -107,12 +146,21 @@ class RSIStrategyLogic:
 
     def _process_sell_logic(self, current_price: float, current_date_str: str, current_dt_kst: datetime):
         """Handle RSI Sell Logic"""
-        # Condition 1: Yesterday (Prev) was in Sell Zone (Overbought)
-        sell_cond_1 = self.prev_rsi > self.strategy.config.rsi_sell_min
+        # Condition 1: Check if we entered Sell Zone EITHER Yesterday OR Today (Intraday Peak)
+        # Allows selling if we spiked above 80 today even if yesterday was 70.
+        sell_cond_1 = (self.prev_rsi > self.strategy.config.rsi_sell_min) or \
+                      (self.current_rsi_daily > self.strategy.config.rsi_sell_min) or \
+                      (self.rsi_highest > self.strategy.config.rsi_sell_min) # Redundant but explicit
         
-        # Calculate Drop (Yesterday - Today) -> Positive means drop
-        rsi_drop = self.prev_rsi - self.current_rsi_daily
-        # Condition 2: Today (Current) has dropped by Threshold from Yesterday
+        # Calculate Drop from Valid Peak
+        # If today's high > prev, we dropped from today's high.
+        # If prev > today's high, we dropped from prev.
+        reference_peak = max(self.prev_rsi, self.rsi_highest, self.current_rsi_daily)
+        
+        # Drop (Peak - Current)
+        rsi_drop = reference_peak - self.current_rsi_daily
+
+        # Condition 2: Dropped by Threshold from the Peak
         sell_cond_2 = rsi_drop >= self.strategy.config.rsi_sell_first_threshold
         
         if sell_cond_1:

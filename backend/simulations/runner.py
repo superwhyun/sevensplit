@@ -113,6 +113,15 @@ def run_simulation(sim_config: SimulationConfig):
     # Expand Daily Candles to Hourly if needed
     # Check if input is Daily (interval ~ 24h)
     candles = sim_config.candles
+    
+    # [Safety] Enforce Ascending Sort by Timestamp
+    # Try different keys (timestamp, time, candle_date_time_kst)
+    def get_sort_key(c):
+        return c.get('timestamp') or c.get('time') or c.get('candle_date_time_kst') or 0
+        
+    candles.sort(key=get_sort_key)
+    sim_config.candles = candles # Update config
+    
     is_daily = False
     if len(candles) >= 2:
         c1 = candles[0]
@@ -182,10 +191,6 @@ def run_simulation(sim_config: SimulationConfig):
     else:
         start_price = 0
             
-    start_ts_str = candles[start_idx].get('candle_date_time_kst') or candles[start_idx].get('candle_date_time_utc')
-    msg = f"SIM: Start Price: {start_price}, Start Index: {start_idx}/{len(candles)}, Start Time: {start_ts_str}"
-    sim_logs.append(msg)
-    
     if strategy.config.min_price == 0.0 and start_price:
         strategy.config.min_price = start_price * 0.5 # Wide range for sim
         strategy.config.max_price = start_price * 1.5

@@ -720,12 +720,12 @@ class SevenSplitStrategy(BaseStrategy):
             logging.warning(f"Skipping buy due to insufficient funds cool-down (until {datetime.fromtimestamp(self._insufficient_funds_until)})")
             return None
 
-        if target_price < self.config.min_price:
-            logging.warning(f"Target price {target_price} below min_price {self.config.min_price}. Skipping.")
-            return None
-
-        if self.config.max_price > 0 and target_price > self.config.max_price:
-            logging.warning(f"Target price {target_price} above max_price {self.config.max_price}. Skipping.")
+        # Delegated Validation (Based on Strategy Mode)
+        # 1. Identify active logic module
+        active_logic = self.rsi_logic if self.config.strategy_mode == "RSI" else self.price_logic
+        
+        # 2. Check Strategy-Specific Rules (e.g. Price Range)
+        if not active_logic.validate_buy(target_price):
             return None
 
         # Check Budget
