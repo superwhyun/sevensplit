@@ -381,7 +381,7 @@ class SevenSplitStrategy(BaseStrategy):
             
         return True
 
-    def buy(self, current_price: float) -> bool:
+    def buy(self, current_price: float, buy_rsi: float = None) -> bool:
         """
         Execute RSI Buy Signal.
         Buys 'rsi_buy_first_amount' splits at current price.
@@ -391,7 +391,7 @@ class SevenSplitStrategy(BaseStrategy):
         if count <= 0:
             count = 1
         
-        logging.info(f"RSI Buy Signal: Executing buy for {count} split(s) at {current_price}")
+        logging.info(f"RSI Buy Signal: Executing buy for {count} split(s) at {current_price} (RSI: {buy_rsi})")
         
         success_count = 0
         for i in range(count):
@@ -403,7 +403,7 @@ class SevenSplitStrategy(BaseStrategy):
             
             # Create Split
             # RSI Strategy uses Market Order for immediate execution
-            res = self._create_buy_split(current_price, use_market_order=True)
+            res = self._create_buy_split(current_price, use_market_order=True, buy_rsi=buy_rsi)
             if res:
                 success_count += 1
             else:
@@ -447,11 +447,11 @@ class SevenSplitStrategy(BaseStrategy):
                 if len(candles) > 1:
                      c0 = candles[0]
                      c_last = candles[-1]
-                     t0 = c0.get('timestamp') or c0.get('time') or c0.get('candle_date_time_kst')
-                     t_last = c_last.get('timestamp') or c_last.get('time') or c_last.get('candle_date_time_kst')
+                     t0 = c0.get('timestamp') or c0.get('time') or 0
+                     t_last = c_last.get('timestamp') or c_last.get('time') or 0
                      
                      # Simple string/float comparison
-                     if str(t0) > str(t_last):
+                     if float(t0) > float(t_last):
                          candles.reverse()
                          
                 closes = [float(c['trade_price']) for c in candles]

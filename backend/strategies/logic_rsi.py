@@ -93,7 +93,7 @@ class RSIStrategyLogic:
                             # Buy Signal!
                             if self.strategy.ticker == "SIM-TEST":
                                 print(f"[{current_date_str} {current_dt_kst.strftime('%H:%M:%S')}] SIM BUY SIGNAL! Confirmed: Prev({self.prev_rsi:.1f}) <= Max({self.strategy.config.rsi_buy_max}) AND Today({self.current_rsi_daily:.1f}) >= Prev+Thresh")
-                            result = self.strategy.buy(current_price)
+                            result = self.strategy.buy(current_price, buy_rsi=self.current_rsi_daily)
                             
                             # If buy failed (e.g. Budget), mark today as failed to prevent retries
                             if not result:
