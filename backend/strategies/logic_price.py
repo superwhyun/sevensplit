@@ -93,6 +93,14 @@ class PriceStrategyLogic:
                      return True # Handled (entered watch mode)
             
              # If safe or trailing off, execute buy
+             # New Logging for Rebuy
+             next_target = current_price * (1 - self.strategy.config.buy_rate)
+             msg = (f"Rebuy/First Buy Executed.\n"
+                    f"- Condition: {reference_price_log}.\n"
+                    f"- Current Price: {current_price}\n"
+                    f"- Next Buy Target: {next_target:.1f}")
+             self.strategy.log_event("INFO", "BUY_EXEC", msg)
+
              logging.info(f"{reference_price_log}. Creating buy split at current price")
              # Use 5m RSI
              rsi_5m = self.strategy.get_rsi_5m()
@@ -125,6 +133,14 @@ class PriceStrategyLogic:
                      self.strategy.log_event("WARNING", "WATCH_START", f"Trailing Buy [START]: First Buy trigger but RSI(5m) {rsi_val_str} <= {threshold}. Entering Watch Mode.")
                      self.strategy.save_state()
                      return
+
+            # New Logging for First Buy (Active Positions Logic)
+            next_target = current_price * (1 - self.strategy.config.buy_rate)
+            msg = (f"First Buy Executed (Safe Mode).\n"
+                   f"- Condition: No previous buy recorded and conditions safe.\n"
+                   f"- Current Price: {current_price}\n"
+                   f"- Next Buy Target: {next_target:.1f}")
+            self.strategy.log_event("INFO", "BUY_EXEC", msg)
 
             logging.info(f"No previous buy, and conditions safe (or trailing off). Creating first split at current price: {current_price}")
             rsi_5m = self.strategy.get_rsi_5m()
@@ -176,7 +192,15 @@ class PriceStrategyLogic:
                 if levels_crossed > 0:
                      self.is_watching = False
                      self.watch_lowest_price = None
-                     self.strategy.log_event("INFO", "WATCH_END", f"Trailing Buy [TRIGGER]: RSI {rsi_5m:.1f} > {threshold}. Executing buy.")
+                     
+                     # Detailed Log for Trailing Buy
+                     next_target = current_price * (1 - self.strategy.config.buy_rate)
+                     rebound_pct = ((current_price - self.watch_lowest_price) / self.watch_lowest_price) * 100 if self.watch_lowest_price else 0.0
+                     msg = (f"Trailing Buy Executed.\n"
+                            f"- Condition: Rebound {rebound_pct:.2f}% (Low {self.watch_lowest_price} -> Cur {current_price}) AND RSI {rsi_5m:.1f} > {threshold}.\n"
+                            f"- Next Buy Target: {next_target:.1f}")
+                     self.strategy.log_event("INFO", "BUY_EXEC", msg)
+                     
                      self.strategy.save_state()
                      # Use 5m RSI for record
                      self._execute_batch_buy(current_price, levels_crossed, buy_rsi=rsi_val, is_accumulated=(levels_crossed > 1))
@@ -246,8 +270,17 @@ class PriceStrategyLogic:
                      levels_crossed = 1 
                 
                 val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
-                self.strategy.log_message(f"Buy Trigger: Price met target. Trailing={is_trailing_active}, RSI={val_str}. Executing {levels_crossed}.")
                 
+                # Detailed Log for Grid Buy
+                next_target = current_price * (1 - self.strategy.config.buy_rate)
+                target_price = self.strategy.last_buy_price * (1 - self.strategy.config.buy_rate)
+                
+                msg = (f"Grid Buy Executed.\n"
+                       f"- Condition: Price {current_price} <= Target {target_price:.1f}.\n"
+                       f"- RSI Safety: {val_str} (Limit: {self.strategy.config.rsi_buy_max}, TrailingActive: {is_trailing_active}).\n"
+                       f"- Next Buy Target: {next_target:.1f}")
+                self.strategy.log_event("INFO", "BUY_EXEC", msg)
+
                 # Use 5m RSI instead of 15m
                 self._execute_batch_buy(current_price, levels_crossed, buy_rsi=rsi_5m, is_accumulated=False)
 

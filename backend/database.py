@@ -6,7 +6,7 @@ Uses SQLite with SQLAlchemy ORM.
 from sqlalchemy import create_engine, Column, Integer, Float, String, Boolean, DateTime, Text, JSON, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import json
 import os
 
@@ -768,7 +768,8 @@ class DatabaseManager:
                 level=level,
                 event_type=event_type,
                 message=message,
-                timestamp=datetime.now()
+                # Use KST (UTC+9) explicitly to allow naive frontend parsing to match user expectation
+                timestamp=datetime.now(timezone(timedelta(hours=9)))
             )
             session.add(event)
             
