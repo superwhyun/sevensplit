@@ -77,7 +77,49 @@ class PriceStrategyLogic:
                  rsi_5m = self.strategy.get_rsi_5m()
                  threshold = self.strategy.config.rsi_buy_max
                  
-                 # Logic mirroring _handle_active_positions guard
+                 # --- WATCH MODE HANDLING ---
+                 if self.is_watching:
+                     # 1. Update Lowest Price
+                     if self.watch_lowest_price is None or current_price < self.watch_lowest_price:
+                         self.watch_lowest_price = current_price
+                         self.strategy.save_state()
+
+                     # 2. Check Rebound
+                     REBOUND_THRESHOLD = self.strategy.config.trailing_buy_rebound_percent / 100.0
+                     rebound_target = self.watch_lowest_price * (1 + REBOUND_THRESHOLD)
+                     is_rebound_ok = current_price >= rebound_target
+                     
+                     # 3. Check RSI (Lazy)
+                     is_rsi_ok = False
+                     if is_rebound_ok:
+                         is_rsi_ok = (rsi_5m is not None and rsi_5m > threshold)
+                     
+                     if is_rebound_ok and is_rsi_ok:
+                         # Confirmation: Check if we are still below the ORIGINAL target price
+                         # (Don't buy if we rebounded way above the entry point)
+                         target_price = reference_price * (1 - self.strategy.config.buy_rate)
+                         if current_price > target_price:
+                             logging.info(f"Trailing Buy [RESET]: Rebound met but price {current_price} > Target {target_price}. Resetting Watch Mode.")
+                             self.is_watching = False
+                             self.watch_lowest_price = None
+                             self.strategy.save_state()
+                             return False # No action (wait for next drop)
+                         
+                         # Proceed to Buy
+                         logging.info(f"Trailing Buy [EXEC]: Rebound met (Low {self.watch_lowest_price} -> {current_price}) and RSI Safe.")
+                         self.is_watching = False
+                         self.watch_lowest_price = None
+                         self.strategy.save_state()
+                         # Continue to execution code below...
+                     else:
+                         # Continue Watching
+                         if is_rebound_ok and not is_rsi_ok:
+                             val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
+                             logging.debug(f"Trailing Buy [WAIT]: Rebound OK({current_price}) but RSI({val_str}) <= {threshold}.")
+                         return True # Handled (Wait)
+
+                 # --- ENTER WATCH MODE ---
+                 # Same logic as before: If not watching, check if we SHOULD watch
                  should_watch = False
                  if rsi_5m is None: # Fail-safe
                      should_watch = True
@@ -120,6 +162,41 @@ class PriceStrategyLogic:
                  rsi_5m = self.strategy.get_rsi_5m()
                  threshold = self.strategy.config.rsi_buy_max
                  
+                 # --- WATCH MODE HANDLING (First Buy) ---
+                 if self.is_watching:
+                     # 1. Update Lowest Price
+                     if self.watch_lowest_price is None or current_price < self.watch_lowest_price:
+                         self.watch_lowest_price = current_price
+                         self.strategy.save_state()
+
+                     # 2. Check Rebound
+                     REBOUND_THRESHOLD = self.strategy.config.trailing_buy_rebound_percent / 100.0
+                     rebound_target = self.watch_lowest_price * (1 + REBOUND_THRESHOLD)
+                     is_rebound_ok = current_price >= rebound_target
+                     
+                     # 3. Check RSI (Lazy)
+                     is_rsi_ok = False
+                     if is_rebound_ok:
+                         is_rsi_ok = (rsi_5m is not None and rsi_5m > threshold)
+                     
+                     if is_rebound_ok and is_rsi_ok:
+                         # Confirmation: No Target Price check for First Buy (Market Entry)
+                         # OR do we want to respect min_price? validate_buy handles min_price.
+                         
+                         # Proceed to Buy
+                         logging.info(f"Trailing Buy [EXEC]: First Buy Rebound met (Low {self.watch_lowest_price} -> {current_price}) and RSI Safe.")
+                         self.is_watching = False
+                         self.watch_lowest_price = None
+                         self.strategy.save_state()
+                         # Continue to execution code below...
+                     else:
+                         # Continue Watching
+                         if is_rebound_ok and not is_rsi_ok:
+                             val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
+                             logging.debug(f"Trailing Buy [WAIT-First]: Rebound OK({current_price}) but RSI({val_str}) <= {threshold}.")
+                         return # Handled (Wait)
+
+                 # --- ENTER WATCH MODE ---
                  should_watch = False
                  if rsi_5m is None:
                      should_watch = True
