@@ -96,8 +96,6 @@ class StrategyService:
         
         if budget is not None:
             self.strategies[strategy_id].budget = budget
-            # Fix: Persist budget change to DB
-            self.db.update_strategy(strategy_id, budget=budget)
             
         self.strategies[strategy_id].update_config(config)
 
