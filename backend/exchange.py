@@ -163,7 +163,13 @@ class UpbitExchange(Exchange):
             # Check for error response content before raising
             if not resp.ok:
                 error_msg = f"Upbit API Error: {resp.status_code} {resp.text}"
-                logging.error(error_msg)
+                
+                # Downgrade 404 (Order not found) to WARNING to avoid noise in logs (esp. Mock mode)
+                if resp.status_code == 404:
+                    logging.warning(error_msg)
+                else:
+                    logging.error(error_msg)
+                    
                 raise Exception(error_msg)
             
             # Log success only if NOT in mock mode (to reduce noise)
