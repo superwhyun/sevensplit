@@ -316,6 +316,15 @@ class SevenSplitStrategy(BaseStrategy):
 
     # update_config is inherited from BaseStrategy
 
+    def has_sufficient_budget(self) -> bool:
+        """Check if there is enough budget for at least one split."""
+        total_invested = sum(s.buy_amount for s in self.splits)
+        # Using a small buffer or strictly > is fine. 
+        # Logic: If current invested + next split > budget, we cannot buy.
+        if total_invested + self.config.investment_per_split > self.budget:
+            return False
+        return True
+
     def check_trade_limit(self) -> bool:
         """Check if total trade actions (buys + sells) in last 24 hours is within limit"""
         if self.config.max_trades_per_day <= 0:

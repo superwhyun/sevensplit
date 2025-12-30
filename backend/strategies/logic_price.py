@@ -27,6 +27,13 @@ class PriceStrategyLogic:
 
         # Check if we need to create new buy split based on price drop
         if self.strategy.check_trade_limit():
+            # Guard: Check Budget First
+            if not self.strategy.has_sufficient_budget():
+                # We can return silently or log sparingly. 
+                # Since this runs every tick, silent return is better to avoid spam.
+                # The user knows budget is full via UI.
+                return
+            
             self._check_create_new_buy_split(current_price)
 
     def _check_create_new_buy_split(self, current_price: float):

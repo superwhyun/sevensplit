@@ -58,7 +58,11 @@ class RSIStrategyLogic:
                  self.rsi_lowest = self.current_rsi_daily
 
         # --- Buying Logic (Intraday Dynamic) ---
-        self._process_buy_logic(current_price, current_date_str, current_dt_kst)
+        if self.strategy.has_sufficient_budget():
+            self._process_buy_logic(current_price, current_date_str, current_dt_kst)
+        else:
+            # Optional warning if needed, but silence is golden for loop prevention
+            pass
         
         # --- Selling Logic (Intraday Dynamic) ---
         self._process_sell_logic(current_price, current_date_str, current_dt_kst)
