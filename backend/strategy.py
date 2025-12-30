@@ -326,7 +326,9 @@ class SevenSplitStrategy(BaseStrategy):
 
     def has_sufficient_budget(self) -> bool:
         """Check if there is enough budget for at least one split."""
-        total_invested = sum(s.buy_amount for s in self.splits)
+        # Fix: Exclude SELL_FILLED splits which are closed but maybe not yet cleaned up
+        total_invested = sum(s.buy_amount for s in self.splits if s.status != "SELL_FILLED")
+        
         # Using a small buffer or strictly > is fine. 
         # Logic: If current invested + next split > budget, we cannot buy.
         if total_invested + self.config.investment_per_split > self.budget:
@@ -661,7 +663,10 @@ class SevenSplitStrategy(BaseStrategy):
                     
                     # If timed out OR order is not in open list (meaning it's done/cancelled), check details
                     if is_timeout or split.buy_order_uuid not in open_order_uuids:
-                        self._check_buy_order(split)
+                        try:
+                            self._check_buy_order(split)
+                        except Exception as e:
+                            logging.error(f"Error checking buy order {split.buy_order_uuid}: {e}")
                 else:
                     # Zombie split (PENDING_BUY with no UUID). Remove it to allow recreation.
                     logging.info(f"Found zombie split {split.id} (PENDING_BUY with no UUID). Removing to reset.")
@@ -678,7 +683,10 @@ class SevenSplitStrategy(BaseStrategy):
                 if split.sell_order_uuid:
                     # Only check if order is NOT in open list (meaning it's done/cancelled)
                     if split.sell_order_uuid not in open_order_uuids:
-                        self._check_sell_order(split)
+                        try:
+                            self._check_sell_order(split)
+                        except Exception as e:
+                            logging.error(f"Error checking sell order {split.sell_order_uuid}: {e}")
                 else:
                     # Zombie split (PENDING_SELL with no UUID). Revert to BUY_FILLED to recreate sell order.
                     logging.info(f"Found zombie split {split.id} (PENDING_SELL with no UUID). Reverting to BUY_FILLED.")
