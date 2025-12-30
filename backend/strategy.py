@@ -1152,9 +1152,14 @@ class SevenSplitStrategy(BaseStrategy):
             logic_status = "Normal"
             active_splits_count = status_counts["buy_filled"] + status_counts["pending_sell"]
             
+            # Limit Logic:
+            # 1. Budget is global.
+            # 2. max_holdings is RSI-specific (as per UI config).
+            is_max_holdings_reached = (self.config.strategy_mode == "RSI" and active_splits_count >= self.config.max_holdings)
+            
             if not self.is_running:
                 logic_status = "Stopped"
-            elif not self.has_sufficient_budget() or active_splits_count >= self.config.max_holdings:
+            elif not self.has_sufficient_budget() or is_max_holdings_reached:
                 logic_status = "Max Limit"
             elif self.config.strategy_mode == "PRICE" and self.config.use_trailing_buy and self.is_watching:
                 logic_status = "Watching"
