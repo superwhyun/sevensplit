@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import axios from 'axios';
 
-const EventLog = ({ strategyId, apiBaseUrl }) => {
+const EventLog = ({ strategyId, apiBaseUrl, status }) => {
     const [events, setEvents] = useState([]);
     const [page, setPage] = useState(1);
     const [totalPages, setTotalPages] = useState(1);
@@ -42,6 +42,7 @@ const EventLog = ({ strategyId, apiBaseUrl }) => {
 
     // Helper to get color by level/type
     const getRowStyle = (event) => {
+        // ... (unchanged)
         const style = {
             borderBottom: '1px solid #334155',
             padding: '0.5rem',
@@ -60,6 +61,28 @@ const EventLog = ({ strategyId, apiBaseUrl }) => {
         return style;
     };
 
+    const getStatusBadgeStyle = (status) => {
+        const baseStyle = {
+            padding: '0.1rem 0.4rem',
+            borderRadius: '0.25rem',
+            fontSize: '0.65rem',
+            fontWeight: 'bold',
+            textTransform: 'uppercase',
+            marginLeft: '0.5rem'
+        };
+
+        switch (status) {
+            case 'Watching':
+                return { ...baseStyle, backgroundColor: 'rgba(234, 179, 8, 0.2)', color: '#facc15', border: '1px solid rgba(234, 179, 8, 0.4)' };
+            case 'Max Limit':
+                return { ...baseStyle, backgroundColor: 'rgba(239, 68, 68, 0.2)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.4)' };
+            case 'Stopped':
+                return { ...baseStyle, backgroundColor: 'rgba(148, 163, 184, 0.2)', color: '#cbd5e1', border: '1px solid rgba(148, 163, 184, 0.4)' };
+            default: // Normal
+                return { ...baseStyle, backgroundColor: 'rgba(34, 197, 94, 0.2)', color: '#4ade80', border: '1px solid rgba(34, 197, 94, 0.4)' };
+        }
+    };
+
     return (
         <div style={{
             backgroundColor: 'rgba(15, 23, 42, 0.5)',
@@ -70,7 +93,12 @@ const EventLog = ({ strategyId, apiBaseUrl }) => {
             padding: '1rem'
         }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                <h3 style={{ margin: 0, fontSize: '1rem', color: '#f8fafc' }}>System Events</h3>
+                <div style={{ display: 'flex', alignItems: 'center' }}>
+                    <h3 style={{ margin: 0, fontSize: '1rem', color: '#f8fafc' }}>System Events</h3>
+                    {status && (
+                        <span style={getStatusBadgeStyle(status)}>{status}</span>
+                    )}
+                </div>
                 <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', fontSize: '0.8rem' }}>
                     <button
                         onClick={handlePrev}

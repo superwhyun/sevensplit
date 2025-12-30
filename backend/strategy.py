@@ -275,7 +275,15 @@ class SevenSplitStrategy(BaseStrategy):
                     logging.info(f"Starting strategy {self.strategy_id} at current price: {current_price}")
                     # Use market order for initial entry to ensure execution
                     rsi_15m = self.get_rsi_15m()
-                    self._create_buy_split(current_price, use_market_order=True, buy_rsi=rsi_15m)
+                    split = self._create_buy_split(current_price, use_market_order=True, buy_rsi=rsi_15m)
+                    
+                    if split:
+                        next_target = current_price * (1 - self.config.buy_rate)
+                        msg = (f"Initial Buy Executed (On Start).\n"
+                               f"- Condition: Strategy Started with no positions.\n"
+                               f"- Current Price: {current_price}\n"
+                               f"- Next Buy Target: {next_target:.1f}")
+                        self.log_event("INFO", "BUY_EXEC", msg)
 
 
 
@@ -1132,10 +1140,22 @@ class SevenSplitStrategy(BaseStrategy):
             if strategy_rec:
                 strategy_name = strategy_rec.name
 
+            # Determine Operation Status
+            logic_status = "Normal"
+            active_splits_count = status_counts["buy_filled"] + status_counts["pending_sell"]
+            
+            if not self.is_running:
+                logic_status = "Stopped"
+            elif not self.has_sufficient_budget() or active_splits_count >= self.config.max_holdings:
+                logic_status = "Max Limit"
+            elif self.config.strategy_mode == "PRICE" and self.config.use_trailing_buy and self.is_watching:
+                logic_status = "Watching"
+
             return {
                 "id": self.strategy_id,
                 "name": strategy_name,
                 "ticker": self.ticker,
+                "status": logic_status,
                 "budget": self.budget,
                 "is_running": self.is_running,
                 "config": self.config.model_dump(),

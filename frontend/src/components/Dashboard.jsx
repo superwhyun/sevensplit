@@ -1002,6 +1002,7 @@ const Dashboard = () => {
                             <EventLog
                                 strategyId={selectedStrategyId}
                                 apiBaseUrl={API_BASE_URL}
+                                status={status?.status}
                             />
 
                             {/* Grid Status List */}

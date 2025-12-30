@@ -5,9 +5,8 @@ class PriceStrategyLogic:
     def __init__(self, strategy):
         self.strategy = strategy
         
-        # Trailing Buy State (Moved from Strategy or newly initialized)
-        self.is_watching = False
-        self.watch_lowest_price = None
+        # Trailing Buy State is now managed by self.strategy (Persistent)
+        # self.is_watching and self.watch_lowest_price are accessed via strategy
 
     def validate_buy(self, price: float) -> bool:
         """Validate buy price against strategy constraints (Price Range)."""
@@ -85,15 +84,15 @@ class PriceStrategyLogic:
                  threshold = self.strategy.config.rsi_buy_max
                  
                  # --- WATCH MODE HANDLING ---
-                 if self.is_watching:
+                 if self.strategy.is_watching:
                      # 1. Update Lowest Price
-                     if self.watch_lowest_price is None or current_price < self.watch_lowest_price:
-                         self.watch_lowest_price = current_price
+                     if self.strategy.watch_lowest_price is None or current_price < self.strategy.watch_lowest_price:
+                         self.strategy.watch_lowest_price = current_price
                          self.strategy.save_state()
 
                      # 2. Check Rebound
                      REBOUND_THRESHOLD = self.strategy.config.trailing_buy_rebound_percent / 100.0
-                     rebound_target = self.watch_lowest_price * (1 + REBOUND_THRESHOLD)
+                     rebound_target = self.strategy.watch_lowest_price * (1 + REBOUND_THRESHOLD)
                      is_rebound_ok = current_price >= rebound_target
                      
                      # 3. Check RSI (Lazy)
@@ -107,15 +106,15 @@ class PriceStrategyLogic:
                          target_price = reference_price * (1 - self.strategy.config.buy_rate)
                          if current_price > target_price:
                              logging.info(f"Trailing Buy [RESET]: Rebound met but price {current_price} > Target {target_price}. Resetting Watch Mode.")
-                             self.is_watching = False
-                             self.watch_lowest_price = None
+                             self.strategy.is_watching = False
+                             self.strategy.watch_lowest_price = None
                              self.strategy.save_state()
                              return False # No action (wait for next drop)
                          
                          # Proceed to Buy
-                         logging.info(f"Trailing Buy [EXEC]: Rebound met (Low {self.watch_lowest_price} -> {current_price}) and RSI Safe.")
-                         self.is_watching = False
-                         self.watch_lowest_price = None
+                         logging.info(f"Trailing Buy [EXEC]: Rebound met (Low {self.strategy.watch_lowest_price} -> {current_price}) and RSI Safe.")
+                         self.strategy.is_watching = False
+                         self.strategy.watch_lowest_price = None
                          self.strategy.save_state()
                          # Continue to execution code below...
                      else:
@@ -134,29 +133,33 @@ class PriceStrategyLogic:
                      should_watch = True
                  
                  if should_watch:
-                     self.is_watching = True
-                     self.watch_lowest_price = current_price
+                     self.strategy.is_watching = True
+                     self.strategy.watch_lowest_price = current_price
                      rsi_val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
                      self.strategy.log_event("WARNING", "WATCH_START", f"Trailing Buy [START]: Re-entry trigger met but RSI(5m) {rsi_val_str} <= {threshold}. Entering Watch Mode.")
                      self.strategy.save_state()
                      return True # Handled (entered watch mode)
             
              # If safe or trailing off, execute buy
-             # New Logging for Rebuy
+             # New Logging for Rebuy (Deferred)
              next_target = current_price * (1 - self.strategy.config.buy_rate)
              msg = (f"Rebuy/First Buy Executed.\n"
                     f"- Condition: {reference_price_log}.\n"
                     f"- Current Price: {current_price}\n"
                     f"- Next Buy Target: {next_target:.1f}")
-             self.strategy.log_event("INFO", "BUY_EXEC", msg)
 
              logging.info(f"{reference_price_log}. Creating buy split at current price")
              # Use 5m RSI
              rsi_5m = self.strategy.get_rsi_5m()
-             self.strategy._create_buy_split(current_price, use_market_order=True, buy_rsi=rsi_5m)
-             # Also update last_buy_price conceptually if needed? 
-             # _create_buy_split updates last_buy_price.
-             return True
+             split = self.strategy._create_buy_split(current_price, use_market_order=True, buy_rsi=rsi_5m)
+             
+             if split:
+                 self.strategy.log_event("INFO", "BUY_EXEC", msg)
+                 # Also update last_buy_price conceptually if needed? 
+                 # _create_buy_split updates last_buy_price.
+                 return True
+             
+             return False
         
         return False
 
@@ -170,15 +173,15 @@ class PriceStrategyLogic:
                  threshold = self.strategy.config.rsi_buy_max
                  
                  # --- WATCH MODE HANDLING (First Buy) ---
-                 if self.is_watching:
+                 if self.strategy.is_watching:
                      # 1. Update Lowest Price
-                     if self.watch_lowest_price is None or current_price < self.watch_lowest_price:
-                         self.watch_lowest_price = current_price
+                     if self.strategy.watch_lowest_price is None or current_price < self.strategy.watch_lowest_price:
+                         self.strategy.watch_lowest_price = current_price
                          self.strategy.save_state()
 
                      # 2. Check Rebound
                      REBOUND_THRESHOLD = self.strategy.config.trailing_buy_rebound_percent / 100.0
-                     rebound_target = self.watch_lowest_price * (1 + REBOUND_THRESHOLD)
+                     rebound_target = self.strategy.watch_lowest_price * (1 + REBOUND_THRESHOLD)
                      is_rebound_ok = current_price >= rebound_target
                      
                      # 3. Check RSI (Lazy)
@@ -191,9 +194,9 @@ class PriceStrategyLogic:
                          # OR do we want to respect min_price? validate_buy handles min_price.
                          
                          # Proceed to Buy
-                         logging.info(f"Trailing Buy [EXEC]: First Buy Rebound met (Low {self.watch_lowest_price} -> {current_price}) and RSI Safe.")
-                         self.is_watching = False
-                         self.watch_lowest_price = None
+                         logging.info(f"Trailing Buy [EXEC]: First Buy Rebound met (Low {self.strategy.watch_lowest_price} -> {current_price}) and RSI Safe.")
+                         self.strategy.is_watching = False
+                         self.strategy.watch_lowest_price = None
                          self.strategy.save_state()
                          # Continue to execution code below...
                      else:
@@ -211,8 +214,8 @@ class PriceStrategyLogic:
                      should_watch = True
                  
                  if should_watch:
-                     self.is_watching = True
-                     self.watch_lowest_price = current_price
+                     self.strategy.is_watching = True
+                     self.strategy.watch_lowest_price = current_price
                      rsi_val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
                      self.strategy.log_event("WARNING", "WATCH_START", f"Trailing Buy [START]: First Buy trigger but RSI(5m) {rsi_val_str} <= {threshold}. Entering Watch Mode.")
                      self.strategy.save_state()
@@ -224,11 +227,13 @@ class PriceStrategyLogic:
                    f"- Condition: No previous buy recorded and conditions safe.\n"
                    f"- Current Price: {current_price}\n"
                    f"- Next Buy Target: {next_target:.1f}")
-            self.strategy.log_event("INFO", "BUY_EXEC", msg)
-
+            
             logging.info(f"No previous buy, and conditions safe (or trailing off). Creating first split at current price: {current_price}")
             rsi_5m = self.strategy.get_rsi_5m()
-            self.strategy._create_buy_split(current_price, buy_rsi=rsi_5m)
+            split = self.strategy._create_buy_split(current_price, buy_rsi=rsi_5m)
+            
+            if split:
+                self.strategy.log_event("INFO", "BUY_EXEC", msg)
             return
 
         # Config
@@ -237,16 +242,16 @@ class PriceStrategyLogic:
         REBOUND_THRESHOLD = self.strategy.config.trailing_buy_rebound_percent / 100.0
 
         # --- A. Watching Mode (Already waiting) ---
-        if self.is_watching:
+        if self.strategy.is_watching:
             # 1. Update Lowest Price
-            if self.watch_lowest_price is None or current_price < self.watch_lowest_price:
-                self.watch_lowest_price = current_price
-                # self.strategy.log_message(f"Trailing Buy [UPDATE]: New lowest price {self.watch_lowest_price}", level="debug")
+            if self.strategy.watch_lowest_price is None or current_price < self.strategy.watch_lowest_price:
+                self.strategy.watch_lowest_price = current_price
+                # self.strategy.log_message(f"Trailing Buy [UPDATE]: New lowest price {self.strategy.watch_lowest_price}", level="debug")
                 self.strategy.save_state() # Save lowest price if possible (needs schema update but memory works for now)
 
             # 2. Check Exit Conditions (BOTH must be true)
             # Cond 1: Price Rebound
-            rebound_target = self.watch_lowest_price * (1 + REBOUND_THRESHOLD)
+            rebound_target = self.strategy.watch_lowest_price * (1 + REBOUND_THRESHOLD)
             is_rebound_ok = current_price >= rebound_target
             
             # Cond 2: RSI Strength (Lazy Check)
@@ -274,26 +279,29 @@ class PriceStrategyLogic:
                 rsi_val = rsi_5m if rsi_5m is not None else 0.0
 
                 if levels_crossed > 0:
-                     self.is_watching = False
-                     self.watch_lowest_price = None
+                     self.strategy.is_watching = False
+                     self.strategy.watch_lowest_price = None
                      
                      # Detailed Log for Trailing Buy
                      next_target = current_price * (1 - self.strategy.config.buy_rate)
-                     rebound_pct = ((current_price - self.watch_lowest_price) / self.watch_lowest_price) * 100 if self.watch_lowest_price else 0.0
+                     rebound_pct = ((current_price - self.strategy.watch_lowest_price) / self.strategy.watch_lowest_price) * 100 if self.strategy.watch_lowest_price else 0.0
                      msg = (f"Trailing Buy Executed.\n"
-                            f"- Condition: Rebound {rebound_pct:.2f}% (Low {self.watch_lowest_price} -> Cur {current_price}) AND RSI {rsi_5m:.1f} > {threshold}.\n"
+                            f"- Condition: Rebound {rebound_pct:.2f}% (Low {self.strategy.watch_lowest_price} -> Cur {current_price}) AND RSI {rsi_5m:.1f} > {threshold}.\n"
                             f"- Next Buy Target: {next_target:.1f}")
-                     self.strategy.log_event("INFO", "BUY_EXEC", msg)
                      
                      self.strategy.save_state()
                      # Use 5m RSI for record
-                     self._execute_batch_buy(current_price, levels_crossed, buy_rsi=rsi_val, is_accumulated=(levels_crossed > 1))
+                     created_count = self._execute_batch_buy(current_price, levels_crossed, buy_rsi=rsi_val, is_accumulated=(levels_crossed > 1))
+                     
+                     # Only log if at least one split was created
+                     if created_count > 0:
+                         self.strategy.log_event("INFO", "BUY_EXEC", msg)
                 else:
                      logging.info(f"Trailing Buy [RESET]: Rebound met but price {current_price} is above target {next_buy_level}. No buy needed.")
                 
                 # Reset Watch Mode
-                self.is_watching = False
-                self.watch_lowest_price = None
+                self.strategy.is_watching = False
+                self.strategy.watch_lowest_price = None
                 self.strategy.save_state()
             else:
                 # Waiting
@@ -307,14 +315,21 @@ class PriceStrategyLogic:
             # Safety: If user turned off Trailing Buy mid-watch
             if not is_trailing_active:
                  logging.info("Trailing Buy disabled mid-watch. Exiting watch mode.")
-                 self.is_watching = False
-                 self.watch_lowest_price = None
+                 self.strategy.is_watching = False
+                 self.strategy.watch_lowest_price = None
                  # Check if we should buy immediately
                  levels_crossed = self._calculate_levels_crossed(self.strategy.last_buy_price, current_price)
                  if levels_crossed > 0:
                      # Use 5m RSI
                      rsi_5m = self.strategy.get_rsi_5m()
-                     self._execute_batch_buy(current_price, levels_crossed, buy_rsi=rsi_5m)
+                     created_count = self._execute_batch_buy(current_price, levels_crossed, buy_rsi=rsi_5m)
+                     if created_count > 0:
+                         next_target = current_price * (1 - self.strategy.config.buy_rate)
+                         msg = (f"Grid Buy Executed (Trailing Disabled).\n"
+                                f"- Condition: Trailing Buy disabled mid-watch.\n"
+                                f"- Current Price: {current_price}\n"
+                                f"- Next Buy Target: {next_target:.1f}")
+                         self.strategy.log_event("INFO", "BUY_EXEC", msg)
             return
 
         # --- B. Normal Mode (Checking for new drop) ---
@@ -340,8 +355,8 @@ class PriceStrategyLogic:
             
             if should_watch:
                 # Enter Watch Mode
-                self.is_watching = True
-                self.watch_lowest_price = current_price
+                self.strategy.is_watching = True
+                self.strategy.watch_lowest_price = current_price
                 rsi_val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
                 self.strategy.log_event("WARNING", "WATCH_START", f"Trailing Buy [START]: Price target met but RSI(5m) {rsi_val_str} <= {threshold}. Entering Watch Mode.")
                 self.strategy.save_state()
@@ -363,10 +378,12 @@ class PriceStrategyLogic:
                        f"- Condition: Price {current_price} <= Target {target_price:.1f}.\n"
                        f"- RSI Safety: {val_str} (Limit: {self.strategy.config.rsi_buy_max}, TrailingActive: {is_trailing_active}).\n"
                        f"- Next Buy Target: {next_target:.1f}")
-                self.strategy.log_event("INFO", "BUY_EXEC", msg)
 
                 # Use 5m RSI instead of 15m
-                self._execute_batch_buy(current_price, levels_crossed, buy_rsi=rsi_5m, is_accumulated=False)
+                created_count = self._execute_batch_buy(current_price, levels_crossed, buy_rsi=rsi_5m, is_accumulated=False)
+                
+                if created_count > 0:
+                     self.strategy.log_event("INFO", "BUY_EXEC", msg)
 
     def _calculate_levels_crossed(self, reference_price: float, current_price: float) -> int:
         levels_crossed = 0
@@ -386,7 +403,7 @@ class PriceStrategyLogic:
                 break
         return levels_crossed
 
-    def _execute_batch_buy(self, current_price: float, count: int, buy_rsi: float = None, is_accumulated: bool = False):
+    def _execute_batch_buy(self, current_price: float, count: int, buy_rsi: float = None, is_accumulated: bool = False) -> int:
         # Check if we already have a pending buy at current price
         has_pending_buy = any(
             s.status == "PENDING_BUY" and abs(s.buy_price - current_price) / current_price < 0.001
@@ -395,10 +412,11 @@ class PriceStrategyLogic:
         
         if has_pending_buy:
             logging.debug(f"Already have pending buy near {current_price}, skipping")
-            return
+            return 0
         
         logging.info(f"Price dropped from {self.strategy.last_buy_price} to {current_price}. Creating {count} buy splits at {current_price}")
         
+        created_count = 0
         for i in range(count):
             split = self.strategy._create_buy_split(current_price, buy_rsi=buy_rsi)
             if split and is_accumulated:
@@ -407,4 +425,8 @@ class PriceStrategyLogic:
             if not split:
                 logging.warning(f"Failed to create buy split {i+1}/{count}, stopping")
                 break
+            
+            created_count += 1
             logging.info(f"Created buy split {i+1}/{count} at {current_price}")
+            
+        return created_count
