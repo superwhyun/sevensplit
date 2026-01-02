@@ -105,7 +105,9 @@ class PriceStrategyLogic:
                          # (Don't buy if we rebounded way above the entry point)
                          target_price = reference_price * (1 - self.strategy.config.buy_rate)
                          if current_price > target_price:
-                             logging.info(f"Trailing Buy [RESET]: Rebound met but price {current_price} > Target {target_price}. Resetting Watch Mode.")
+                             msg = f"Trailing Buy [RESET]: Rebound met but price {current_price} > Target {target_price}. Resetting Watch Mode."
+                             logging.info(msg)
+                             self.strategy.log_event("INFO", "WATCH_END", msg)
                              self.strategy.is_watching = False
                              self.strategy.watch_lowest_price = None
                              self.strategy.save_state()
@@ -297,7 +299,10 @@ class PriceStrategyLogic:
                      if created_count > 0:
                          self.strategy.log_event("INFO", "BUY_EXEC", msg)
                 else:
-                     logging.info(f"Trailing Buy [RESET]: Rebound met but price {current_price} is above target {next_buy_level}. No buy needed.")
+                     # Reset condition log
+                     msg = f"Trailing Buy [RESET]: Rebound met but price {current_price} is above target {next_buy_level}. No buy needed."
+                     logging.info(msg)
+                     self.strategy.log_event("INFO", "WATCH_END", msg)
                 
                 # Reset Watch Mode
                 self.strategy.is_watching = False
@@ -314,7 +319,9 @@ class PriceStrategyLogic:
 
             # Safety: If user turned off Trailing Buy mid-watch
             if not is_trailing_active:
-                 logging.info("Trailing Buy disabled mid-watch. Exiting watch mode.")
+                 msg = "Trailing Buy disabled mid-watch. Exiting watch mode."
+                 logging.info(msg)
+                 self.strategy.log_event("INFO", "WATCH_END", msg)
                  self.strategy.is_watching = False
                  self.strategy.watch_lowest_price = None
                  # Check if we should buy immediately
