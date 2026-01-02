@@ -1027,6 +1027,7 @@ const Dashboard = () => {
                                             <th style={{ padding: '1rem' }}>Buy Time</th>
                                             <th style={{ padding: '1rem' }}>Info</th>
                                             <th style={{ padding: '1rem' }}>Buy Price (vs Current)</th>
+                                            <th style={{ padding: '1rem' }}>Invested</th>
                                             <th style={{ padding: '1rem' }}>Sell Target (vs Current)</th>
                                             <th style={{ padding: '1rem' }}>Current P/L</th>
                                         </tr>
@@ -1099,6 +1100,9 @@ const Dashboard = () => {
                                                         }}>
                                                             {buyPriceRate > 0 ? '+' : ''}{buyPriceRate.toFixed(2)}%
                                                         </div>
+                                                    </td>
+                                                    <td style={{ padding: '1rem' }}>
+                                                        ₩{(split.buy_amount || 0).toLocaleString()}
                                                     </td>
                                                     <td style={{ padding: '1rem' }}>
                                                         <div>₩{sellTargetPrice.toLocaleString()}</div>
