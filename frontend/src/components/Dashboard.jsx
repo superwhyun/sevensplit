@@ -272,7 +272,8 @@ const Dashboard = () => {
             const { config, ...restStatus } = response.data;
             setStatus(restStatus);
             // Include budget in config to prevent WebSocket updates from triggering Config component re-renders
-            setStrategyConfig({ ...config, budget: response.data.budget });
+            const safeConfig = config && typeof config === 'object' ? config : {};
+            setStrategyConfig({ strategy_mode: 'PRICE', ...safeConfig, budget: response.data.budget });
             setLoading(false);
         } catch (error) {
             console.error('Error fetching status:', error);
@@ -343,8 +344,12 @@ const Dashboard = () => {
                             if (strategy) {
                                 setStatus(prev => {
                                     if (!prev || prev.id !== strategy.id) return strategy;
-                                    // NO config merge here. WS is for real-time data only.
-                                    return { ...prev, ...strategy };
+                                    // Preserve existing config if the incoming update doesn't have it
+                                    return {
+                                        ...prev,
+                                        ...strategy,
+                                        config: strategy.config || prev.config || {} // Ensure config is at least {}
+                                    };
                                 });
                                 setLoading(false);
                             }
@@ -524,6 +529,8 @@ const Dashboard = () => {
         }
     };
 
+    const resolvedConfig = simResult?.config ?? strategyConfig ?? status?.config ?? {};
+
     if (!status && strategies.length > 0) return <div style={{ padding: '2rem', color: 'white' }}>Loading Strategy...</div>;
     if (!portfolio) return <div style={{ padding: '2rem', color: 'white' }}>Loading Portfolio...</div>;
 
@@ -586,7 +593,7 @@ const Dashboard = () => {
                 isOpen={isManualTargetModalOpen}
                 onClose={() => setIsManualTargetModalOpen(false)}
                 onSave={handleSetManualTarget}
-                currentTarget={status?.manual_target_price || (status?.last_buy_price ? status.last_buy_price * (1 - status.config.buy_rate) : null)}
+                currentTarget={status?.manual_target_price || (status?.last_buy_price ? status.last_buy_price * (1 - (status?.config?.buy_rate || 0.005)) : null)}
             />
 
             {/* Global Portfolio Header */}
@@ -813,7 +820,7 @@ const Dashboard = () => {
                                     ₩{Math.round(simResult ? simResult.final_balance : (status.total_valuation || 0)).toLocaleString()}
                                 </div>
                                 <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '0.25rem' }}>
-                                    {simResult ? `Start: ₩${Math.round(simResult.config.budget).toLocaleString()}` : `Invested: ₩${Math.round(status.total_invested || 0).toLocaleString()}`}
+                                    {simResult ? `Start: ₩${Math.round(simResult.config?.budget || 0).toLocaleString()}` : `Invested: ₩${Math.round(status.total_invested || 0).toLocaleString()}`}
                                 </div>
                             </div>
 
@@ -843,7 +850,7 @@ const Dashboard = () => {
                                     marginTop: '0.25rem'
                                 }}>
                                     ({simResult
-                                        ? (((simResult.total_profit + simResult.unrealized_profit) / simResult.config.budget) * 100).toFixed(2)
+                                        ? (((simResult.total_profit + simResult.unrealized_profit) / (simResult.config?.budget || 1)) * 100).toFixed(2)
                                         : (status.total_profit_rate || 0).toFixed(2)}%)
                                 </div>
                             </div>
@@ -1076,7 +1083,7 @@ const Dashboard = () => {
                                     key={selectedStrategyId}
                                     ticker={status?.ticker}
                                     splits={simResult ? simResult.splits : (status?.splits || [])}
-                                    config={simResult ? simResult.config : strategyConfig}
+                                    config={resolvedConfig}
                                     tradeHistory={simResult ? simResult.trades : (status?.trade_history || [])}
                                     isSimulating={isSimulating}
                                     simResult={simResult}
@@ -1108,7 +1115,7 @@ const Dashboard = () => {
                                         <span className="card-title">Segment Status</span>
                                     </div>
                                     <div style={{ padding: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '0.75rem' }}>
-                                        {(simResult ? simResult.config.price_segments : strategyConfig.price_segments).map((segment, index) => {
+                                        {(simResult ? simResult.config?.price_segments : strategyConfig?.price_segments)?.map((segment, index) => {
                                             const splits = (simResult ? simResult.splits : status?.splits || []);
                                             const segmentSplits = splits.filter(s =>
                                                 s.status !== "SELL_FILLED" &&
@@ -1189,7 +1196,7 @@ const Dashboard = () => {
                                                         // Actually strategy.last_buy_price is what matters. 
                                                         // In simResult, we don't return last_buy_price explicitly, but we can guess it from the splits.
                                                         const simLastBuy = simResult.splits.length > 0 ? simResult.splits[simResult.splits.length - 1].buy_price : simResult.final_price;
-                                                        return `₩${Math.floor(simLastBuy * (1 - simResult.config.buy_rate)).toLocaleString()}`;
+                                                        return `₩${Math.floor(simLastBuy * (1 - (simResult.config?.buy_rate || 0.005))).toLocaleString()}`;
                                                     }
                                                 })()}
                                             </span>
@@ -1223,7 +1230,7 @@ const Dashboard = () => {
                                             const buyPriceRate = ((split.buy_price - effectivePrice) / effectivePrice * 100);
                                             const sellTargetPrice = split.target_sell_price > 0
                                                 ? split.target_sell_price
-                                                : split.buy_price * (1 + (simResult ? simResult.config.sell_rate : status?.config?.sell_rate));
+                                                : split.buy_price * (1 + (simResult ? (simResult.config?.sell_rate || 0.005) : (status?.config?.sell_rate || 0.005)));
                                             const sellTargetRate = ((sellTargetPrice - effectivePrice) / effectivePrice * 100);
 
                                             return (

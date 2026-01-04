@@ -3,10 +3,12 @@ import axios from 'axios';
 import Slider from 'rc-slider';
 import 'rc-slider/assets/index.css';
 
+const defaultConfig = { strategy_mode: 'PRICE' };
+
 const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
 
 
-    const [formData, setFormData] = useState(config || {});
+    const [formData, setFormData] = useState({ ...defaultConfig, ...(config || {}) });
     const [isEditing, setIsEditing] = useState(false);
 
     const lastStrategyIdRef = React.useRef(strategyId);
@@ -21,7 +23,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
         // Only update if not editing and we have a valid config object
         if (!isEditingRef.current || lastStrategyIdRef.current !== strategyId) {
             if (config && Object.keys(config).length > 0) {
-                setFormData(config);
+                setFormData({ ...defaultConfig, ...config });
                 lastStrategyIdRef.current = strategyId;
                 setIsEditing(false);
             }

@@ -71,10 +71,18 @@ class RSIStrategyLogic:
             if not candles: return
 
             # --- CRITICAL FIX: Robust Chronological Sorting ---
-            sorted_candles = sorted(candles, key=lambda x: x.get('timestamp') or x.get('candle_date_time_kst') or 0)
+            # Sort by timestamp (integer) to avoid TypeError in Python 3
+            sorted_candles = sorted(candles, key=lambda x: x.get('timestamp') or 0)
+
+            # Extract closes safely
+            closes = []
+            for c in sorted_candles:
+                price = c.get('trade_price') or c.get('close') or c.get('close_price')
+                if price is not None:
+                    closes.append(float(price))
             
-            closes = [float(c['trade_price']) for c in sorted_candles]
-            
+            if not closes: return
+
             # --- LIVE UPDATE: Inject current price ---
             if closes:
                 closes[-1] = current_price
@@ -83,8 +91,14 @@ class RSIStrategyLogic:
             rsi_now = calculate_rsi(closes, self.strategy.config.rsi_period)
             rsi_prev = calculate_rsi(closes[:-1], self.strategy.config.rsi_period)
             
-            # Short RSI (5) for UI
-            rsi_short_now = calculate_rsi(closes, 5)
+            # Short RSI (4) for UI (Dashboard shows RSI(4)/D)
+            rsi_short_now = calculate_rsi(closes, 4)
+
+            # --- LOGGING ---
+            if rsi_now is not None:
+                logging.info(f"[Daily RSI] Updated: {rsi_now:.2f} (Prev: {rsi_prev if rsi_prev is not None else 0:.2f}), Short: {rsi_short_now if rsi_short_now is not None else 0:.2f}")
+            else:
+                logging.warning(f"[Daily RSI] Calculation resulted in None. Closes count: {len(closes)}")
 
             self.current_rsi_daily = rsi_now
             self.prev_rsi = rsi_prev

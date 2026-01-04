@@ -24,11 +24,15 @@ class WatchModeLogic:
                 return None
             
             # --- CRITICAL FIX: Robust Chronological Sorting ---
-            # Create a copy to avoid mutating the shared context data order
-            sorted_candles = sorted(candles, key=lambda x: x.get('timestamp') or x.get('candle_date_time_kst') or 0)
+            # Create a copy and sort by timestamp (integer) to avoid TypeError in Python 3
+            sorted_candles = sorted(candles, key=lambda x: x.get('timestamp') or 0)
 
-            # Extract closes in ascending order
-            closes = [float(c.get('trade_price') or c.get('close')) for c in sorted_candles]
+            # Extract closes safely using multiple possible keys
+            closes = []
+            for c in sorted_candles:
+                price = c.get('trade_price') or c.get('close') or c.get('close_price')
+                if price is not None:
+                    closes.append(float(price))
 
             # --- LIVE UPDATE: Inject current price ---
             if closes:
@@ -37,13 +41,14 @@ class WatchModeLogic:
             # Calculate RSI (14) - Logic Use
             rsi_14 = calculate_rsi(closes, 14)
 
-             # Calculate RSI (5) - UI Use
+             # Calculate RSI (5) - UI Use (RSI(5)/5m)
             rsi_5 = calculate_rsi(closes, 5)
 
             # --- DEBUG LOG: Show data points ---
-            if len(closes) >= 14:
-                sample_closes = [round(c, 1) for c in closes[-5:]]
-                logging.debug(f"RSI(5m) Calc: Count={len(closes)}, Recent Closes={sample_closes}, Result={rsi_14:.1f}")
+            if rsi_14 is not None:
+                logging.info(f"[5m RSI] Updated: {rsi_14:.2f} (Short: {rsi_5 if rsi_5 is not None else 0:.2f}), Closes: {len(closes)}")
+            else:
+                logging.debug(f"RSI(5m) Calc: Count={len(closes)} - Result is None (Warmup?)")
 
             # Update State for Dashboard
             self.strategy.rsi_logic.current_rsi = rsi_14

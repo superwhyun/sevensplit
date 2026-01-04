@@ -444,9 +444,6 @@ class SevenSplitStrategy(BaseStrategy):
             current_time = time.time()
             pass
 
-            if not self.is_running:
-                return
-
             # Self-healing: Remove duplicate splits by ID if any exist
             unique_splits = {}
             for s in self.splits:
@@ -463,6 +460,17 @@ class SevenSplitStrategy(BaseStrategy):
                 current_price = self.exchange.get_current_price(self.ticker)
 
             if not current_price:
+                return
+
+            # Update RSI indicators for dashboard visibility even when stopped.
+            try:
+                self.watch_logic.get_rsi_5m(current_price, market_context=market_context)
+                if hasattr(self.rsi_logic, '_update_daily_rsi'):
+                    self.rsi_logic._update_daily_rsi(current_price, market_context=market_context)
+            except Exception as e:
+                logging.debug(f"RSI indicator update failed: {e}")
+
+            if not self.is_running:
                 return
 
             # Prepare open orders list (Common)

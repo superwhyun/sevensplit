@@ -108,8 +108,13 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
         };
     };
 
+    const isRsiMode = (mode) => {
+        const normalized = (mode || '').toString().toUpperCase();
+        return normalized === 'RSI' || normalized === 'ALL';
+    };
+
     const fetchCandles = async (to = null, isHistory = false) => {
-        const interval = config?.strategy_mode?.toUpperCase() === 'RSI' ? 'days' : 'minutes/5';
+        const interval = isRsiMode(config?.strategy_mode) ? 'days' : 'minutes/5';
 
         const API_BASE_URL = window.location.port === '5173'
             ? `http://${window.location.hostname}:8000`
@@ -198,7 +203,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             const interval = setInterval(() => fetchCandles(), 60000);
             return () => clearInterval(interval);
         }
-    }, [ticker, config?.strategy_mode]);
+    }, [ticker, config?.strategy_mode, config?.use_trailing_buy]);
 
     // Infinite Scroll Logic
     useEffect(() => {
@@ -250,7 +255,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
 
                 // Update RSI (Dual)
                 // Show RSI if mode is RSI OR if Trailing Buy is enabled (which uses 5m RSI)
-                const showRSI = config && (config.strategy_mode?.toUpperCase() === 'RSI' || config.use_trailing_buy === true);
+                const showRSI = isRsiMode(config?.strategy_mode) || config?.use_trailing_buy === true;
 
                 if (showRSI && rsiSeries14Ref.current) {
                     const { rsi14, rsi4 } = calculateDualRSI(candleData);
@@ -281,7 +286,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                 console.error("[Chart] Error setting data:", error);
             }
         }
-    }, [candleData, volumeData, config?.strategy_mode]);
+    }, [candleData, volumeData, config?.strategy_mode, config?.use_trailing_buy]);
 
     // Handle AutoScaling Toggle
     useEffect(() => {
@@ -395,7 +400,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                     param.point.x <= chartContainerRef.current.clientWidth &&
                     param.point.y <= chartContainerRef.current.clientHeight) {
 
-                    const sellRate = configRef.current.sell_rate || 0.005; // Default 0.5%
+                    const sellRate = configRef.current?.sell_rate || 0.005; // Default 0.5%
                     const targetPrice = price * (1 + sellRate);
 
                     targetSellLineRef.current.applyOptions({
@@ -494,7 +499,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
         rsiCursorLineRef.current = rsiCursorLine;
 
         const rsiSellLine = rsiSeries14.createPriceLine({
-            price: configRef.current.rsi_sell_min || 70.0,
+            price: configRef.current?.rsi_sell_min || 70.0,
             color: '#ef4444',
             lineWidth: 2,
             lineStyle: 2,
@@ -504,7 +509,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
         rsiSellLineRef.current = rsiSellLine;
 
         const rsiBuyLine = rsiSeries14.createPriceLine({
-            price: configRef.current.rsi_buy_max || 30.0,
+            price: configRef.current?.rsi_buy_max || 30.0,
             color: '#10b981',
             lineWidth: 2,
             lineStyle: 2,
