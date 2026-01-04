@@ -1076,8 +1076,12 @@ def get_candle_db() -> DatabaseManager:
     """Get global market data database manager instance (Exchange DB)"""
     global _candle_db_manager
     if _candle_db_manager is None:
-        # Market data is strictly stored in mock-exchange/sevensplit.db
+        # Market data default (override with CANDLE_DB_PATH in production)
         backend_dir = os.path.dirname(os.path.abspath(__file__))
-        market_db_path = os.path.join(backend_dir, "..", "mock-exchange", "sevensplit.db")
+        market_db_path = os.getenv("CANDLE_DB_PATH")
+        if not market_db_path:
+            market_db_path = os.path.join(backend_dir, "..", "mock-exchange", "sevensplit.db")
+        market_db_dir = os.path.dirname(os.path.abspath(market_db_path))
+        os.makedirs(market_db_dir, exist_ok=True)
         _candle_db_manager = DatabaseManager(db_path=market_db_path)
     return _candle_db_manager
