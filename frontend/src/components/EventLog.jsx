@@ -1,21 +1,45 @@
 import React, { useEffect, useState, useRef } from 'react';
 import axios from 'axios';
 
-const EventLog = ({ strategyId, apiBaseUrl, status }) => {
+const EventLog = ({ strategyId, apiBaseUrl, status, simulationEvents }) => {
     const [events, setEvents] = useState([]);
     const [page, setPage] = useState(1);
     const [totalPages, setTotalPages] = useState(1);
     const [loading, setLoading] = useState(false);
 
-    // Auto-refresh interval
+    // Filter and Paginate local events if in simulation mode
     useEffect(() => {
-        if (!strategyId) return;
+        if (simulationEvents) {
+            const limit = 10;
+            const start = (page - 1) * limit;
+            const end = start + limit;
+
+            // Sort by time descending (latest first)
+            const sortedEvents = [...simulationEvents].sort((a, b) =>
+                new Date(b.created_at || b.timestamp) - new Date(a.created_at || a.timestamp)
+            );
+
+            // Add ID for map key if missing
+            const mappedEvents = sortedEvents.map((ev, idx) => ({
+                ...ev,
+                id: ev.id || `sim-${idx}`,
+                timestamp: ev.created_at || ev.timestamp // Ensure consistent key
+            }));
+
+            setEvents(mappedEvents.slice(start, end));
+            setTotalPages(Math.ceil(mappedEvents.length / limit));
+        }
+    }, [simulationEvents, page]);
+
+    // Auto-refresh interval (Only if NOT in simulation mode)
+    useEffect(() => {
+        if (!strategyId || simulationEvents) return;
 
         fetchEvents();
         const interval = setInterval(fetchEvents, 5000); // Poll every 5 seconds
 
         return () => clearInterval(interval);
-    }, [strategyId, page]);
+    }, [strategyId, page, simulationEvents]);
 
     const fetchEvents = async () => {
         try {
@@ -83,6 +107,19 @@ const EventLog = ({ strategyId, apiBaseUrl, status }) => {
         }
     };
 
+    const handleClearEvents = async () => {
+        if (!window.confirm("Are you sure you want to clear all events for this strategy?")) return;
+
+        try {
+            await axios.delete(`${apiBaseUrl}/strategies/${strategyId}/events`);
+            setEvents([]);
+            setPage(1);
+            fetchEvents();
+        } catch (error) {
+            alert("Failed to clear events: " + error.message);
+        }
+    };
+
     return (
         <div style={{
             backgroundColor: 'rgba(15, 23, 42, 0.5)',
@@ -93,11 +130,24 @@ const EventLog = ({ strategyId, apiBaseUrl, status }) => {
             padding: '1rem'
         }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                     <h3 style={{ margin: 0, fontSize: '1rem', color: '#f8fafc' }}>System Events</h3>
                     {status && (
                         <span style={getStatusBadgeStyle(status)}>{status}</span>
                     )}
+                    <button
+                        onClick={handleClearEvents}
+                        title="Clear All Events"
+                        style={{
+                            background: 'none', border: 'none', color: '#64748b', cursor: 'pointer',
+                            fontSize: '1rem', display: 'flex', alignItems: 'center', padding: '4px',
+                            transition: 'color 0.2s',
+                        }}
+                        onMouseOver={(e) => e.currentTarget.style.color = '#ef4444'}
+                        onMouseOut={(e) => e.currentTarget.style.color = '#64748b'}
+                    >
+                        🗑️
+                    </button>
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', fontSize: '0.8rem' }}>
                     <button
@@ -126,7 +176,9 @@ const EventLog = ({ strategyId, apiBaseUrl, status }) => {
                         <div key={event.id} style={getRowStyle(event)}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.2rem' }}>
                                 <span style={{ fontWeight: 'bold' }}>[{event.event_type}]</span>
-                                <span style={{ opacity: 0.7, fontSize: '0.75rem' }}>{new Date(event.timestamp).toLocaleString()}</span>
+                                <span style={{ opacity: 0.7, fontSize: '0.75rem' }}>
+                                    {new Date(event.timestamp).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', hour12: false })}
+                                </span>
                             </div>
                             <div>{event.message}</div>
                         </div>

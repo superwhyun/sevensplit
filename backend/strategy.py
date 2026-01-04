@@ -10,6 +10,7 @@ from database import get_db
 
 from models.strategy_state import StrategyConfig, SplitState
 from strategies import BaseStrategy, PriceStrategyLogic, RSIStrategyLogic
+from strategies.logic_watch import WatchModeLogic
 from utils.indicators import calculate_rsi
 
 class SevenSplitStrategy(BaseStrategy):
@@ -23,7 +24,8 @@ class SevenSplitStrategy(BaseStrategy):
         self.last_buy_price = None # Track the last buy price for creating next split
         self.last_sell_price = None # Track the last sell price for rebuy strategy
         self.last_sell_date = None # Track the last sell date for daily limits
-        self.budget = 0.0
+        self.manual_target_price = None # Manual override for next buy
+        self.budget = budget
         
         # Constants
         self.MIN_ORDER_AMOUNT_KRW = 5000
@@ -33,6 +35,7 @@ class SevenSplitStrategy(BaseStrategy):
         # Logic Modules
         self.price_logic = PriceStrategyLogic(self)
         self.rsi_logic = RSIStrategyLogic(self)
+        self.watch_logic = WatchModeLogic(self)
         
         # Optimization: Staggered start for RSI to prevent 429 errors on startup
         self.start_time = time.time()
@@ -98,6 +101,7 @@ class SevenSplitStrategy(BaseStrategy):
                 'last_buy_price': self.last_buy_price,
                 'last_sell_price': self.last_sell_price,
                 'budget': self.budget,
+                'manual_target_price': self.manual_target_price,
                 'is_watching': self.is_watching,
                 'watch_lowest_price': self.watch_lowest_price,
                 'pending_buy_units': self.pending_buy_units
@@ -182,16 +186,18 @@ class SevenSplitStrategy(BaseStrategy):
                 # Trailing Buy
                 use_trailing_buy=getattr(state, 'use_trailing_buy', False),
                 trailing_buy_rebound_percent=getattr(state, 'trailing_buy_rebound_percent', 0.2),
-                trailing_buy_batch=getattr(state, 'trailing_buy_batch', True)
+                trailing_buy_batch=getattr(state, 'trailing_buy_batch', True),
+                
+                # Price Segments
+                price_segments=getattr(state, 'price_segments', []) or []
             )
 
             self.is_running = state.is_running
             self.next_split_id = state.next_split_id
             self.last_buy_price = state.last_buy_price
             self.last_sell_price = state.last_sell_price
-            self.last_buy_price = state.last_buy_price
-            self.last_sell_price = state.last_sell_price
             self.budget = state.budget
+            self.manual_target_price = getattr(state, 'manual_target_price', None)
             self.is_watching = getattr(state, 'is_watching', False)
             self.watch_lowest_price = getattr(state, 'watch_lowest_price', None)
             self.pending_buy_units = getattr(state, 'pending_buy_units', 0)
@@ -210,8 +216,8 @@ class SevenSplitStrategy(BaseStrategy):
                     buy_amount=db_split.investment_amount,
                     buy_volume=db_split.coin_volume or 0.0,
                     target_sell_price=db_split.target_sell_price,
-                    created_at=db_split.created_at.isoformat() if db_split.created_at else None,
-                    bought_at=db_split.buy_filled_at.isoformat() if db_split.buy_filled_at else None,
+                    created_at=db_split.created_at.isoformat() + 'Z' if db_split.created_at else None,
+                    bought_at=db_split.buy_filled_at.isoformat() + 'Z' if db_split.buy_filled_at else None,
                     is_accumulated=db_split.is_accumulated,
                     buy_rsi=db_split.buy_rsi
                 )
@@ -249,9 +255,8 @@ class SevenSplitStrategy(BaseStrategy):
                     'total_fee': t.total_fee,
                     'net_profit': t.net_profit,
                     'profit_rate': t.profit_rate,
-                    'timestamp': t.timestamp.isoformat() if t.timestamp else None,
-                    'timestamp': t.timestamp.isoformat() if t.timestamp else None,
-                    'bought_at': t.bought_at.isoformat() if t.bought_at else None,
+                    'timestamp': t.timestamp.isoformat() + 'Z' if t.timestamp else None,
+                    'bought_at': t.bought_at.isoformat() + 'Z' if t.bought_at else None,
                     'buy_rsi': t.buy_rsi
                 })
 
@@ -274,8 +279,12 @@ class SevenSplitStrategy(BaseStrategy):
                     # Classic Mode: Buy immediately if no splits
                     logging.info(f"Starting strategy {self.strategy_id} at current price: {current_price}")
                     # Use market order for initial entry to ensure execution
-                    rsi_15m = self.get_rsi_15m()
-                    split = self._create_buy_split(current_price, use_market_order=True, buy_rsi=rsi_15m)
+                    
+                    # Get RSI for metadata
+                    rsi_5m = self.watch_logic.get_rsi_5m(current_price)
+                    
+                    # Execute initial buy via Price Logic
+                    split = self.price_logic._execute_single_buy(current_price, buy_rsi=rsi_5m)
                     
                     if split:
                         next_target = current_price * (1 - self.config.buy_rate)
@@ -324,15 +333,31 @@ class SevenSplitStrategy(BaseStrategy):
 
     # update_config is inherited from BaseStrategy
 
-    def has_sufficient_budget(self) -> bool:
-        """Check if there is enough budget for at least one split."""
-        # Fix: Exclude SELL_FILLED splits which are closed but maybe not yet cleaned up
+    def has_sufficient_budget(self, market_context: dict = None) -> bool:
+        """
+        Check if there is enough budget for at least one split.
+        If market_context is provided, also checks actual KRW balance.
+        """
+        # 1. Strategy Budget Check (Defined)
         total_invested = sum(s.buy_amount for s in self.splits if s.status != "SELL_FILLED")
-        
-        # Using a small buffer or strictly > is fine. 
-        # Logic: If current invested + next split > budget, we cannot buy.
         if total_invested + self.config.investment_per_split > self.budget:
             return False
+            
+        # 2. Actual Account Balance Check (if context available)
+        if market_context and 'accounts' in market_context:
+            try:
+                krw_balance = 0.0
+                for acc in market_context['accounts']:
+                    if acc.get('currency') == 'KRW':
+                        krw_balance = float(acc.get('balance', 0))
+                        break
+                
+                if krw_balance < self.config.investment_per_split:
+                    logging.warning(f"Insufficient KRW balance in account: {krw_balance}")
+                    return False
+            except Exception as e:
+                logging.debug(f"Budget balance check skipped due to error: {e}")
+                
         return True
 
     def check_trade_limit(self) -> bool:
@@ -400,206 +425,24 @@ class SevenSplitStrategy(BaseStrategy):
             
         return True
 
-    def buy(self, current_price: float, buy_rsi: float = None) -> bool:
-        """
-        Execute RSI Buy Signal.
-        Buys 'rsi_buy_first_amount' splits at current price.
-        """
-        # Determine how many splits to buy
-        count = self.config.rsi_buy_first_amount
-        if count <= 0:
-            count = 1
-        
-        logging.info(f"RSI Buy Signal: Executing buy for {count} split(s) at {current_price} (RSI: {buy_rsi})")
-        
-        success_count = 0
-        for i in range(count):
-            # Check Max Holdings
-            current_holdings = len([s for s in self.splits if s.status != "SELL_FILLED"])
-            if current_holdings >= self.config.max_holdings:
-                 logging.warning(f"Max holdings reached ({current_holdings}/{self.config.max_holdings}). Stop buying.")
-                 break
-            
-            # Create Split
-            # RSI Strategy uses Market Order for immediate execution
-            res = self._create_buy_split(current_price, use_market_order=True, buy_rsi=buy_rsi)
-            if res:
-                success_count += 1
-            else:
-                logging.warning(f"Failed to create buy split {i+1}/{count}")
-        
-        return success_count > 0
+    # buy method removed (delegated to RSIStrategyLogic)
 
-    def calculate_rsi(self):
-        """Calculate RSI based on configured timeframe."""
-        try:
+    # RSI Calculation methods moved to specialized logic modules.
 
-            # Fetch Daily Candles (Always use Daily for RSI Strategy)
-            # Count: 200 is safe buffer.
-            candles = self.exchange.get_candles(self.ticker, count=200, interval="days")
-            
-            current_rsi = None
-            current_rsi_short = None
-            
-            if current_rsi is not None:
-                self.rsi_logic.prev_prev_rsi = self.rsi_logic.prev_rsi
-                self.rsi_logic.prev_rsi = self.rsi_logic.current_rsi # This was actually storing 'yesterday' if current is 'today'
-                # Wait, calculate_rsi(closes) returns the RSI for the last close.
-                # If we want prev_prev, we need to look at the history returned by calculate_rsi function if it returned a list.
-                # But the utility function `calculate_rsi` returns a single float (the last one).
-                
-                # We need to change how we get these values. 
-                # We should calculate RSI for the whole series and pick the last 3 values.
-                pass
+    def set_manual_target(self, price: Optional[float]):
+        """Manually set or clear the next buy target price"""
+        with self.lock:
+            self.manual_target_price = price
+            self.save_state()
+            logging.info(f"Strategy {self.strategy_id}: Manual target price set to {price}")
 
-            # Let's rewrite the logic inside the try block properly
-            if candles:
-                # Sort by timestamp ascending (oldest first)
-                candles.sort(key=lambda x: x['candle_date_time_kst'])
-                closes = [float(c['trade_price']) for c in candles]
-                
-                # We need a calculate_rsi_series function or call calculate_rsi on sliced lists
-                # Calling on sliced lists is inefficient but simple for now.
-                # Actually, let's use the fact that we need rsi[-1], rsi[-2], rsi[-3]
-                
-                # FIX: Ensure chronological order (Upbit returns reverse)
-                if len(candles) > 1:
-                     c0 = candles[0]
-                     c_last = candles[-1]
-                     t0 = c0.get('timestamp') or c0.get('time') or 0
-                     t_last = c_last.get('timestamp') or c_last.get('time') or 0
-                     
-                     # Simple string/float comparison
-                     if float(t0) > float(t_last):
-                         candles.reverse()
-                         
-                closes = [float(c['trade_price']) for c in candles]
-                rsi_now = calculate_rsi(closes, self.config.rsi_period)
-                rsi_short_now = calculate_rsi(closes, 4)
-                
-                # Prev (Yesterday, confirmed)
-                rsi_prev = calculate_rsi(closes[:-1], self.config.rsi_period)
-                rsi_short_prev = calculate_rsi(closes[:-1], 4)
-                
-
-
-                self.rsi_logic.current_rsi = rsi_now
-                self.rsi_logic.prev_rsi = rsi_prev
-
-                
-                self.rsi_logic.current_rsi_short = rsi_short_now
-                self.rsi_logic.prev_rsi_short = rsi_short_prev
-                
-                # Populate daily fields
-                self.rsi_logic.current_rsi_daily = rsi_now
-                self.rsi_logic.current_rsi_daily_short = rsi_short_now
-            
-            # logging.info(f"RSI Updated: {self.rsi_logic.current_rsi} (Prev: {self.rsi_logic.prev_rsi}), Short: {self.rsi_logic.current_rsi_short}, Daily: {self.rsi_logic.current_rsi_daily}, DailyShort: {self.rsi_logic.current_rsi_daily_short}")
-            
-        except Exception as e:
-            logging.error(f"Failed to calculate RSI: {e}")
-
-    def calculate_hourly_rsi(self):
-        """Calculate Hourly RSI for UI display (updates every minute)."""
-        try:
-            # Fetch Hourly Candles (e.g., 60 minutes)
-            candles = self.exchange.get_candles(self.ticker, count=200, interval="minutes/60")
-            if candles:
-                # FIX: Ensure chronological order
-                if len(candles) > 1:
-                     c0 = candles[0]
-                     c_last = candles[-1]
-                     t0 = c0.get('timestamp') or c0.get('candle_date_time_kst') or 0
-                     t_last = c_last.get('timestamp') or c_last.get('candle_date_time_kst') or 0
-                     if str(t0) > str(t_last):
-                         candles.reverse()
-
-                closes = [float(c['trade_price']) for c in candles]
-                
-                # Calculate RSI (14 and 4)
-                rsi_14 = calculate_rsi(closes, 14)
-                rsi_4 = calculate_rsi(closes, 4)
-                
-                # Update logic state (for UI only, not used in logic)
-                # We reuse the 'short' fields or add new ones?
-                # The dashboard expects 'rsi' and 'rsi_short' for the hourly display.
-                self.rsi_logic.current_rsi = rsi_14
-                self.rsi_logic.current_rsi_short = rsi_4
-                
-        except Exception as e:
-            logging.error(f"Failed to calculate Hourly RSI: {e}")
-
-    def get_rsi_15m(self) -> float:
-        """Calculate 15-minute RSI for Accumulation info"""
-        try:
-            # Fetch 15m candles
-            candles = self.exchange.get_candles(self.ticker, interval="minutes/15", count=100)
-            if not candles or len(candles) < 15:
-                return None
-            
-            # FIX: Ensure chronological order
-            if len(candles) > 1:
-                 c0 = candles[0]
-                 c_last = candles[-1]
-                 t0 = c0.get('timestamp') or c0.get('candle_date_time_kst') or 0
-                 t_last = c_last.get('timestamp') or c_last.get('candle_date_time_kst') or 0
-                 if str(t0) > str(t_last):
-                     candles.reverse()
-
-            closes = [float(c.get('trade_price') or c.get('close')) for c in candles]
-            
-            # Simple RSI calculation or import
-            rsi = calculate_rsi(closes, 14)
-            return rsi
-        except Exception as e:
-            logging.warning(f"Failed to calculate 15m RSI: {e}")
-            return None
-
-    def get_rsi_5m(self) -> float:
-        """Calculate 5-minute RSI for Trailing Buy Filter"""
-        try:
-            # Fetch 5m candles
-            candles = self.exchange.get_candles(self.ticker, interval="minutes/5", count=100)
-            if not candles or len(candles) < 15:
-                return None
-            
-            # FIX: Ensure chronological order
-            if len(candles) > 1:
-                 c0 = candles[0]
-                 c_last = candles[-1]
-                 t0 = c0.get('timestamp') or c0.get('candle_date_time_kst') or 0
-                 t_last = c_last.get('timestamp') or c_last.get('candle_date_time_kst') or 0
-                 if str(t0) > str(t_last):
-                     candles.reverse()
-
-            closes = [float(c.get('trade_price') or c.get('close')) for c in candles]
-            
-            # Simple RSI calculation or import
-            rsi = calculate_rsi(closes, 14)
-            return rsi
-        except Exception as e:
-            logging.warning(f"Failed to calculate 5m RSI: {e}")
-            return None
-
-    def tick(self, current_price: float = None, open_orders: list = None):
+    def tick(self, current_price: float = None, open_orders: list = None, market_context: dict = None):
         """Main tick function called periodically to check and update splits."""
         with self.lock:
-            # Update Hourly RSI every 60 seconds for UI
-            # Update Hourly RSI every 30 minutes (1800s) for UI
-            # Also check for initial delay to prevent startup spike
+            # Update Hourly RSI removed. We now relay on 5m RSI calculated in Price Logic logic tick.
+            # If logic_price is active, it calls get_rsi_5m() every tick, which updates state.
             current_time = time.time()
-            
-            if current_time - self.start_time > self.initial_rsi_delay:
-                if current_time - self.rsi_logic.last_hourly_rsi_update >= self.RSI_UPDATE_INTERVAL_SEC:
-                    self.calculate_hourly_rsi()
-                    self.rsi_logic.last_hourly_rsi_update = current_time
-
-            # Update Daily RSI
-            # We now update this every 30 minutes to support "Intraday Dynamic RSI" strategies.
-            # This allows the bot to react to intraday crashes where the projected Daily RSI dips below the threshold.
-            if current_time - self.rsi_logic.last_rsi_update >= self.RSI_UPDATE_INTERVAL_SEC:
-                self.calculate_rsi()
-                self.rsi_logic.last_rsi_update = current_time
+            pass
 
             if not self.is_running:
                 return
@@ -635,11 +478,13 @@ class SevenSplitStrategy(BaseStrategy):
                 logging.error(f"Failed to process open orders: {e}")
                 return
 
-            # Dispatch based on strategy mode
-            if self.config.strategy_mode == "RSI":
-                self.rsi_logic.tick(current_price, open_order_uuids)
-            else:
-                self.price_logic.tick(current_price, open_order_uuids)
+            # 1. Manage Orders (Check fills, creation of sells, cleanups)
+            self._manage_orders(open_order_uuids)
+
+            # 2. Dispatch via WatchModeLogic (Dispatcher)
+            # This handles RSI calculation, Watch Mode checks, and strategy delegation
+            self.watch_logic.run_tick(current_price, market_context=market_context)
+
 
     def _manage_orders(self, open_order_uuids: set):
         """Common order management logic (Check fills, timeouts, cleanup)."""
@@ -655,7 +500,15 @@ class SevenSplitStrategy(BaseStrategy):
                             created_dt = datetime.fromisoformat(split.created_at)
                             if created_dt.tzinfo is None:
                                 created_dt = created_dt.replace(tzinfo=timezone.utc)
-                            elapsed = (datetime.now(timezone.utc) - created_dt).total_seconds()
+                            
+                            now_utc = datetime.now(timezone.utc)
+                            elapsed = (now_utc - created_dt).total_seconds()
+                            
+                            # Timezone mismatch correction (KST vs UTC)
+                            if elapsed < 0:
+                                 created_dt_corrected = created_dt - timedelta(hours=9)
+                                 elapsed = (now_utc - created_dt_corrected).total_seconds()
+
                             if elapsed > self.ORDER_TIMEOUT_SEC: 
                                 is_timeout = True
                         except:
@@ -673,12 +526,6 @@ class SevenSplitStrategy(BaseStrategy):
                     self.splits.remove(split)
                     self.save_state()
 
-            elif split.status == "BUY_FILLED":
-                # Buy filled, create sell order ONLY if NOT in RSI mode
-                # In RSI mode, we hold until RSI sell signal
-                if self.config.strategy_mode != "RSI":
-                    self._create_sell_order(split)
-
             elif split.status == "PENDING_SELL":
                 if split.sell_order_uuid:
                     # Only check if order is NOT in open list (meaning it's done/cancelled)
@@ -692,6 +539,10 @@ class SevenSplitStrategy(BaseStrategy):
                     logging.info(f"Found zombie split {split.id} (PENDING_SELL with no UUID). Reverting to BUY_FILLED.")
                     split.status = "BUY_FILLED"
                     self.save_state()
+
+        # Phase 2: Strategy-specific management (e.g., Buy Timeouts, Sell Creation)
+        if self.config.strategy_mode != "RSI":
+             self.price_logic.manage_active_positions(open_order_uuids)
 
         # Remove completed splits
         self._cleanup_filled_splits()
@@ -707,21 +558,9 @@ class SevenSplitStrategy(BaseStrategy):
             self.splits.remove(split)
             self.save_state()
 
-        # Update last_buy_price to the lowest buy price of remaining splits
-        if splits_to_remove:
-            if self.splits:
-                # Find the split with the lowest buy_price
-                lowest_split = min(self.splits, key=lambda s: s.buy_price)
-                if self.last_buy_price != lowest_split.buy_price:
-                    logging.info(f"Adjusting last_buy_price from {self.last_buy_price} to {lowest_split.buy_price} (lowest active split)")
-                    self.last_buy_price = lowest_split.buy_price
-                    self.save_state()
-            else:
-                # If no splits remain, last_buy_price will be handled by the rebuy strategy in _check_create_new_buy_split
-                if self.last_buy_price is not None:
-                    logging.info(f"All splits cleared. Resetting last_buy_price to None.")
-                    self.last_buy_price = None
-                    self.save_state()
+        # Delegate last_buy_price recalibration
+        if self.config.strategy_mode != "RSI":
+             self.price_logic.handle_split_cleanup()
 
     def _sync_pending_orders(self):
         """Actively check status of all pending orders with the exchange."""
@@ -738,166 +577,14 @@ class SevenSplitStrategy(BaseStrategy):
                 except Exception as e:
                     logging.warning(f"Error syncing sell order {split.sell_order_uuid}: {e}")
 
-    def _create_buy_split(self, target_price: float, use_market_order: bool = False, buy_rsi: float = None):
-        """Create a new buy split at the given target price."""
-        # Circuit Breaker: Check for insufficient funds cool-down
-        if time.time() < self._insufficient_funds_until:
-            logging.warning(f"Skipping buy due to insufficient funds cool-down (until {datetime.fromtimestamp(self._insufficient_funds_until)})")
-            return None
-
-        # Delegated Validation (Based on Strategy Mode)
-        # 1. Identify active logic module
-        active_logic = self.rsi_logic if self.config.strategy_mode == "RSI" else self.price_logic
-        
-        # 2. Check Strategy-Specific Rules (e.g. Price Range)
-        if not active_logic.validate_buy(target_price):
-            return None
-
-        # Check Budget
-        total_invested = sum(s.buy_amount for s in self.splits)
-        if total_invested + self.config.investment_per_split > self.budget:
-            logging.warning(f"Budget exceeded for Strategy {self.strategy_id}. Invested: {total_invested}, Budget: {self.budget}. Skipping buy.")
-            return None
-
-        split = SplitState(
-            id=self.next_split_id,
-            status="PENDING_BUY",
-            buy_price=target_price,
-            created_at=datetime.now(timezone.utc).isoformat(),
-            buy_rsi=buy_rsi
-        )
-
-        # Normalize price to valid tick size
-        target_price = self.exchange.normalize_price(target_price)
-
-        # Calculate volume for limit order
-        amount = self.config.investment_per_split
-        
-        # Calculate volume for limit order
-        amount = self.config.investment_per_split
-        
-        # DEBUG: Check real balance before ordering
-        try:
-            current_balance = self.exchange.get_balance("KRW")
-            logging.info(f"Attempting buy. Amount: {amount}, Current KRW Balance: {current_balance}, Budget: {self.budget}")
-            if current_balance < amount:
-                 logging.warning(f"Warning: Current balance ({current_balance}) is less than order amount ({amount})!")
-        except Exception as e:
-            logging.warning(f"Failed to check balance before buy: {e}")
-
-        if amount < self.MIN_ORDER_AMOUNT_KRW:
-            logging.error(f"Investment amount {amount} is less than minimum order amount ({self.MIN_ORDER_AMOUNT_KRW} KRW). Skipping.")
-            return None
-
-        # Calculate volume ensuring it meets the minimum amount (round up to 8 decimal places)
-        # 1.00000001 BTC * price > amount
-        import math
-        volume = math.ceil((amount / target_price) * 100000000) / 100000000
-
-        logging.info(f"Attempting buy order: {self.ticker}, Price: {target_price}, Volume: {volume}, Total: {target_price * volume}, MarketOrder: {use_market_order}")
-
-        try:
-            result = None
-            if use_market_order:
-                # Place market buy order (price = amount in KRW)
-                result = self.exchange.buy_market_order(self.ticker, amount)
-            else:
-                # Place limit buy order
-                result = self.exchange.buy_limit_order(self.ticker, target_price, volume)
-
-            if result:
-                split.buy_order_uuid = result.get('uuid')
-                split.buy_amount = amount
-                
-                if use_market_order:
-                    # Estimate volume for now, will be updated when filled
-                    split.buy_volume = amount / target_price
-                else:
-                    split.buy_volume = volume
-                
-                # Prevent duplicate append
-                if not any(s.id == split.id for s in self.splits):
-                    self.splits.append(split)
-                    self.next_split_id += 1
-                    self.last_buy_price = target_price
-                    logging.info(f"Created buy split {split.id} at {target_price} with order {split.buy_order_uuid} (Market: {use_market_order})")
-                    self.save_state()
-                return split
-        except Exception as e:
-            error_msg = str(e)
-            # Check for insufficient funds to trigger circuit breaker
-            # Check for insufficient funds to trigger circuit breaker
-            if "Insufficient funds" in error_msg or "insufficient_funds" in error_msg:
-                # Use shorter cool-down for Mock/Sim (60s), longer for Real (3600s)
-                import os
-                # self.exchange is ExchangeService, so we access the inner exchange object
-                inner_exchange = getattr(self.exchange, 'exchange', self.exchange)
-                server_url = getattr(inner_exchange, 'server_url', '')
-                
-                is_mock = "localhost" in server_url or "127.0.0.1" in server_url or os.getenv("MODE", "").upper() == "MOCK"
-                cooldown = 60 if is_mock else 3600
-                
-                logging.error(f"Insufficient funds! Triggering cool-down for {cooldown}s. Error: {e}")
-                self._insufficient_funds_until = time.time() + cooldown
-                return None
-                
-            logging.warning(f"Failed to create buy order at {target_price}: {e}")
-            # Retry logic
-            if "invalid_price" in str(e) or "400" in str(e):
-                logging.info(f"Retrying buy order with re-normalization...")
-                try:
-                    new_target_price = self.exchange.normalize_price(target_price)
-                    logging.info(f"Retry normalization: {target_price} -> {new_target_price}")
-                    result = self.exchange.buy_limit_order(self.ticker, new_target_price, volume)
-                    if result:
-                        split.buy_order_uuid = result.get('uuid')
-                        split.buy_amount = amount
-                        split.buy_volume = volume
-                        
-                        if not any(s.id == split.id for s in self.splits):
-                            self.splits.append(split)
-                            self.next_split_id += 1
-                            self.last_buy_price = new_target_price
-                            logging.info(f"Retry successful: Created buy split {split.id} at {new_target_price}")
-                            self.save_state()
-                        return split
-                except Exception as retry_e:
-                    logging.error(f"Retry failed: {retry_e}")
-            return None
+    # _create_buy_split removed. Logic modules now handle order creation directly via exchange.
 
     def _check_buy_order(self, split: SplitState):
         """Check if buy order is filled."""
         if not split.buy_order_uuid:
             return
 
-        # Timeout Logic: If pending for > 30 minutes (1800s), switch to market order
-        if split.status == "PENDING_BUY" and split.created_at:
-            try:
-                created_dt = datetime.fromisoformat(split.created_at)
-                if created_dt.tzinfo is None:
-                    created_dt = created_dt.replace(tzinfo=timezone.utc)
-                elapsed = (datetime.now(timezone.utc) - created_dt).total_seconds()
-                if elapsed > self.ORDER_TIMEOUT_SEC:  # Timeout check
-                    current_price = self.exchange.get_current_price(self.ticker)
-                    # Check if current price is within max_price (if set)
-                    if current_price and (self.config.max_price <= 0 or current_price <= self.config.max_price):
-                        logging.info(f"Buy order {split.buy_order_uuid} timed out ({elapsed:.1f}s). Switching to Market Order.")
-                        try:
-                            # Attempt to cancel existing limit order
-                            self.exchange.cancel_order(split.buy_order_uuid)
-                            
-                            # Place market buy order
-                            res = self.exchange.buy_market_order(self.ticker, split.buy_amount)
-                            if res:
-                                split.buy_order_uuid = res.get('uuid')
-                                split.created_at = datetime.now(timezone.utc).isoformat()  # Reset timer
-                                logging.info(f"Placed market order {split.buy_order_uuid} for split {split.id}")
-                                self.save_state()
-                                return
-                        except Exception as e:
-                            logging.warning(f"Failed to switch to market order (cancel failed?): {e}")
-            except Exception as e:
-                logging.error(f"Error in buy timeout check: {e}")
+        # Status Check Only (Timeout/Market conversion moved to logic modules)
 
         try:
             order = self.exchange.get_order(split.buy_order_uuid)
@@ -915,24 +602,13 @@ class SevenSplitStrategy(BaseStrategy):
                     split.status = "BUY_FILLED"
                     split.bought_at = datetime.now(timezone.utc).isoformat()
                     
-                    # Calculate actual buy price and volume using helper
-                    actual_price, volume = self._calculate_execution_metrics(order, fallback_price=split.buy_price)
+                    # Sync buy_price to actual for display consistency
                     split.actual_buy_price = actual_price
+                    split.buy_price = actual_price
                     split.buy_volume = volume # Use actual volume from trades/order if available
                     
-                    # If helper returned volume as 0 (weird edge case), fallback to executed_vol
                     if split.buy_volume <= 0:
                         split.buy_volume = executed_vol
-
-                    # Sync buy_price to actual for display consistency
-                    split.buy_price = split.actual_buy_price
-
-                    # Update strategy's last_buy_price if this is the latest split
-                    # This ensures next grid levels are calculated based on real execution price
-                    if self.splits:
-                        latest_split_id = max(s.id for s in self.splits)
-                        if split.id == latest_split_id:
-                            self.last_buy_price = split.actual_buy_price
 
                     logging.info(f"Buy order {state} for split {split.id}. Price: {split.actual_buy_price}, Vol: {split.buy_volume}")
                     self.save_state()
@@ -984,43 +660,7 @@ class SevenSplitStrategy(BaseStrategy):
             price = float(order.get('price') or fallback_price or 0.0)
             return price, executed_vol
 
-    def _create_sell_order(self, split: SplitState):
-        """Create sell order after buy is filled."""
-        # Calculate sell price based on sell_rate
-        raw_sell_price = split.actual_buy_price * (1 + self.config.sell_rate)
-        # Normalize price to valid tick size
-        sell_price = self.exchange.normalize_price(raw_sell_price)
-        
-        # Debug log for price calculation
-        tick_size = self.exchange.get_tick_size(raw_sell_price)
-        logging.info(f"Sell Order Debug: Raw={raw_sell_price}, Normalized={sell_price}, TickSize={tick_size}, Ticker={self.ticker}")
-
-        split.target_sell_price = sell_price
-
-        try:
-            # Place limit sell order
-            result = self.exchange.sell_limit_order(self.ticker, sell_price, split.buy_volume)
-
-            if result:
-                split.sell_order_uuid = result.get('uuid')
-                split.status = "PENDING_SELL"
-                logging.info(f"Created sell order {split.sell_order_uuid} for split {split.id} at {sell_price}")
-                self.save_state()
-        except Exception as e:
-            logging.warning(f"Failed to create sell order for split {split.id} at {sell_price}: {e}")
-            # Retry logic
-            if "invalid_price" in str(e) or "400" in str(e):
-                logging.info(f"Retrying sell order for split {split.id} with re-normalization...")
-                try:
-                    sell_price = self.exchange.normalize_price(raw_sell_price)
-                    result = self.exchange.sell_limit_order(self.ticker, sell_price, split.buy_volume)
-                    if result:
-                        split.sell_order_uuid = result.get('uuid')
-                        split.status = "PENDING_SELL"
-                        logging.info(f"Retry successful: Created sell order {split.sell_order_uuid} for split {split.id} at {sell_price}")
-                        self.save_state()
-                except Exception as retry_e:
-                    logging.error(f"Retry failed for split {split.id}: {retry_e}")
+    # _create_sell_order removed (delegated to logic modules)
 
     def _check_sell_order(self, split: SplitState):
         """Check if sell order is filled."""
@@ -1181,9 +821,12 @@ class SevenSplitStrategy(BaseStrategy):
                 "total_valuation": total_valuation,
                 "status_counts": status_counts,
                 "last_buy_price": self.last_buy_price,
+                "manual_target_price": self.manual_target_price,
                 "trade_history": self.trade_history[:10], # Return last 10 trades
                 "rsi": self.rsi_logic.current_rsi,  # Expose RSI
                 "rsi_short": self.rsi_logic.current_rsi_short, # Expose Short RSI
                 "rsi_daily": self.rsi_logic.current_rsi_daily, # Expose Daily RSI
-                "rsi_daily_short": self.rsi_logic.current_rsi_daily_short # Expose Daily Short RSI
+                "rsi_daily_short": self.rsi_logic.current_rsi_daily_short, # Expose Daily Short RSI
+                "is_watching": self.is_watching,
+                "watch_lowest_price": self.watch_lowest_price
             }

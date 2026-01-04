@@ -6,9 +6,10 @@ Uses SQLite with SQLAlchemy ORM.
 from sqlalchemy import create_engine, Column, Integer, Float, String, Boolean, DateTime, Text, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import os
+import logging
 
 Base = declarative_base()
 
@@ -36,8 +37,8 @@ class StrategyState(Base):
     last_sell_price = Column(Float, nullable=True)
 
     # Timestamps
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class Split(Base):
@@ -59,9 +60,9 @@ class Split(Base):
     sell_order_id = Column(String(100), nullable=True)
 
     # Timestamps
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     buy_filled_at = Column(DateTime, nullable=True)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class Trade(Base):
@@ -90,8 +91,8 @@ class Trade(Base):
     sell_order_id = Column(String(100), nullable=True)
 
     # Timestamps
-    timestamp = Column(DateTime, default=datetime.now)
-    created_at = Column(DateTime, default=datetime.now)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class SystemConfig(Base):
@@ -104,7 +105,7 @@ class SystemConfig(Base):
     upbit_secret_key = Column(String(100), nullable=True)
 
     # Timestamps
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class MockAccount(Base):
@@ -115,7 +116,7 @@ class MockAccount(Base):
     currency = Column(String(20), unique=True, nullable=False, index=True)
     balance = Column(Float, nullable=False, default=0.0)
     avg_buy_price = Column(Float, nullable=False, default=0.0)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class MockOrder(Base):
@@ -141,8 +142,48 @@ class MockOrder(Base):
     trades_count = Column(Integer, default=0)
     
     # Timestamps
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class CandleMinutes5(Base):
+    """5-minute candles"""
+    __tablename__ = 'candles_min_5'
+    ticker = Column(String(20), primary_key=True)
+    timestamp = Column(Float, primary_key=True)
+    open = Column(Float, nullable=False)
+    high = Column(Float, nullable=False)
+    low = Column(Float, nullable=False)
+    close = Column(Float, nullable=False)
+    volume = Column(Float, nullable=False)
+    kst_time = Column(String(30), nullable=True)
+    utc_time = Column(String(30), nullable=True)
+
+class CandleMinutes60(Base):
+    """1-hour candles"""
+    __tablename__ = 'candles_min_60'
+    ticker = Column(String(20), primary_key=True)
+    timestamp = Column(Float, primary_key=True)
+    open = Column(Float, nullable=False)
+    high = Column(Float, nullable=False)
+    low = Column(Float, nullable=False)
+    close = Column(Float, nullable=False)
+    volume = Column(Float, nullable=False)
+    kst_time = Column(String(30), nullable=True)
+    utc_time = Column(String(30), nullable=True)
+
+class CandleDays(Base):
+    """Daily candles"""
+    __tablename__ = 'candles_days'
+    ticker = Column(String(20), primary_key=True)
+    timestamp = Column(Float, primary_key=True)
+    open = Column(Float, nullable=False)
+    high = Column(Float, nullable=False)
+    low = Column(Float, nullable=False)
+    close = Column(Float, nullable=False)
+    volume = Column(Float, nullable=False)
+    kst_time = Column(String(30), nullable=True)
+    utc_time = Column(String(30), nullable=True)
 
 
 class DatabaseManager:
@@ -156,6 +197,13 @@ class DatabaseManager:
 
         self.db_path = db_path
         self.engine = create_engine(f'sqlite:///{db_path}', echo=False)
+        
+        # Enable WAL mode for better concurrency
+        from sqlalchemy import text
+        with self.engine.connect() as conn:
+            conn.execute(text("PRAGMA journal_mode=WAL"))
+            conn.commit()
+
         Base.metadata.create_all(self.engine)
         self.SessionLocal = sessionmaker(bind=self.engine)
 
@@ -487,6 +535,143 @@ class DatabaseManager:
             if order:
                 session.delete(order)
                 session.commit()
+        finally:
+            session.close()
+    def _get_candle_model(self, interval: str):
+        mapping = {
+            "minutes/5": CandleMinutes5,
+            "minutes/60": CandleMinutes60,
+            "days": CandleDays
+        }
+        return mapping.get(interval)
+
+    # Candle cache operations
+    def save_candles(self, ticker: str, interval: str, candle_list: list):
+        """Save a list of candles to DB using UPSERT (Replace if exists)"""
+        session = self.get_session()
+        try:
+            from sqlalchemy.dialects.sqlite import insert
+            from datetime import datetime, timezone
+
+            model = self._get_candle_model(interval)
+            if not model:
+                return
+
+            # Prepare and Sort data by time ascending
+            prepared_data = []
+            for c in candle_list:
+                # 1. Normalize Timestamp - Use numeric timestamp first
+                ts_raw = c.get('timestamp') or c.get('time')
+                if ts_raw:
+                    ts = float(ts_raw)
+                    if ts > 10000000000: ts /= 1000.0
+                else:
+                    utc_str = c.get('candle_date_time_utc') or c.get('utc_time')
+                    if not utc_str: continue
+                    try:
+                        dt_str = utc_str.replace('Z', '+00:00')
+                        ts = datetime.fromisoformat(dt_str).timestamp()
+                    except: continue
+
+                # 2. Normalize to Interval Start
+                if interval == "minutes/5": ts = (ts // 300) * 300
+                elif interval == "minutes/60": ts = (ts // 3600) * 3600
+                elif interval == "days": ts = (ts // 86400) * 86400
+
+                prepared_data.append((ts, c))
+
+            # Sort by timestamp ASC
+            prepared_data.sort(key=lambda x: x[0])
+
+            last_valid_ts = None
+            for ts, c in prepared_data:
+                opening = c.get('opening_price') or c.get('open')
+                high = c.get('high_price') or c.get('high')
+                low = c.get('low_price') or c.get('low')
+                close = c.get('trade_price') or c.get('close') or c.get('c')
+                volume = c.get('candle_acc_trade_volume') or c.get('volume') or 0.0
+                kst = c.get('candle_date_time_kst') or c.get('kst_time')
+
+                if opening is None or close is None:
+                    continue
+
+                candle_data = {
+                    'ticker': ticker,
+                    'timestamp': float(ts),
+                    'open': float(opening),
+                    'high': float(high or opening),
+                    'low': float(low or opening),
+                    'close': float(close),
+                    'volume': float(volume),
+                    'kst_time': kst,
+                    'utc_time': datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
+                }
+                
+                index_elements = ['ticker', 'timestamp']
+
+                stmt = insert(model).values(**candle_data)
+                # SQLite Specific: ON CONFLICT REPLACE
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=index_elements,
+                    set_={
+                        'open': candle_data['open'],
+                        'high': candle_data['high'],
+                        'low': candle_data['low'],
+                        'close': candle_data['close'],
+                        'volume': candle_data['volume'],
+                        'kst_time': candle_data['kst_time'],
+                        'utc_time': candle_data['utc_time']
+                    }
+                )
+                session.execute(stmt)
+            
+            session.commit()
+        except Exception as e:
+            print(f"Error saving candles: {e}")
+            session.rollback()
+        finally:
+            session.close()
+
+    def get_candles(self, ticker: str, interval: str, start_ts: float, end_ts: float = None) -> list:
+        """Fetch candles from DB for a given range"""
+        session = self.get_session()
+        try:
+            model = self._get_candle_model(interval)
+            if not model:
+                return []
+                
+            query = session.query(model).filter(model.ticker == ticker)
+            
+            if start_ts:
+                query = query.filter(model.timestamp >= start_ts)
+            
+            if end_ts:
+                query = query.filter(model.timestamp <= end_ts)
+            
+            candles = query.order_by(model.timestamp.asc()).all()
+            
+            # Convert to dict for compatibility with Upbit API format
+            results = []
+            for c in candles:
+                # Always ignore stored utc_val and use timestamp for truth
+                from datetime import datetime, timezone
+                utc_val = datetime.fromtimestamp(c.timestamp, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
+                
+                results.append({
+                    'market': c.ticker,
+                    'candle_date_time_kst': c.kst_time,
+                    'candle_date_time_utc': utc_val,
+                    'opening_price': c.open,
+                    'high_price': c.high,
+                    'low_price': c.low,
+                    'trade_price': c.close,
+                    'candle_acc_trade_volume': c.volume,
+                    'unit': 5,
+                    'timestamp': int(c.timestamp * 1000), # ms for API compliance
+                    'ticker': c.ticker,
+                    'interval': interval
+                })
+            return results
         finally:
             session.close()
 

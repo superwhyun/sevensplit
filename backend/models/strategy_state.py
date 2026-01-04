@@ -1,5 +1,12 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
+
+
+class PriceSegment(BaseModel):
+    min_price: float
+    max_price: float
+    investment_per_split: float
+    max_splits: int
 
 class StrategyConfig(BaseModel):
     investment_per_split: float = 100000.0 # KRW per split
@@ -39,6 +46,9 @@ class StrategyConfig(BaseModel):
     use_trailing_buy: bool = False
     trailing_buy_rebound_percent: float = 0.2 # 0.2% Rebound threshold (default)
     trailing_buy_batch: bool = True # If True, buy all accumulated splits on rebound. If False, buy only one.
+
+    # Segmented Price Strategy
+    price_segments: List[PriceSegment] = []
 
 class SplitState(BaseModel):
     id: int

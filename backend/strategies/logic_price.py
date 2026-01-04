@@ -1,439 +1,340 @@
 import logging
 import time
+import math
+from datetime import datetime, timezone, timedelta
+from models.strategy_state import SplitState
+
+from .logic_watch import WatchModeLogic
 
 class PriceStrategyLogic:
     def __init__(self, strategy):
         self.strategy = strategy
-        
-        # Trailing Buy State is now managed by self.strategy (Persistent)
-        # self.is_watching and self.watch_lowest_price are accessed via strategy
+        # self.watch_logic is now accessible via self.strategy.watch_logic
+        self._insufficient_funds_until = 0
 
-    def validate_buy(self, price: float) -> bool:
-        """Validate buy price against strategy constraints (Price Range)."""
-        if price < self.strategy.config.min_price:
-            logging.warning(f"Price Logic: Target price {price} below min_price {self.strategy.config.min_price}. Skipping.")
-            return False
-            
-        if self.strategy.config.max_price > 0 and price > self.strategy.config.max_price:
-            logging.warning(f"Price Logic: Target price {price} above max_price {self.strategy.config.max_price}. Skipping.")
-            return False
-            
-        return True
+    def execute_buy_logic(self, current_price: float, rsi_5m: float, just_exited_watch: bool = False, market_context: dict = None):
+        """
+        Execute core buy logic.
+        Called by WatchModeLogic after passing safety checks.
 
-    def tick(self, current_price: float, open_order_uuids: set):
-        """Original Price Grid Strategy Logic"""
-        self.strategy._manage_orders(open_order_uuids)
+        just_exited_watch: If True, buy immediately at current price (WATCH_END trigger)
+        """
+        # 1. Guard: Check Budget & Trade Limits
+        if not self.strategy.has_sufficient_budget(market_context=market_context):
+             logging.info("Price Logic: Buy skipped due to insufficient budget.")
+             return
+        if not self.strategy.check_trade_limit():
+             logging.info("Price Logic: Buy skipped due to trade limit (24h).")
+             return
 
-        # Check if we need to create new buy split based on price drop
-        if self.strategy.check_trade_limit():
-            # Guard: Check Budget First
-            if not self.strategy.has_sufficient_budget():
-                # We can return silently or log sparingly. 
-                # Since this runs every tick, silent return is better to avoid spam.
-                # The user knows budget is full via UI.
+        # Check active positions
+        active_splits = [s for s in self.strategy.splits if s.status in ["PENDING_BUY", "BUY_FILLED", "PENDING_SELL"]]
+        has_active_positions = len(active_splits) > 0
+
+        # Determine the target price for the NEXT buy
+        target_price = None
+        reference_msg = ""
+        is_grid_buy = False
+        levels_crossed = 1
+
+        # --- PRIORITY: Manual Target Overrides All ---
+        if self.strategy.manual_target_price is not None:
+            target_price = self.strategy.manual_target_price
+            reference_msg = "Manual Override Target"
+        elif just_exited_watch:
+            # WATCH_END: Buy immediately at current price
+            target_price = current_price
+            reference_msg = "Watch Mode Exit - Rebound Confirmed"
+            if has_active_positions and self.strategy.last_buy_price:
+                is_grid_buy = True  # Treat as grid buy for proper next target calculation
+        elif not has_active_positions:
+            # --- CASE A: EMPTY POSITION ---
+            min_price = self.strategy.config.min_price
+            max_price = self.strategy.config.max_price
+
+            if current_price < min_price:
+                logging.debug(f"Price Logic: Current price {current_price} below min_price {min_price}")
                 return
-            
-            self._check_create_new_buy_split(current_price)
-
-    def _check_create_new_buy_split(self, current_price: float):
-        """Check if we should create a new buy split based on price drop and rebuy strategy."""
-        
-        # Check if all positions are cleared
-        has_active_positions = any(
-            s.status in ["PENDING_BUY", "BUY_FILLED", "PENDING_SELL"]
-            for s in self.strategy.splits
-        )
-
-        if not has_active_positions:
-            # Try to handle empty state logic
-            if self._handle_empty_positions(current_price):
+            if max_price > 0 and current_price > max_price:
+                logging.debug(f"Price Logic: Current price {current_price} above max_price {max_price}")
                 return
 
-        # Standard logic for ongoing positions or "last_buy_price" strategy
-        self._handle_active_positions(current_price)
-
-    def _handle_empty_positions(self, current_price: float) -> bool:
-        """Handle logic when no active positions exist. Returns True if action taken."""
-        should_buy = False
-        reference_price_log = ""
-
-        if self.strategy.config.rebuy_strategy == "reset_on_clear":
-            # Strategy 1: Reset and start at current price
-            should_buy = True
-            reference_price_log = f"Reset on clear (Start Price: {current_price})"
-            
-        elif self.strategy.config.rebuy_strategy == "last_sell_price":
-            # Strategy 2: Use last sell price as reference
-            reference_price = self.strategy.last_sell_price if self.strategy.last_sell_price is not None else current_price
-            
-            if self.strategy.last_sell_price is not None:
-                logging.info(f"All positions cleared. Using last sell price {reference_price} as reference")
+            if self.strategy.config.rebuy_strategy == "reset_on_clear":
+                 target_price = current_price
+                 reference_msg = "Initial Entry (Reset on Clear)"
+            elif self.strategy.config.rebuy_strategy == "last_sell_price":
+                 ref_price = self.strategy.last_sell_price if self.strategy.last_sell_price else current_price
+                 target_price = ref_price * (1 - self.strategy.config.buy_rate)
+                 reference_msg = f"Rebuy from Last Sell {ref_price}"
+        else:
+            # --- CASE B: ACTIVE POSITION ---
+            if self.strategy.last_buy_price is None:
+                 target_price = current_price
+                 reference_msg = "Safety Entry (No last_buy_price)"
             else:
-                logging.info(f"No last sell price, using current price: {current_price}")
+                 target_price = self.strategy.last_buy_price * (1 - self.strategy.config.buy_rate)
+                 reference_msg = f"Grid Level from {self.strategy.last_buy_price}"
+                 is_grid_buy = True
 
-            next_buy_price = reference_price * (1 - self.strategy.config.buy_rate)
+        # Execution check
+        if target_price is not None:
+             # STRICT CHECK: Even if exiting watch mode, price MUST be below target
+             if current_price <= target_price:
+                  if not self.validate_buy(current_price):
+                      logging.info(f"Price Logic: Buy at {current_price} blocked by validation (range or max_splits).")
+                      return
+
+                  if is_grid_buy:
+                      levels_crossed = self._calculate_levels_crossed(self.strategy.last_buy_price, current_price)
+                      # Respect the 'batch buy' configuration
+                      if not self.strategy.config.trailing_buy_batch and levels_crossed > 1:
+                          levels_crossed = 1
+
+                  next_target = current_price * (1 - self.strategy.config.buy_rate)
+                  msg = (f"Buy Executed.\n"
+                         f"- Condition: {reference_msg}.\n"
+                         f"- Current Price: {current_price}\n"
+                         f"- Buy Target Was: {target_price:.1f}\n" 
+                         f"- Next Buy Target: {next_target:.1f}")
+
+                  # Batch Buy Logic: Create orders for each level crossed
+                  created_count = 0
+                  log_details = []
+                  
+                  for i in range(levels_crossed):
+                      # Buy at the current market price
+                      split = self._execute_single_buy(current_price, buy_rsi=rsi_5m)
+                      if split:
+                          created_count += 1
+                          log_details.append(f"Split #{split.id}: Entry @ {current_price:.1f}")
+                      else:
+                          break
+
+                  if created_count > 0:
+                      # Next target is Buy Rate below the ACTUAL price we just bought at
+                      final_next_target = current_price * (1 - self.strategy.config.buy_rate)
+                      
+                      msg = (f"Buy Executed ({'Grid' if is_grid_buy else 'Initial'}).\n"
+                             f"- Condition: {reference_msg}\n"
+                             f"- Market Price: {current_price:.1f}\n")
+                      
+                      if log_details:
+                          msg += "- " + "\n- ".join(log_details) + "\n"
+                          
+                      msg += f"- Next Buy Target: {final_next_target:.1f}"
+                      
+                      self.strategy.log_event("INFO", "BUY_EXEC", msg)
+                      # --- CLEAR MANUAL TARGET AFTER EXECUTION ---
+                      if self.strategy.manual_target_price is not None:
+                          self.strategy.set_manual_target(None)
+             else:
+                  # Current price is HIGHER than target
+                  logging.info(f"Price Logic: Price ({current_price}) is currently ABOVE target ({target_price:.1f}). Waiting for dip.")
+        else:
+             logging.debug("Price Logic: No valid buy target price set.")
+
+    def manage_active_positions(self, open_order_uuids: set):
+        """
+        Handle strategy-specific order life-cycle:
+        1. Convert timed-out Limit Buys to Market Buys
+        2. Create Sell orders for filled Buys
+        """
+        for split in list(self.strategy.splits):
+            # 1. Buy Order Timeout (Limit -> Market)
+            if split.status == "PENDING_BUY" and split.buy_order_uuid:
+                if self._check_buy_timeout(split, open_order_uuids):
+                    # Market conversion handled inside _check_buy_timeout
+                    pass
             
-            if current_price <= next_buy_price:
-                should_buy = True
-                reference_price_log = f"Price drop from last sell {reference_price} -> {current_price}"
+            # 2. Sell Order Creation
+            elif split.status == "BUY_FILLED":
+                # Price Strategy always places sell order immediately upon fill
+                self._create_sell_order(split)
 
-        if should_buy:
-             # Safety Check: Enforce Trailing Buy (RSI) even for re-entry
-             if self.strategy.config.use_trailing_buy:
-                 rsi_5m = self.strategy.get_rsi_5m()
-                 threshold = self.strategy.config.rsi_buy_max
-                 
-                 # --- WATCH MODE HANDLING ---
-                 if self.strategy.is_watching:
-                     # 1. Update Lowest Price
-                     if self.strategy.watch_lowest_price is None or current_price < self.strategy.watch_lowest_price:
-                         self.strategy.watch_lowest_price = current_price
-                         self.strategy.save_state()
-
-                     # 2. Check Rebound
-                     REBOUND_THRESHOLD = self.strategy.config.trailing_buy_rebound_percent / 100.0
-                     rebound_target = self.strategy.watch_lowest_price * (1 + REBOUND_THRESHOLD)
-                     is_rebound_ok = current_price >= rebound_target
-                     
-                     # 3. Check RSI (Lazy)
-                     is_rsi_ok = False
-                     if is_rebound_ok:
-                         is_rsi_ok = (rsi_5m is not None and rsi_5m > threshold)
-                     
-                     if is_rebound_ok and is_rsi_ok:
-                         # Confirmation: Check if we are still below the ORIGINAL target price
-                         # (Don't buy if we rebounded way above the entry point)
-                         target_price = reference_price * (1 - self.strategy.config.buy_rate)
-                         if current_price > target_price:
-                             msg = f"Trailing Buy [RESET]: Rebound met but price {current_price} > Target {target_price}. Resetting Watch Mode."
-                             logging.info(msg)
-                             self.strategy.log_event("INFO", "WATCH_END", msg)
-                             self.strategy.is_watching = False
-                             self.strategy.watch_lowest_price = None
-                             self.strategy.save_state()
-                             return False # No action (wait for next drop)
-                         
-                         # Proceed to Buy
-                         logging.info(f"Trailing Buy [EXEC]: Rebound met (Low {self.strategy.watch_lowest_price} -> {current_price}) and RSI Safe.")
-                         self.strategy.is_watching = False
-                         self.strategy.watch_lowest_price = None
-                         self.strategy.save_state()
-                         # Continue to execution code below...
-                     else:
-                         # Continue Watching
-                         if is_rebound_ok and not is_rsi_ok:
-                             val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
-                             logging.debug(f"Trailing Buy [WAIT]: Rebound OK({current_price}) but RSI({val_str}) <= {threshold}.")
-                         return True # Handled (Wait)
-
-                 # --- ENTER WATCH MODE ---
-                 # Same logic as before: If not watching, check if we SHOULD watch
-                 should_watch = False
-                 if rsi_5m is None: # Fail-safe
-                     should_watch = True
-                 elif rsi_5m <= threshold:
-                     should_watch = True
-                 
-                 if should_watch:
-                     self.strategy.is_watching = True
-                     self.strategy.watch_lowest_price = current_price
-                     rsi_val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
-                     self.strategy.log_event("WARNING", "WATCH_START", f"Trailing Buy [START]: Re-entry trigger met but RSI(5m) {rsi_val_str} <= {threshold}. Entering Watch Mode.")
-                     self.strategy.save_state()
-                     return True # Handled (entered watch mode)
+    def _check_buy_timeout(self, split: SplitState, open_order_uuids: set) -> bool:
+        """Check if limit buy timed out and convert to market."""
+        if not split.created_at: 
+            return False
             
-             # If safe or trailing off, execute buy
-             # New Logging for Rebuy (Deferred)
-             next_target = current_price * (1 - self.strategy.config.buy_rate)
-             msg = (f"Rebuy/First Buy Executed.\n"
-                    f"- Condition: {reference_price_log}.\n"
-                    f"- Current Price: {current_price}\n"
-                    f"- Next Buy Target: {next_target:.1f}")
+        try:
+            created_dt = datetime.fromisoformat(split.created_at)
+            if created_dt.tzinfo is None:
+                created_dt = created_dt.replace(tzinfo=timezone.utc)
+            
+            elapsed = (datetime.now(timezone.utc) - created_dt).total_seconds()
+            
+            # KST Correction
+            if elapsed < 0:
+                 elapsed = (datetime.now(timezone.utc) - (created_dt - timedelta(hours=9))).total_seconds()
 
-             logging.info(f"{reference_price_log}. Creating buy split at current price")
-             # Use 5m RSI
-             rsi_5m = self.strategy.get_rsi_5m()
-             split = self.strategy._create_buy_split(current_price, use_market_order=True, buy_rsi=rsi_5m)
-             
-             if split:
-                 self.strategy.log_event("INFO", "BUY_EXEC", msg)
-                 # Also update last_buy_price conceptually if needed? 
-                 # _create_buy_split updates last_buy_price.
-                 return True
-             
-             return False
-        
+            if elapsed > self.strategy.ORDER_TIMEOUT_SEC:
+                current_price = self.strategy.exchange.get_current_price(self.strategy.ticker)
+                
+                # Check if still within range
+                if current_price and (self.strategy.config.max_price <= 0 or current_price <= self.strategy.config.max_price):
+                    logging.info(f"Price Logic: Buy order {split.buy_order_uuid} timed out ({elapsed:.1f}s). Switching to Market.")
+                    try:
+                        self.strategy.exchange.cancel_order(split.buy_order_uuid)
+                        res = self.strategy.exchange.buy_market_order(self.strategy.ticker, split.buy_amount)
+                        if res:
+                            split.buy_order_uuid = res.get('uuid')
+                            split.created_at = datetime.now(timezone.utc).isoformat()
+                            self.strategy.save_state()
+                            return True
+                    except Exception as e:
+                        logging.warning(f"Timeout market conversion failed: {e}")
+        except Exception as e:
+            logging.error(f"Error checking buy timeout: {e}")
+            
         return False
 
-    def _handle_active_positions(self, current_price: float):
-        if self.strategy.last_buy_price is None:
-            # No previous buy, check check safety before creating one
-            
-            # Safety Check: Enforce Trailing Buy (RSI) for First Buy
-            if self.strategy.config.use_trailing_buy:
-                 rsi_5m = self.strategy.get_rsi_5m()
-                 threshold = self.strategy.config.rsi_buy_max
-                 
-                 # --- WATCH MODE HANDLING (First Buy) ---
-                 if self.strategy.is_watching:
-                     # 1. Update Lowest Price
-                     if self.strategy.watch_lowest_price is None or current_price < self.strategy.watch_lowest_price:
-                         self.strategy.watch_lowest_price = current_price
-                         self.strategy.save_state()
+    def _create_sell_order(self, split: SplitState):
+        """Create sell order for a filled buy split."""
+        # Use actual_buy_price (real execution price) as the base for sell rate
+        # to ensure users get exactly the configured profit percentage
+        sell_base = split.actual_buy_price if split.actual_buy_price else split.buy_price
+        raw_sell_price = sell_base * (1 + self.strategy.config.sell_rate)
+        sell_price = self.strategy.exchange.normalize_price(raw_sell_price)
+        split.target_sell_price = sell_price
 
-                     # 2. Check Rebound
-                     REBOUND_THRESHOLD = self.strategy.config.trailing_buy_rebound_percent / 100.0
-                     rebound_target = self.strategy.watch_lowest_price * (1 + REBOUND_THRESHOLD)
-                     is_rebound_ok = current_price >= rebound_target
-                     
-                     # 3. Check RSI (Lazy)
-                     is_rsi_ok = False
-                     if is_rebound_ok:
-                         is_rsi_ok = (rsi_5m is not None and rsi_5m > threshold)
-                     
-                     if is_rebound_ok and is_rsi_ok:
-                         # Confirmation: No Target Price check for First Buy (Market Entry)
-                         # OR do we want to respect min_price? validate_buy handles min_price.
-                         
-                         # Proceed to Buy
-                         logging.info(f"Trailing Buy [EXEC]: First Buy Rebound met (Low {self.strategy.watch_lowest_price} -> {current_price}) and RSI Safe.")
-                         self.strategy.is_watching = False
-                         self.strategy.watch_lowest_price = None
-                         self.strategy.save_state()
-                         # Continue to execution code below...
-                     else:
-                         # Continue Watching
-                         if is_rebound_ok and not is_rsi_ok:
-                             val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
-                             logging.debug(f"Trailing Buy [WAIT-First]: Rebound OK({current_price}) but RSI({val_str}) <= {threshold}.")
-                         return # Handled (Wait)
+        try:
+            result = self.strategy.exchange.sell_limit_order(self.strategy.ticker, sell_price, split.buy_volume)
+            if result:
+                split.sell_order_uuid = result.get('uuid')
+                split.status = "PENDING_SELL"
+                logging.info(f"Price Logic: Created sell order {split.sell_order_uuid} at {sell_price}")
+                self.strategy.save_state()
+        except Exception as e:
+            logging.warning(f"Price Logic: Failed to create sell order: {e}")
 
-                 # --- ENTER WATCH MODE ---
-                 should_watch = False
-                 if rsi_5m is None:
-                     should_watch = True
-                 elif rsi_5m <= threshold:
-                     should_watch = True
-                 
-                 if should_watch:
-                     self.strategy.is_watching = True
-                     self.strategy.watch_lowest_price = current_price
-                     rsi_val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
-                     self.strategy.log_event("WARNING", "WATCH_START", f"Trailing Buy [START]: First Buy trigger but RSI(5m) {rsi_val_str} <= {threshold}. Entering Watch Mode.")
-                     self.strategy.save_state()
-                     return
-
-            # New Logging for First Buy (Active Positions Logic)
-            next_target = current_price * (1 - self.strategy.config.buy_rate)
-            msg = (f"First Buy Executed (Safe Mode).\n"
-                   f"- Condition: No previous buy recorded and conditions safe.\n"
-                   f"- Current Price: {current_price}\n"
-                   f"- Next Buy Target: {next_target:.1f}")
-            
-            logging.info(f"No previous buy, and conditions safe (or trailing off). Creating first split at current price: {current_price}")
-            rsi_5m = self.strategy.get_rsi_5m()
-            split = self.strategy._create_buy_split(current_price, buy_rsi=rsi_5m)
-            
-            if split:
-                self.strategy.log_event("INFO", "BUY_EXEC", msg)
+    def handle_split_cleanup(self):
+        """
+        Recalculate last_buy_price based on remaining splits AND last sell price.
+        This ensures we can 'follow' the price back down 0.5% after a sell.
+        """
+        if not self.strategy.is_running:
             return
 
-        # Config
-        next_buy_level = self.strategy.last_buy_price * (1 - self.strategy.config.buy_rate)
-        is_trailing_active = self.strategy.config.use_trailing_buy
-        REBOUND_THRESHOLD = self.strategy.config.trailing_buy_rebound_percent / 100.0
+        # 1. Get the lowest price among active splits
+        active_ref_price = None
+        if self.strategy.splits:
+            active_buys = [s for s in self.strategy.splits if s.status != "SELL_FILLED"]
+            if active_buys:
+                def get_ref_price(s):
+                    return s.actual_buy_price if s.actual_buy_price and s.actual_buy_price > 0 else s.buy_price
+                lowest_split = min(active_buys, key=get_ref_price)
+                active_ref_price = get_ref_price(lowest_split)
 
-        # --- A. Watching Mode (Already waiting) ---
-        if self.strategy.is_watching:
-            # 1. Update Lowest Price
-            if self.strategy.watch_lowest_price is None or current_price < self.strategy.watch_lowest_price:
-                self.strategy.watch_lowest_price = current_price
-                # self.strategy.log_message(f"Trailing Buy [UPDATE]: New lowest price {self.strategy.watch_lowest_price}", level="debug")
-                self.strategy.save_state() # Save lowest price if possible (needs schema update but memory works for now)
+        # 2. Get the anchor price from the last sell to allow 'rebuy' after 0.5% drop
+        # If we just sold at 101,000, we want to be able to rebuy at 101,000 * (1 - 0.5%) = 100,500 approx.
+        # So we set last_buy_price to 101,000.
+        sell_ref_price = self.strategy.last_sell_price
 
-            # 2. Check Exit Conditions (BOTH must be true)
-            # Cond 1: Price Rebound
-            rebound_target = self.strategy.watch_lowest_price * (1 + REBOUND_THRESHOLD)
-            is_rebound_ok = current_price >= rebound_target
-            
-            # Cond 2: RSI Strength (Lazy Check)
-            # Only fetch RSI if rebound condition is met to save API calls
-            is_rsi_ok = False
-            rsi_5m = None
-            
-            if is_rebound_ok:
-                rsi_5m = self.strategy.get_rsi_5m()
-                # Use Configured Threshold
-                threshold = self.strategy.config.rsi_buy_max
-                is_rsi_ok = (rsi_5m is not None and rsi_5m > threshold)
+        # 3. Determine the best anchor for 'last_buy_price'
+        # Rule: To follow the price DOWN and avoid premature buys, we must anchor
+        # to the LOWEST representative price (either an active buy or the last sell).
+        # This prevents a high-priced stuck split (like #12 at 195k) from pulling the anchor back up.
+        candidates = []
+        if active_ref_price: candidates.append(active_ref_price)
+        if sell_ref_price: candidates.append(sell_ref_price)
 
-            if is_rebound_ok and is_rsi_ok:
-                # Trigger Buy!
-                levels_crossed = self._calculate_levels_crossed(self.strategy.last_buy_price, current_price)
-                
-                # Check Batch Buy Config
-                if not self.strategy.config.trailing_buy_batch:
-                    if levels_crossed > 1:
-                        self.strategy.log_message(f"Trailing Buy: Batch buy disabled. Reducing {levels_crossed} splits to 1.", level="info")
-                        levels_crossed = 1
-                
-                # Double Check Fail-safe for logging
-                rsi_val = rsi_5m if rsi_5m is not None else 0.0
+        new_anchor = min(candidates) if candidates else None
 
-                if levels_crossed > 0:
-                     self.strategy.is_watching = False
-                     self.strategy.watch_lowest_price = None
-                     
-                     # Detailed Log for Trailing Buy
-                     next_target = current_price * (1 - self.strategy.config.buy_rate)
-                     rebound_pct = ((current_price - self.strategy.watch_lowest_price) / self.strategy.watch_lowest_price) * 100 if self.strategy.watch_lowest_price else 0.0
-                     msg = (f"Trailing Buy Executed.\n"
-                            f"- Condition: Rebound {rebound_pct:.2f}% (Low {self.strategy.watch_lowest_price} -> Cur {current_price}) AND RSI {rsi_5m:.1f} > {threshold}.\n"
-                            f"- Next Buy Target: {next_target:.1f}")
-                     
-                     self.strategy.save_state()
-                     # Use 5m RSI for record
-                     created_count = self._execute_batch_buy(current_price, levels_crossed, buy_rsi=rsi_val, is_accumulated=(levels_crossed > 1))
-                     
-                     # Only log if at least one split was created
-                     if created_count > 0:
-                         self.strategy.log_event("INFO", "BUY_EXEC", msg)
-                else:
-                     # Reset condition log
-                     msg = f"Trailing Buy [RESET]: Rebound met but price {current_price} is above target {next_buy_level}. No buy needed."
-                     logging.info(msg)
-                     self.strategy.log_event("INFO", "WATCH_END", msg)
-                
-                # Reset Watch Mode
-                self.strategy.is_watching = False
-                self.strategy.watch_lowest_price = None
+        if new_anchor and self.strategy.last_buy_price != new_anchor:
+            logging.info(f"Price Logic: Adjusting buy anchor to {new_anchor:.1f} (Lowest of Active/Sell).")
+            self.strategy.last_buy_price = new_anchor
+            self.strategy.save_state()
+        elif new_anchor is None:
+            if self.strategy.last_buy_price is not None:
+                logging.info("Price Logic: No active positions or sell history. Resetting anchor.")
+                self.strategy.last_buy_price = None
                 self.strategy.save_state()
-            else:
-                # Waiting
-                if is_rebound_ok and not is_rsi_ok:
-                     val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
-                     logging.debug(f"Trailing Buy [WAIT]: Rebound OK({current_price}) but RSI({val_str}) <= {self.strategy.config.rsi_buy_max}.")
-                elif not is_rebound_ok:
-                     # Log the Hold reason
-                     self.strategy.log_message(f"Trailing Buy [HOLD]: Current {current_price} < Target {rebound_target:.1f}. Waiting for rebound.", level="debug")
 
-            # Safety: If user turned off Trailing Buy mid-watch
-            if not is_trailing_active:
-                 msg = "Trailing Buy disabled mid-watch. Exiting watch mode."
-                 logging.info(msg)
-                 self.strategy.log_event("INFO", "WATCH_END", msg)
-                 self.strategy.is_watching = False
-                 self.strategy.watch_lowest_price = None
-                 # Check if we should buy immediately
-                 levels_crossed = self._calculate_levels_crossed(self.strategy.last_buy_price, current_price)
-                 if levels_crossed > 0:
-                     # Use 5m RSI
-                     rsi_5m = self.strategy.get_rsi_5m()
-                     created_count = self._execute_batch_buy(current_price, levels_crossed, buy_rsi=rsi_5m)
-                     if created_count > 0:
-                         next_target = current_price * (1 - self.strategy.config.buy_rate)
-                         msg = (f"Grid Buy Executed (Trailing Disabled).\n"
-                                f"- Condition: Trailing Buy disabled mid-watch.\n"
-                                f"- Current Price: {current_price}\n"
-                                f"- Next Buy Target: {next_target:.1f}")
-                         self.strategy.log_event("INFO", "BUY_EXEC", msg)
-            return
+    # _create_buy_orders removed (logic moved to execute_buy_logic for better control over levels)
 
-        # --- B. Normal Mode (Checking for new drop) ---
-        levels_crossed = self._calculate_levels_crossed(self.strategy.last_buy_price, current_price)
-        if levels_crossed > 0:
-            rsi_5m = self.strategy.get_rsi_5m()
-            
-            # --- DEBUG LOGGING ---
-            rsi_val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
-            self.strategy.log_message(f"DEBUG CHECK: Drop Detected. Levels={levels_crossed}, TrailingActive={is_trailing_active}, RSI(5m)={rsi_val_str}, Price={current_price}", level="debug")
-            # ---------------------
-            
-            should_watch = False
-            if is_trailing_active:
-                threshold = self.strategy.config.rsi_buy_max
+    def _execute_single_buy(self, actual_market_price: float, buy_rsi: float = None) -> SplitState:
+        """
+        Execute a single buy order.
+        actual_market_price: Current price we are buying at.
+        """
+        # 1. Check Global Max Holdings
+        current_holdings = len([s for s in self.strategy.splits if s.status != "SELL_FILLED"])
+        if current_holdings >= self.strategy.config.max_holdings:
+            return None
+
+        # 2. Determine Investment Amount
+        # Use actual market price for segment calculation
+        current_invested = sum(s.buy_amount for s in self.strategy.splits)
+        investment_amount = self.strategy.config.investment_per_split
+        
+        if self.strategy.config.price_segments:
+             for segment in self.strategy.config.price_segments:
+                 if segment.min_price <= actual_market_price <= segment.max_price:
+                     investment_amount = segment.investment_per_split
+                     break
+        
+        if current_invested + investment_amount > self.strategy.budget:
+            return None
+
+        # 3. Order Execution
+        split_id = self.strategy.next_split_id
+        
+        # We always use market order for immediate entry
+        try:
+            logging.info(f"Price Logic: Attempting buy_market_order for {investment_amount} KRW")
+            result = self.strategy.exchange.buy_market_order(self.strategy.ticker, investment_amount)
+            if result:
+                logging.info(f"Price Logic: Buy order created! UUID={result.get('uuid')}")
                 
-                # Fail-safe: If RSI is None, assume unsafe and watch
-                if rsi_5m is None:
-                    should_watch = True
-                    self.strategy.log_event("WARNING", "SYSTEM_WARNING", "Trailing Buy: RSI(5m) is None. Enforcing Watch Mode for safety.")
-                elif rsi_5m <= threshold:
-                    should_watch = True
-            
-            if should_watch:
-                # Enter Watch Mode
-                self.strategy.is_watching = True
-                self.strategy.watch_lowest_price = current_price
-                rsi_val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
-                self.strategy.log_event("WARNING", "WATCH_START", f"Trailing Buy [START]: Price target met but RSI(5m) {rsi_val_str} <= {threshold}. Entering Watch Mode.")
+                # Use actual market price as the base for the split and next target calculation
+                rec_buy_price = actual_market_price
+                
+                split = SplitState(
+                    id=split_id, 
+                    status="PENDING_BUY", 
+                    buy_price=rec_buy_price,
+                    buy_amount=investment_amount, 
+                    buy_volume=investment_amount / actual_market_price,
+                    buy_order_uuid=result.get('uuid'), 
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                    buy_rsi=buy_rsi
+                )
+                self.strategy.splits.append(split)
+                self.strategy.next_split_id += 1
+                self.strategy.last_buy_price = rec_buy_price
                 self.strategy.save_state()
+                return split
             else:
-                # Immediate Buy (Standard Grid OR Trailing Active but RSI is safe)
-                # User request: In Normal Mode, do NOT batch buy. Limit to 1 to avoid "Panic Buy" appearance.
-                if levels_crossed > 1:
-                     val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
-                     self.strategy.log_message(f"Normal Mode Drop: Levels crossed {levels_crossed}, but clamping to 1 (RSI {val_str} Safe).")
-                     levels_crossed = 1 
-                
-                val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
-                
-                # Detailed Log for Grid Buy
-                next_target = current_price * (1 - self.strategy.config.buy_rate)
-                target_price = self.strategy.last_buy_price * (1 - self.strategy.config.buy_rate)
-                
-                msg = (f"Grid Buy Executed.\n"
-                       f"- Condition: Price {current_price} <= Target {target_price:.1f}.\n"
-                       f"- RSI Safety: {val_str} (Limit: {self.strategy.config.rsi_buy_max}, TrailingActive: {is_trailing_active}).\n"
-                       f"- Next Buy Target: {next_target:.1f}")
+                logging.warning("Price Logic: Exchange buy_market_order returned no result.")
+        except Exception as e:
+            logging.error(f"Price Logic: Exchange buy_market_order failed: {e}")
+            if "insufficient" in str(e).lower():
+                self._insufficient_funds_until = time.time() + 3600
+            return None
+        return None
 
-                # Use 5m RSI instead of 15m
-                created_count = self._execute_batch_buy(current_price, levels_crossed, buy_rsi=rsi_5m, is_accumulated=False)
-                
-                if created_count > 0:
-                     self.strategy.log_event("INFO", "BUY_EXEC", msg)
+    def validate_buy(self, price: float) -> bool:
+        if self.strategy.config.price_segments:
+            match_found = False
+            for segment in self.strategy.config.price_segments:
+                if segment.min_price <= price <= segment.max_price:
+                    match_found = True
+                    active_count = sum(1 for s in self.strategy.splits if s.status != "SELL_FILLED" and segment.min_price <= s.buy_price <= segment.max_price)
+                    if active_count >= segment.max_splits: return False
+                    break
+            if not match_found: return False
+            return True
+        if price < self.strategy.config.min_price: return False
+        if self.strategy.config.max_price > 0 and price > self.strategy.config.max_price: return False
+        return True
 
     def _calculate_levels_crossed(self, reference_price: float, current_price: float) -> int:
         levels_crossed = 0
         temp_price = reference_price
-        
         while True:
             next_level = temp_price * (1 - self.strategy.config.buy_rate)
-            if current_price > next_level:
-                break
-            
+            if current_price > next_level: break
             levels_crossed += 1
             temp_price = next_level
-            
-            # Safety limit
-            if levels_crossed >= 10:
-                logging.warning(f"Price drop too severe. Limiting to 10 buy splits.")
-                break
+            if levels_crossed >= 10: break
         return levels_crossed
-
-    def _execute_batch_buy(self, current_price: float, count: int, buy_rsi: float = None, is_accumulated: bool = False) -> int:
-        # Check if we already have a pending buy at current price
-        has_pending_buy = any(
-            s.status == "PENDING_BUY" and abs(s.buy_price - current_price) / current_price < 0.001
-            for s in self.strategy.splits
-        )
-        
-        if has_pending_buy:
-            logging.debug(f"Already have pending buy near {current_price}, skipping")
-            return 0
-        
-        logging.info(f"Price dropped from {self.strategy.last_buy_price} to {current_price}. Creating {count} buy splits at {current_price}")
-        
-        created_count = 0
-        for i in range(count):
-            split = self.strategy._create_buy_split(current_price, buy_rsi=buy_rsi)
-            if split and is_accumulated:
-                split.is_accumulated = True
-                
-            if not split:
-                logging.warning(f"Failed to create buy split {i+1}/{count}, stopping")
-                break
-            
-            created_count += 1
-            logging.info(f"Created buy split {i+1}/{count} at {current_price}")
-            
-        return created_count

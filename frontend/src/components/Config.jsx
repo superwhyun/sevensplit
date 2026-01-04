@@ -1,20 +1,32 @@
 import React, { useState } from 'react';
 import axios from 'axios';
+import Slider from 'rc-slider';
+import 'rc-slider/assets/index.css';
 
-const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
-    const [formData, setFormData] = useState(config);
+const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
+
+
+    const [formData, setFormData] = useState(config || {});
     const [isEditing, setIsEditing] = useState(false);
 
     const lastStrategyIdRef = React.useRef(strategyId);
+    const isEditingRef = React.useRef(isEditing);
 
-    // Update form data when config changes, BUT ONLY if not editing
+    // Keep ref in sync
     React.useEffect(() => {
-        if (!isEditing || lastStrategyIdRef.current !== strategyId) {
-            setFormData({ ...config, budget });
-            lastStrategyIdRef.current = strategyId;
-            setIsEditing(false);
+        isEditingRef.current = isEditing;
+    }, [isEditing]);
+
+    React.useEffect(() => {
+        // Only update if not editing and we have a valid config object
+        if (!isEditingRef.current || lastStrategyIdRef.current !== strategyId) {
+            if (config && Object.keys(config).length > 0) {
+                setFormData(config);
+                lastStrategyIdRef.current = strategyId;
+                setIsEditing(false);
+            }
         }
-    }, [config, budget, isEditing, strategyId]);
+    }, [config, strategyId]);
 
     // Helper to format number with commas
     const formatNumber = (num) => {
@@ -23,9 +35,10 @@ const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
     };
 
     // Helper to parse number from comma string
-    const parseNumber = (str) => {
-        if (!str) return 0;
-        return parseFloat(str.replace(/,/g, ''));
+    const parseNumber = (val) => {
+        if (val === null || val === undefined) return 0;
+        if (typeof val === 'number') return val;
+        return parseFloat(val.toString().replace(/,/g, ''));
     };
 
     const handleChange = (e) => {
@@ -76,7 +89,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
                 : '';
 
             const { budget: newBudget, ...configData } = formData;
-            await axios.post(`${API_BASE_URL}/config`, {
+            await axios.post(`${API_BASE_URL}/strategies/config`, {
                 strategy_id: strategyId,
                 config: configData,
                 budget: newBudget
@@ -85,7 +98,6 @@ const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
             onUpdate();
             alert(`Configuration updated!`);
         } catch (error) {
-            console.error('Error updating config:', error);
             alert('Failed to update config');
         }
     };
@@ -137,6 +149,208 @@ const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
                 <small style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
                     {((formData.sell_rate ?? 0.005) * 100).toFixed(2)}% profit triggers sell
                 </small>
+            </div>
+
+            {/* Price Segments Editor - Visual Bar Split Mode */}
+            <div style={{ marginTop: '1.5rem', marginBottom: '0.5rem', fontWeight: 'bold', color: '#60a5fa', borderTop: '1px solid #334155', paddingTop: '1rem' }}>
+                Price Segments (Advanced Grid)
+            </div>
+            <div style={{ marginBottom: '1rem', background: '#0f172a', padding: '1rem', borderRadius: '0.5rem', border: '1px solid #334155' }}>
+                {/* Segment Count Selector */}
+                <div style={{ marginBottom: '1.5rem' }}>
+                    <label style={{ fontSize: '0.9rem', color: '#e2e8f0', marginBottom: '0.5rem', display: 'block' }}>
+                        Number of Segments: {formData.price_segments?.length || 0}
+                    </label>
+                    <div style={{ padding: '0 10px', marginBottom: '0.5rem' }}>
+                        <Slider
+                            min={0}
+                            max={10}
+                            value={formData.price_segments?.length || 0}
+                            onChange={(count) => {
+                                setIsEditing(true);
+                                if (count === 0) {
+                                    setFormData(prev => ({ ...prev, price_segments: [] }));
+                                    return;
+                                }
+
+                                const minPrice = formData.min_price || 0;
+                                const maxPrice = formData.max_price || 100000000;
+                                const range = maxPrice - minPrice;
+                                const segmentSize = range / count;
+
+                                const newSegments = [];
+                                for (let i = 0; i < count; i++) {
+                                    newSegments.push({
+                                        min_price: Math.round(minPrice + (segmentSize * i)),
+                                        max_price: Math.round(minPrice + (segmentSize * (i + 1))),
+                                        investment_per_split: 100000,
+                                        max_splits: 5
+                                    });
+                                }
+                                setFormData(prev => ({ ...prev, price_segments: newSegments }));
+                            }}
+                            trackStyle={{ backgroundColor: '#3b82f6' }}
+                            handleStyle={{ borderColor: '#3b82f6', backgroundColor: '#3b82f6' }}
+                            railStyle={{ backgroundColor: '#334155' }}
+                        />
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: '#94a3b8', textAlign: 'center' }}>
+                        Drag to set segment count (0 = disabled)
+                    </div>
+                </div>
+
+                {formData.price_segments && formData.price_segments.length > 0 ? (
+                    <>
+                        {/* Visual Range Divider */}
+                        <div style={{ marginBottom: '1.5rem', padding: '1rem', background: '#1e293b', borderRadius: '0.5rem', border: '1px solid #475569' }}>
+                            <label style={{ fontSize: '0.8rem', color: '#94a3b8', marginBottom: '0.75rem', display: 'block' }}>
+                                Price Range Dividers (Drag to adjust boundaries)
+                            </label>
+                            <div style={{ padding: '0 10px' }}>
+                                <Slider
+                                    range
+                                    min={formData.min_price || 0}
+                                    max={formData.max_price || 100000000}
+                                    value={(() => {
+                                        // Build array: [seg0.min, seg1.min, seg2.min, ..., lastSeg.max]
+                                        const values = formData.price_segments.map(seg => seg.min_price);
+                                        values.push(formData.price_segments[formData.price_segments.length - 1].max_price);
+                                        return values;
+                                    })()}
+                                    onChange={(values) => {
+                                        setIsEditing(true);
+
+                                        if (!Array.isArray(values) || values.length < 2) {
+                                            return;
+                                        }
+
+                                        // CRITICAL: Only proceed if values length matches expected length
+                                        const expectedLength = formData.price_segments.length + 1;
+                                        if (values.length !== expectedLength) {
+                                            console.warn('[Segment Divider] Length mismatch, ignoring:', values.length, 'vs expected', expectedLength);
+                                            return;
+                                        }
+
+                                        const newSegments = [];
+                                        for (let i = 0; i < values.length - 1; i++) {
+                                            const existingSegment = formData.price_segments[i] || {};
+                                            newSegments.push({
+                                                min_price: values[i],
+                                                max_price: values[i + 1],
+                                                investment_per_split: existingSegment.investment_per_split || 100000,
+                                                max_splits: existingSegment.max_splits || 5
+                                            });
+                                        }
+                                        setFormData(prev => ({ ...prev, price_segments: newSegments }));
+                                    }}
+                                    trackStyle={formData.price_segments.map((_, i) => ({ backgroundColor: `hsl(${210 + i * 30}, 70%, 50%)` }))}
+                                    handleStyle={(() => {
+                                        // Generate handle styles for all values (segments + 1)
+                                        const handles = [];
+                                        for (let i = 0; i <= formData.price_segments.length; i++) {
+                                            handles.push({ borderColor: '#3b82f6', backgroundColor: '#3b82f6' });
+                                        }
+                                        return handles;
+                                    })()}
+                                    railStyle={{ backgroundColor: '#334155' }}
+                                />
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.5rem', fontSize: '0.75rem', color: '#94a3b8' }}>
+                                <span>₩{formatNumber(formData.min_price || 0)}</span>
+                                <span>₩{formatNumber(formData.max_price || 100000000)}</span>
+                            </div>
+                        </div>
+
+                        {/* Segment Details */}
+                        <div style={{ marginBottom: '1rem' }}>
+                            <div style={{ fontSize: '0.9rem', color: '#e2e8f0', marginBottom: '0.75rem', fontWeight: 'bold' }}>
+                                Segment Settings
+                            </div>
+                            {formData.price_segments.map((segment, index) => (
+                                <div key={index} style={{ marginBottom: '1rem', padding: '0.75rem', background: '#1e293b', borderRadius: '0.5rem', border: '1px solid #475569' }}>
+                                    <div style={{ fontSize: '0.85rem', color: '#cbd5e1', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                                        Segment {index + 1}: ₩{formatNumber(segment.min_price)} - ₩{formatNumber(segment.max_price)}
+                                    </div>
+
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                                        <div>
+                                            <label style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.25rem', display: 'block' }}>
+                                                Invest per Split
+                                            </label>
+                                            <div style={{ marginBottom: '0.25rem', padding: '0 5px' }}>
+                                                <Slider
+                                                    min={10000}
+                                                    max={500000}
+                                                    step={10000}
+                                                    value={segment.investment_per_split}
+                                                    onChange={(val) => {
+                                                        setIsEditing(true);
+                                                        const newSegments = [...formData.price_segments];
+                                                        newSegments[index] = { ...newSegments[index], investment_per_split: val };
+                                                        setFormData(prev => ({ ...prev, price_segments: newSegments }));
+                                                    }}
+                                                    trackStyle={{ backgroundColor: '#10b981' }}
+                                                    handleStyle={{ borderColor: '#10b981', backgroundColor: '#10b981' }}
+                                                    railStyle={{ backgroundColor: '#334155' }}
+                                                />
+                                            </div>
+                                            <input
+                                                type="text"
+                                                value={formatNumber(segment.investment_per_split)}
+                                                onChange={(e) => {
+                                                    setIsEditing(true);
+                                                    const val = parseNumber(e.target.value);
+                                                    const newSegments = [...formData.price_segments];
+                                                    newSegments[index] = { ...newSegments[index], investment_per_split: val };
+                                                    setFormData(prev => ({ ...prev, price_segments: newSegments }));
+                                                }}
+                                                style={{ width: '100%', padding: '0.25rem', background: '#0f172a', border: '1px solid #475569', color: 'white', borderRadius: '0.25rem', fontSize: '0.8rem' }}
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.25rem', display: 'block' }}>
+                                                Max Splits
+                                            </label>
+                                            <div style={{ marginBottom: '0.25rem', padding: '0 5px' }}>
+                                                <Slider
+                                                    min={1}
+                                                    max={20}
+                                                    value={segment.max_splits}
+                                                    onChange={(val) => {
+                                                        setIsEditing(true);
+                                                        const newSegments = [...formData.price_segments];
+                                                        newSegments[index] = { ...newSegments[index], max_splits: val };
+                                                        setFormData(prev => ({ ...prev, price_segments: newSegments }));
+                                                    }}
+                                                    trackStyle={{ backgroundColor: '#8b5cf6' }}
+                                                    handleStyle={{ borderColor: '#8b5cf6', backgroundColor: '#8b5cf6' }}
+                                                    railStyle={{ backgroundColor: '#334155' }}
+                                                />
+                                            </div>
+                                            <input
+                                                type="number"
+                                                value={segment.max_splits}
+                                                onChange={(e) => {
+                                                    setIsEditing(true);
+                                                    const newSegments = [...formData.price_segments];
+                                                    newSegments[index] = { ...newSegments[index], max_splits: parseInt(e.target.value) || 1 };
+                                                    setFormData(prev => ({ ...prev, price_segments: newSegments }));
+                                                }}
+                                                style={{ width: '100%', padding: '0.25rem', background: '#0f172a', border: '1px solid #475569', color: 'white', borderRadius: '0.25rem', fontSize: '0.8rem' }}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </>
+                ) : (
+                    <div style={{ color: '#94a3b8', fontSize: '0.9rem', textAlign: 'center', padding: '2rem' }}>
+                        No segments defined. Using global config.<br/>
+                        <span style={{ fontSize: '0.8rem' }}>Use slider above to create segments</span>
+                    </div>
+                )}
             </div>
             <div className="input-group">
                 <label>Rebuy Strategy</label>
@@ -315,30 +529,42 @@ const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
         </>
     );
 
+    // Early return only if formData is completely invalid
+    if (!formData) {
+        return (
+            <div className="card">
+                <div className="card-header">
+                    <span className="card-title">Strategy Configuration</span>
+                </div>
+                <div style={{ padding: '1rem', color: '#94a3b8' }}>Loading configuration...</div>
+            </div>
+        );
+    }
+
     return (
-        <div className="card">
+        <div className="card" >
             <div className="card-header">
                 <span className="card-title">Strategy Configuration</span>
             </div>
             <form onSubmit={handleSubmit}>
                 {/* Strategy Mode Toggle */}
                 <div style={{ marginBottom: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '0.75rem', background: '#1e293b', borderRadius: '0.5rem' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer', color: formData.strategy_mode === 'PRICE' ? '#60a5fa' : '#94a3b8' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer', color: (formData.strategy_mode || 'PRICE') === 'PRICE' ? '#60a5fa' : '#94a3b8' }}>
                         <input
                             type="radio"
                             name="strategy_mode"
                             value="PRICE"
-                            checked={formData.strategy_mode !== 'RSI'}
+                            checked={(formData.strategy_mode || 'PRICE') !== 'RSI'}
                             onChange={handleChange}
                         />
                         Classic (Price Grid)
                     </label>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer', color: formData.strategy_mode === 'RSI' ? '#60a5fa' : '#94a3b8' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer', color: (formData.strategy_mode || 'PRICE') === 'RSI' ? '#60a5fa' : '#94a3b8' }}>
                         <input
                             type="radio"
                             name="strategy_mode"
                             value="RSI"
-                            checked={formData.strategy_mode === 'RSI'}
+                            checked={(formData.strategy_mode || 'PRICE') === 'RSI'}
                             onChange={handleChange}
                         />
                         RSI Reversal
@@ -368,7 +594,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
                 </div>
 
                 {/* Conditional Settings */}
-                {formData.strategy_mode === 'RSI' ? renderRSIConfig() : renderClassicConfig()}
+                {(formData.strategy_mode || 'PRICE') === 'RSI' ? renderRSIConfig() : renderClassicConfig()}
 
                 {/* Common Footer Settings */}
                 <hr style={{ borderColor: '#334155', margin: '1.5rem 0' }} />
@@ -410,7 +636,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice, budget }) => {
                     Save Configuration
                 </button>
             </form>
-        </div>
+        </div >
     );
 };
 

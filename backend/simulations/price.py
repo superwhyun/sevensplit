@@ -1,30 +1,15 @@
 from typing import List, Dict, Any
-from strategies import StrategyConfig, PriceStrategyLogic
+from strategies import StrategyConfig
 from .base import SimulationStrategy
 
 class PriceSimulationStrategy(SimulationStrategy):
     def __init__(self, config: StrategyConfig, budget: float, candles: List[Dict[str, Any]]):
         super().__init__(config, budget, candles)
-        self.price_logic = PriceStrategyLogic(self)
         self.sim_logs = []
         
     def log_message(self, msg: str, level: str = "info"):
-        """Override to capture logs for simulation output."""
-        # Also print to console for debugging if needed, or rely on runner to handle
-        # logging.info(f"[SIM] {msg}") 
         self.sim_logs.append(msg)
 
-    def tick(self, current_price: float = None, open_orders: list = None):
-        # Call base tick to establish common state and get open orders
-        open_order_uuids = super().tick(current_price, open_orders)
-        
-        # If open_order_uuids is None, it means we shouldn't proceed (e.g. not running or error)
-        # However, super().tick returns None if !is_running or error.
-        # But wait, open_order_uuids is a set, so empty set is valid. None is invalid.
-        if open_order_uuids is None:
-            return
-
-        if current_price is None:
-            current_price = self.exchange.get_current_price(self.ticker)
-            
-        self.price_logic.tick(current_price, open_order_uuids)
+    def tick(self, current_price: float = None, open_orders: list = None, market_context: dict = None):
+        # Simply delegate to base class, which now handles full logic
+        super().tick(current_price, open_orders, market_context=market_context)

@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker, Session, relationship
 from datetime import datetime, timezone, timedelta
 import json
 import os
+import logging
 
 Base = declarative_base()
 
@@ -66,15 +67,19 @@ class Strategy(Base):
     use_trailing_buy = Column(Boolean, default=False, nullable=False)
     trailing_buy_rebound_percent = Column(Float, default=0.2, nullable=False)
     trailing_buy_batch = Column(Boolean, default=True, nullable=False)
+    
+    # Price Segments (JSON List)
+    price_segments = Column(JSON, nullable=True)
 
     # Trailing Buy State
     is_watching = Column(Boolean, default=False, nullable=False)
     watch_lowest_price = Column(Float, nullable=True)
     pending_buy_units = Column(Integer, default=0, nullable=False)    # Accumulated buy units
+    manual_target_price = Column(Float, nullable=True) # Manual override for next buy target
 
     # Timestamps
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     # Relationships
     splits = relationship("Split", back_populates="strategy", cascade="all, delete-orphan")
@@ -103,9 +108,9 @@ class Split(Base):
     sell_order_id = Column(String(100), nullable=True)
 
     # Timestamps
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     buy_filled_at = Column(DateTime, nullable=True)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     # Relationship
     strategy = relationship("Strategy", back_populates="splits")
@@ -140,9 +145,9 @@ class Trade(Base):
     sell_order_id = Column(String(100), nullable=True)
 
     # Timestamps
-    timestamp = Column(DateTime, default=datetime.now)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     bought_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationship
     strategy = relationship("Strategy", back_populates="trades")
@@ -158,7 +163,7 @@ class SystemConfig(Base):
     upbit_secret_key = Column(String(100), nullable=True)
 
     # Timestamps
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class MockAccount(Base):
@@ -169,7 +174,7 @@ class MockAccount(Base):
     currency = Column(String(20), unique=True, nullable=False, index=True)
     balance = Column(Float, nullable=False, default=0.0)
     avg_buy_price = Column(Float, nullable=False, default=0.0)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class MockOrder(Base):
@@ -195,8 +200,8 @@ class MockOrder(Base):
     trades_count = Column(Integer, default=0)
     
     # Timestamps
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class SystemEvent(Base):
@@ -208,10 +213,50 @@ class SystemEvent(Base):
     level = Column(String(20), nullable=False) # INFO, WARNING, ERROR
     event_type = Column(String(50), nullable=False) # WATCH_START, WATCH_END, SYSTEM_ERROR, etc.
     message = Column(Text, nullable=False)
-    timestamp = Column(DateTime, default=datetime.now, index=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
 
     # Relationship
     strategy = relationship("Strategy")
+
+
+class CandleMinutes5(Base):
+    """5-minute candles"""
+    __tablename__ = 'candles_min_5'
+    ticker = Column(String(20), primary_key=True)
+    timestamp = Column(Float, primary_key=True)
+    open = Column(Float, nullable=False)
+    high = Column(Float, nullable=False)
+    low = Column(Float, nullable=False)
+    close = Column(Float, nullable=False)
+    volume = Column(Float, nullable=False)
+    kst_time = Column(String(30), nullable=True)
+    utc_time = Column(String(30), nullable=True)
+
+class CandleMinutes60(Base):
+    """1-hour candles"""
+    __tablename__ = 'candles_min_60'
+    ticker = Column(String(20), primary_key=True)
+    timestamp = Column(Float, primary_key=True)
+    open = Column(Float, nullable=False)
+    high = Column(Float, nullable=False)
+    low = Column(Float, nullable=False)
+    close = Column(Float, nullable=False)
+    volume = Column(Float, nullable=False)
+    kst_time = Column(String(30), nullable=True)
+    utc_time = Column(String(30), nullable=True)
+
+class CandleDays(Base):
+    """Daily candles"""
+    __tablename__ = 'candles_days'
+    ticker = Column(String(20), primary_key=True)
+    timestamp = Column(Float, primary_key=True)
+    open = Column(Float, nullable=False)
+    high = Column(Float, nullable=False)
+    low = Column(Float, nullable=False)
+    close = Column(Float, nullable=False)
+    volume = Column(Float, nullable=False)
+    kst_time = Column(String(30), nullable=True)
+    utc_time = Column(String(30), nullable=True)
 
 
 class DatabaseManager:
@@ -235,6 +280,13 @@ class DatabaseManager:
         self.db_path = db_path
         print(f"Using Database: {self.db_path}")
         self.engine = create_engine(f'sqlite:///{db_path}', echo=False)
+        
+        # Enable WAL mode for better concurrency
+        from sqlalchemy import text
+        with self.engine.connect() as conn:
+            conn.execute(text("PRAGMA journal_mode=WAL"))
+            conn.commit()
+
         Base.metadata.create_all(self.engine)
         self._migrate_schema()
         self.SessionLocal = sessionmaker(bind=self.engine)
@@ -326,9 +378,19 @@ class DatabaseManager:
                         print(f"Migrating: Adding {col_name} to strategies table")
                         conn.execute(text(f"ALTER TABLE strategies ADD COLUMN {col_name} {col_def}"))
 
+                # Price Segments Migration
+                if 'price_segments' not in columns:
+                    print(f"Migrating: Adding price_segments to strategies table")
+                    conn.execute(text("ALTER TABLE strategies ADD COLUMN price_segments JSON"))
+
+                # Manual Target Migration
+                if 'manual_target_price' not in columns:
+                    print(f"Migrating: Adding manual_target_price to strategies table")
+                    conn.execute(text("ALTER TABLE strategies ADD COLUMN manual_target_price FLOAT"))
+
                 conn.commit()
             except Exception as e:
-                print(f"Migration warning (strategies Trailing Buy): {e}")
+                print(f"Migration warning (strategies Trailing Buy/Segments): {e}")
                 columns = [row[1] for row in result.fetchall()]
                 
                 # List of new columns for Trailing Buy
@@ -343,9 +405,13 @@ class DatabaseManager:
                         print(f"Migrating: Adding {col_name} to strategies table (Trailing Buy)")
                         conn.execute(text(f"ALTER TABLE strategies ADD COLUMN {col_name} {col_def}"))
                 
+                if 'price_segments' not in columns:
+                    print(f"Migrating: Adding price_segments to strategies table (Retry)")
+                    conn.execute(text("ALTER TABLE strategies ADD COLUMN price_segments JSON"))
+
                 conn.commit()
             except Exception as e:
-                print(f"Migration warning (strategies Trailing Buy): {e}")
+                print(f"Migration warning (strategies Trailing Buy/Segments Retry): {e}")
 
             # 5. Check splits.is_accumulated (Observability Migration)
             try:
@@ -389,6 +455,19 @@ class DatabaseManager:
                     pass
             except Exception:
                 pass
+
+            # 7. Check candle tables for utc_time
+            candle_tables = ['candles_min_5', 'candles_min_60', 'candles_days']
+            for table in candle_tables:
+                try:
+                    result = conn.execute(text(f"PRAGMA table_info({table})"))
+                    columns = [row[1] for row in result.fetchall()]
+                    if 'utc_time' not in columns:
+                        print(f"Migrating: Adding utc_time to {table} table")
+                        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN utc_time TEXT"))
+                        conn.commit()
+                except Exception as e:
+                    print(f"Migration warning ({table}): {e}")
 
     def get_session(self) -> Session:
         """Get a new database session"""
@@ -539,6 +618,15 @@ class DatabaseManager:
         finally:
             session.close()
 
+    def delete_events(self, strategy_id: int):
+        """Delete all system events for a strategy"""
+        session = self.get_session()
+        try:
+            session.query(SystemEvent).filter_by(strategy_id=strategy_id).delete()
+            session.commit()
+        finally:
+            session.close()
+
     # Trade operations
     def add_trade(self, strategy_id: int, ticker: str, trade_data: dict) -> Trade:
         """Add a completed trade to history"""
@@ -578,6 +666,8 @@ class DatabaseManager:
         """Reset all data in the database (for testing/mock mode)"""
         session = self.get_session()
         try:
+            # Delete all events
+            session.query(SystemEvent).delete()
             # Delete all splits
             session.query(Split).delete()
             # Delete all trades
@@ -768,8 +858,8 @@ class DatabaseManager:
                 level=level,
                 event_type=event_type,
                 message=message,
-                # Use KST (UTC+9) explicitly to allow naive frontend parsing to match user expectation
-                timestamp=datetime.now(timezone(timedelta(hours=9)))
+                # Use UTC for storage to allow consistent cross-timezone display
+                timestamp=datetime.now(timezone.utc)
             )
             session.add(event)
             
@@ -809,7 +899,13 @@ class DatabaseManager:
             events = query.offset(offset).limit(limit).all()
             
             return {
-                "events": events,
+                "events": [{
+                    "id": ev.id,
+                    "event_type": ev.event_type,
+                    "level": ev.level,
+                    "message": ev.message,
+                    "timestamp": ev.timestamp.strftime('%Y-%m-%dT%H:%M:%S') + 'Z' if ev.timestamp else None
+                } for ev in events],
                 "total": total,
                 "page": page,
                 "limit": limit,
@@ -818,13 +914,170 @@ class DatabaseManager:
         finally:
             session.close()
 
+    def _get_candle_model(self, interval: str):
+        """Map interval string to appropriate SQLAlchemy model"""
+        mapping = {
+            "minutes/5": CandleMinutes5,
+            "minutes/60": CandleMinutes60,
+            "days": CandleDays
+        }
+        return mapping.get(interval)
 
-# Global database instance
+    # Candle cache operations
+    def save_candles(self, ticker: str, interval: str, candle_list: list):
+        """Save a list of candles to DB using UPSERT (Replace if exists)"""
+        session = self.get_session()
+        try:
+            from sqlalchemy.dialects.sqlite import insert
+            from datetime import datetime, timezone
+
+            model = self._get_candle_model(interval)
+            if not model:
+                logging.warning(f"No database model for interval: {interval}")
+                return
+
+            # Prepare and Sort data by time ascending to ensure interval check works
+            prepared_data = []
+            for c in candle_list:
+                # 1. Normalize Timestamp - Use numeric timestamp first (it's always UTC)
+                ts_raw = c.get('timestamp') or c.get('time')
+                if ts_raw:
+                    ts = float(ts_raw)
+                    if ts > 10000000000: ts /= 1000.0 # Convert MS to S
+                else:
+                    # Fallback to string only if numeric is missing
+                    utc_str = c.get('candle_date_time_utc') or c.get('utc_time')
+                    if not utc_str: continue
+                    try:
+                        dt_str = utc_str.replace('Z', '+00:00')
+                        ts = datetime.fromisoformat(dt_str).timestamp()
+                    except: continue
+
+                # 2. Normalize to Interval Start
+                if interval == "minutes/5": ts = (ts // 300) * 300
+                elif interval == "minutes/60": ts = (ts // 3600) * 3600
+                elif interval == "days": ts = (ts // 86400) * 86400
+
+                prepared_data.append((ts, c))
+
+            # Sort by timestamp ASC
+            prepared_data.sort(key=lambda x: x[0])
+
+            last_valid_ts = None
+            for ts, c in prepared_data:
+                opening = c.get('opening_price') or c.get('open')
+                high = c.get('high_price') or c.get('high')
+                low = c.get('low_price') or c.get('low')
+                close = c.get('trade_price') or c.get('close') or c.get('c')
+                volume = c.get('candle_acc_trade_volume') or c.get('volume') or 0.0
+                kst = c.get('candle_date_time_kst') or c.get('kst_time')
+
+                if opening is None or close is None:
+                    continue
+
+                candle_data = {
+                    'ticker': ticker,
+                    'timestamp': float(ts),
+                    'open': float(opening),
+                    'high': float(high or opening),
+                    'low': float(low or opening),
+                    'close': float(close),
+                    'volume': float(volume),
+                    'kst_time': kst,
+                    'utc_time': datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
+                }
+                
+                index_elements = ['ticker', 'timestamp']
+                
+                stmt = insert(model).values(**candle_data)
+                # SQLite Specific: ON CONFLICT REPLACE
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=index_elements,
+                    set_={
+                        'open': candle_data['open'],
+                        'high': candle_data['high'],
+                        'low': candle_data['low'],
+                        'close': candle_data['close'],
+                        'volume': candle_data['volume'],
+                        'kst_time': candle_data['kst_time'],
+                        'utc_time': candle_data['utc_time']
+                    }
+                )
+                session.execute(stmt)
+            
+            session.commit()
+            logging.info(f"✅ [DATABASE] Successfully saved {len(prepared_data)} candles for {ticker} ({interval})")
+        except Exception as e:
+            logging.error(f"❌ [DATABASE] Error saving candles for {ticker} ({interval}): {e}")
+            import traceback
+            logging.error(traceback.format_exc())
+            session.rollback()
+        finally:
+            session.close()
+
+    def get_candles(self, ticker: str, interval: str, start_ts: float, end_ts: float = None) -> list:
+        """Fetch candles from DB for a given range"""
+        session = self.get_session()
+        try:
+            model = self._get_candle_model(interval)
+            if not model:
+                return []
+                
+            query = session.query(model).filter(model.ticker == ticker)
+            
+            if start_ts:
+                query = query.filter(model.timestamp >= start_ts)
+            
+            if end_ts:
+                query = query.filter(model.timestamp <= end_ts)
+            
+            candles = query.order_by(model.timestamp.asc()).all()
+            
+            # Convert to dict for compatibility
+            results = []
+            for c in candles:
+                from datetime import datetime, timezone
+                utc_val = datetime.fromtimestamp(c.timestamp, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
+
+                results.append({
+                    'ticker': c.ticker,
+                    'interval': interval, # Return requested interval
+                    'timestamp': c.timestamp,
+                    'open': c.open,
+                    'opening_price': c.open,
+                    'high': c.high,
+                    'high_price': c.high,
+                    'low': c.low,
+                    'low_price': c.low,
+                    'close': c.close,
+                    'trade_price': c.close,
+                    'volume': c.volume,
+                    'candle_acc_trade_volume': c.volume,
+                    'candle_date_time_kst': c.kst_time,
+                    'candle_date_time_utc': utc_val
+                })
+            return results
+        finally:
+            session.close()
+
+
+# Global database instances
 _db_manager = None
+_candle_db_manager = None
 
 def get_db() -> DatabaseManager:
-    """Get global database manager instance"""
+    """Get global strategy database manager instance (MOCK/REAL depending on ENV)"""
     global _db_manager
     if _db_manager is None:
         _db_manager = DatabaseManager()
     return _db_manager
+
+def get_candle_db() -> DatabaseManager:
+    """Get global market data database manager instance (Exchange DB)"""
+    global _candle_db_manager
+    if _candle_db_manager is None:
+        # Market data is strictly stored in mock-exchange/sevensplit.db
+        backend_dir = os.path.dirname(os.path.abspath(__file__))
+        market_db_path = os.path.join(backend_dir, "..", "mock-exchange", "sevensplit.db")
+        _candle_db_manager = DatabaseManager(db_path=market_db_path)
+    return _candle_db_manager

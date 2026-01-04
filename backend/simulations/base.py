@@ -5,7 +5,8 @@ import threading
 import pandas as pd
 
 from strategy import SevenSplitStrategy
-from strategies import SplitState, StrategyConfig
+from strategies import SplitState, StrategyConfig, PriceStrategyLogic, RSIStrategyLogic
+from strategies.logic_watch import WatchModeLogic
 from .mock import MockDB, MockExchange
 
 class SimulationStrategy(SevenSplitStrategy):
@@ -27,7 +28,15 @@ class SimulationStrategy(SevenSplitStrategy):
         self.last_sell_price = None
         self.last_buy_date = None
         self.last_sell_date = None
-        self.peak_price = None
+        
+        # Risk & Trailing
+        self.is_watching = False
+        self.watch_lowest_price = None
+
+        # Logic Components (The new Refactored Core)
+        self.price_logic = PriceStrategyLogic(self)
+        self.rsi_logic = RSIStrategyLogic(self)
+        self.watch_logic = WatchModeLogic(self)
         
         # Sim specific
         self.current_candle = None
@@ -36,6 +45,7 @@ class SimulationStrategy(SevenSplitStrategy):
         self.is_watching = False
         self.watch_lowest_price = None
         self.pending_buy_units = 0
+        self.manual_target_price = None
 
         # Pre-computed daily candles cache for RSI calculation
         self._daily_candles_cache = None
@@ -50,6 +60,9 @@ class SimulationStrategy(SevenSplitStrategy):
         self.MIN_ORDER_AMOUNT_KRW = 5000
         self.ORDER_TIMEOUT_SEC = 1800
         self.RSI_UPDATE_INTERVAL_SEC = 1800
+        
+        # Captured events during simulation
+        self.sim_events = []
 
         # Initialize defaults if needed (similar to SevenSplitStrategy)
         if self.config.min_price == 0.0:
@@ -80,10 +93,20 @@ class SimulationStrategy(SevenSplitStrategy):
 
     def log_event(self, level: str, event_type: str, message: str):
         """
-        Override parent log_event to avoid writing to DB (SystemEvent) during simulation.
-        Just log to simulation logs via log_message.
+        Override parent log_event to capture events for simulation result
+        and avoid writing to real database.
         """
+        # 1. Console Log
         self.log_message(f"[{event_type}] {message}", level=level.lower())
+        
+        # 2. Capture for simulation output
+        event_time = self.get_current_time_kst()
+        self.sim_events.append({
+            "created_at": event_time.isoformat() if event_time else None,
+            "level": level,
+            "event_type": event_type,
+            "message": message
+        })
 
     def _precompute_daily_candles(self):
         """
@@ -186,7 +209,7 @@ class SimulationStrategy(SevenSplitStrategy):
             self._daily_candles_cache = []
             return []
 
-    def tick(self, current_price: float = None, open_orders: list = None):
+    def tick(self, current_price: float = None, open_orders: list = None, market_context: dict = None):
         """
         Common tick logic (cleanup, get open orders).
         Subclasses should call super().tick() and then run their logic, OR
@@ -228,6 +251,12 @@ class SimulationStrategy(SevenSplitStrategy):
                 logging.error(f"Failed to process open orders: {e}")
                 return None
             
+            # 1. Manage Orders (Check fills, creation of sells, cleanups)
+            self._manage_orders(open_order_uuids)
+
+            # 2. Dispatch via WatchModeLogic (to handle RSI + Buying Logic)
+            self.watch_logic.run_tick(current_price, market_context=market_context)
+
             return open_order_uuids
 
     def check_trade_limit(self) -> bool:

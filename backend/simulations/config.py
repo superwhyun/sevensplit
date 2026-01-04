@@ -6,5 +6,6 @@ class SimulationConfig(BaseModel):
     strategy_config: StrategyConfig
     candles: List[Dict[str, Any]] # {timestamp, open, high, low, close}
     start_index: int
+    start_time: float = 0 # Unix timestamp
     ticker: str = "KRW-BTC"
     budget: float = 1000000.0

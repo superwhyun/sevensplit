@@ -143,13 +143,13 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                 high: d.high_price,
                 low: d.low_price,
                 close: d.trade_price,
-            }));
+            })).filter(c => c.time !== null);
 
             const newVolumes = data.map(d => ({
                 time: parseUTC(d.candle_date_time_utc),
                 value: d.candle_acc_trade_volume,
-                color: d.trade_price >= d.opening_price ? 'rgba(38, 166, 154, 0.5)' : 'rgba(239, 83, 80, 0.5)',
-            }));
+                color: d.trade_price >= d.opening_price ? '#26a69a' : '#ef5350'
+            })).filter(v => v.time !== null);
 
             if (isHistory) {
                 // Prepend data
@@ -198,7 +198,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             const interval = setInterval(() => fetchCandles(), 60000);
             return () => clearInterval(interval);
         }
-    }, [ticker, config.strategy_mode]);
+    }, [ticker, config?.strategy_mode]);
 
     // Infinite Scroll Logic
     useEffect(() => {
@@ -250,7 +250,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
 
                 // Update RSI (Dual)
                 // Show RSI if mode is RSI OR if Trailing Buy is enabled (which uses 5m RSI)
-                const showRSI = config?.strategy_mode?.toUpperCase() === 'RSI' || config?.use_trailing_buy;
+                const showRSI = config && (config.strategy_mode?.toUpperCase() === 'RSI' || config.use_trailing_buy === true);
 
                 if (showRSI && rsiSeries14Ref.current) {
                     const { rsi14, rsi4 } = calculateDualRSI(candleData);
@@ -263,7 +263,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                         autoScale: false,
                         minValue: 0,
                         maxValue: 100,
-                        scaleMargins: { top: 0.7, bottom: 0.05 },
+                        scaleMargins: { top: 0.6, bottom: 0.15 },
                         visible: true,
                         borderColor: '#ef4444',
                     });
@@ -281,7 +281,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                 console.error("[Chart] Error setting data:", error);
             }
         }
-    }, [candleData, volumeData, config.strategy_mode]);
+    }, [candleData, volumeData, config?.strategy_mode]);
 
     // Handle AutoScaling Toggle
     useEffect(() => {
@@ -317,48 +317,48 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                     bottom: 0.3, // Leave space for RSI
                 },
             },
+            localization: {
+                locale: 'ko-KR',
+                timeFormatter: (time) => {
+                    return new Date(time * 1000).toLocaleString('ko-KR', {
+                        timeZone: 'Asia/Seoul',
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        hour12: false
+                    });
+                }
+            },
             timeScale: {
                 borderColor: '#334155',
                 timeVisible: true,
                 secondsVisible: false,
-                // CUSTOM FORMATTER: Display KST (+9h) on X-Axis from UTC Data
-                tickMarkFormatter: (time, tickMarkType, locale) => {
-                    // 'time' is UTC timestamp from data.
-                    // We want to display it as KST.
+                tickMarkFormatter: (time, tickMarkType) => {
                     const date = new Date(time * 1000);
-                    // Add 9 hours
-                    const kstDate = new Date(date.getTime() + (9 * 60 * 60 * 1000));
+                    const formatter = new Intl.DateTimeFormat('ko-KR', {
+                        timeZone: 'Asia/Seoul',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: false
+                    });
 
-                    // Simple formatting to HH:mm or DD
-                    // tickMarkType: 0=Year, 1=Month, 2=DayOfMonth, 3=Time
-                    // We can check tickMarkType or just standard format
-
-                    const pad = (n) => n.toString().padStart(2, '0');
-                    const month = kstDate.getUTCMonth() + 1;
-                    const day = kstDate.getUTCDate();
-                    const hours = kstDate.getUTCHours();
-                    const minutes = kstDate.getUTCMinutes();
+                    const parts = formatter.formatToParts(date);
+                    const getPart = (type) => parts.find(p => p.type === type)?.value;
 
                     if (tickMarkType === 2) { // Day
-                        return `${month}/${day}`;
+                        return `${getPart('month')}/${getPart('day')}`;
                     } else if (tickMarkType === 3) { // Time
-                        return `${pad(hours)}:${pad(minutes)}`;
+                        return `${getPart('hour')}:${getPart('minute')}`;
                     } else {
-                        // Fallback or Month/Year
-                        return `${kstDate.getUTCFullYear()}-${pad(month)}-${pad(day)}`;
+                        const year = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', year: 'numeric' }).format(date);
+                        return `${year}-${getPart('month')}-${getPart('day')}`;
                     }
                 },
-            },
-            localization: {
-                locale: 'ko-KR',
-                timeFormatter: (time) => {
-                    const date = new Date(time * 1000);
-                    // Add 9 hours for KST
-                    const kstDate = new Date(date.getTime() + 9 * 60 * 60 * 1000);
-
-                    const pad = (n) => n.toString().padStart(2, '0');
-                    return `${kstDate.getUTCFullYear()}-${pad(kstDate.getUTCMonth() + 1)}-${pad(kstDate.getUTCDate())} ${pad(kstDate.getUTCHours())}:${pad(kstDate.getUTCMinutes())}`;
-                }
             },
             width: chartContainerRef.current.clientWidth,
             height: 400,
@@ -416,17 +416,9 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
 
         // Click Handler for Simulation
         chart.subscribeClick(param => {
-            console.log("[StrategyChart] Click param:", param);
             if (onChartClickRef.current && param.time) {
                 // The chart now uses Real UTC timestamps internally. 
-                // param.time is Real UTC. No offset needed.
-                const date = new Date(param.time * 1000);
-                const kstDate = new Date(date.getTime() + 9 * 60 * 60 * 1000);
-
-                const utcStr = date.toISOString().replace('T', ' ').slice(0, 19);
-                const kstStr = kstDate.toISOString().replace('T', ' ').slice(0, 19);
-
-                console.log(`[StrategyChart] Clicked Time - UTC: ${utcStr} | KST: ${kstStr} (Timestamp: ${param.time})`);
+                // param.time is Real UTC.
                 onChartClickRef.current(param.time);
             }
         });
@@ -473,7 +465,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
         chart.priceScale('volume').applyOptions({
             scaleMargins: {
                 top: 0.5,
-                bottom: 0.3,
+                bottom: 0.35,
             },
         });
 
@@ -504,20 +496,20 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
         const rsiSellLine = rsiSeries14.createPriceLine({
             price: configRef.current.rsi_sell_min || 70.0,
             color: '#ef4444',
-            lineWidth: 1,
+            lineWidth: 2,
             lineStyle: 2,
-            axisLabelVisible: false,
-            title: 'Sell Zone',
+            axisLabelVisible: true,
+            title: '80',
         });
         rsiSellLineRef.current = rsiSellLine;
 
         const rsiBuyLine = rsiSeries14.createPriceLine({
             price: configRef.current.rsi_buy_max || 30.0,
             color: '#10b981',
-            lineWidth: 1,
+            lineWidth: 2,
             lineStyle: 2,
-            axisLabelVisible: false,
-            title: 'Buy Zone',
+            axisLabelVisible: true,
+            title: '30',
         });
         rsiBuyLineRef.current = rsiBuyLine;
 
@@ -545,7 +537,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
 
         const markers = [];
 
-        // Helper: No more timezone shifting needed. 
+        // Helper: No more timezone shifting needed.
         // Just explicit parsing if input is string to ensure safe Unix timestamp.
         const ensureTimestamp = (val) => {
             if (!val) return null;
@@ -599,7 +591,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
                             markers.push({
                                 time: time,
                                 position: 'belowBar',
-                                color: split.status === 'PENDING_SELL' ? '#eab308' : '#10b981', // Yellow if holding
+                                color: split.status === 'PENDING_SELL' ? '#eab308' : '#10b981',
                                 shape: 'arrowUp',
                                 text: '',
                                 size: 1,

@@ -99,6 +99,11 @@ class StrategyService:
             
         self.strategies[strategy_id].update_config(config)
 
+    def set_manual_target(self, strategy_id: int, price: Optional[float]):
+        if strategy_id not in self.strategies:
+            raise ValueError("Strategy not found")
+        self.strategies[strategy_id].set_manual_target(price)
+
     def reset_strategy(self, strategy_id: int):
         if strategy_id not in self.strategies:
             raise ValueError("Strategy not found")

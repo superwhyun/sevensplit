@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import requests
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 import threading
 import time
 import uvicorn
@@ -166,7 +166,7 @@ class MockExchangeLogic:
                     "price": order.price,
                     "state": order.state,
                     "market": order.market,
-                    "created_at": order.created_at.isoformat() if order.created_at else datetime.now().isoformat(),
+                    "created_at": order.created_at.isoformat() if order.created_at else datetime.now(timezone.utc).isoformat(),
                     "volume": order.volume,
                     "remaining_volume": order.remaining_volume,
                     "reserved_fee": order.reserved_fee,
@@ -383,7 +383,7 @@ class MockExchangeLogic:
                             "price": db_order.price,
                             "state": db_order.state,
                             "market": db_order.market,
-                            "created_at": db_order.created_at.isoformat() if db_order.created_at else datetime.now().isoformat(),
+                            "created_at": db_order.created_at.isoformat() if db_order.created_at else datetime.now(timezone.utc).isoformat(),
                             "volume": db_order.volume,
                             "remaining_volume": db_order.remaining_volume,
                             "reserved_fee": db_order.reserved_fee,
@@ -452,7 +452,7 @@ class MockExchangeLogic:
                 logging.error(f"Mock server: Failed to save order to DB: {e}")
             
             # Cache in memory
-            order = {**order_data, "created_at": datetime.now().isoformat()}
+            order = {**order_data, "created_at": datetime.now(timezone.utc).isoformat()}
             self.orders[order_id] = order
             
             # Check for immediate execution
@@ -476,7 +476,7 @@ class MockExchangeLogic:
                     "price": db_order.price,
                     "state": db_order.state,
                     "market": db_order.market,
-                    "created_at": db_order.created_at.isoformat() if db_order.created_at else datetime.now().isoformat(),
+                    "created_at": db_order.created_at.isoformat() if db_order.created_at else datetime.now(timezone.utc).isoformat(),
                     "volume": db_order.volume,
                     "remaining_volume": db_order.remaining_volume,
                     "reserved_fee": db_order.reserved_fee,
@@ -600,7 +600,7 @@ class MockExchangeLogic:
                             "volume": str(vol),
                             "funds": str(total),
                             "side": order["side"],
-                            "created_at": datetime.now().isoformat()
+                            "created_at": datetime.now(timezone.utc).isoformat()
                         }
                         
                         order["state"] = "done"
@@ -685,104 +685,45 @@ def order_matcher():
 @app.get("/v1/candles/days")
 def candles_days(market: str, count: int = 200, to: Optional[str] = None):
     """Proxy /v1/candles/days from real Upbit API"""
-    cache_key = f"candles_days_{market}_{count}_{to}"
-    current_time = time.time()
-    
-    # Check cache (valid for 60 seconds)
-    if hasattr(mock_logic, 'candle_cache') and cache_key in mock_logic.candle_cache:
-        data, timestamp = mock_logic.candle_cache[cache_key]
-        if current_time - timestamp < 60:
-            return data
-            
     if not mock_logic.live_api_base:
-        # Fallback if no live API
         return []
     
     try:
         url = f"{mock_logic.live_api_base}/v1/candles/days"
         params = {'market': market, 'count': count}
-        if to:
-            params['to'] = to
+        if to: params['to'] = to
             
+        logging.info(f"🌐 [UPBIT API PROXY] Days for {market} (to={to})")
         resp = requests.get(url, params=params, timeout=5)
         if resp.status_code == 200:
-            data = resp.json()
-            
-            # Initialize cache if needed
-            if not hasattr(mock_logic, 'candle_cache'):
-                mock_logic.candle_cache = {}
-                
-            # Update cache
-            mock_logic.candle_cache[cache_key] = (data, current_time)
-            
-            # Clean old cache entries occasionally
-            if len(mock_logic.candle_cache) > 100:
-                mock_logic.candle_cache = {}
-                
-            return data
-        elif resp.status_code == 429:
-             logging.warning(f"Upbit API Rate Limit (429) for candles. Returning cached if available.")
-             if hasattr(mock_logic, 'candle_cache') and cache_key in mock_logic.candle_cache:
-                 return mock_logic.candle_cache[cache_key][0]
-             raise HTTPException(status_code=429, detail="Upbit API Rate Limit")
+            return resp.json()
         else:
             logging.error(f"Upbit API Error {resp.status_code}: {resp.text}")
             raise HTTPException(status_code=resp.status_code, detail="Upbit API Error")
-            
     except Exception as e:
-        logging.error(f"Failed to proxy candles: {e}")
+        logging.error(f"Failed to proxy daily candles: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/v1/candles/minutes/{unit}")
 def candles_minutes(unit: int, market: str, to: Optional[str] = None, count: int = 200):
-    """Proxy /v1/candles/minutes/{unit} from real Upbit API with caching"""
+    """Proxy /v1/candles/minutes/{unit} from real Upbit API"""
     if not mock_logic.live_api_base:
         return []
-
-    # Simple in-memory cache key
-    cache_key = f"candles_{unit}_{market}_{to}_{count}"
-    current_time = time.time()
-    
-    # Check cache (valid for 60 seconds)
-    if hasattr(mock_logic, 'candle_cache') and cache_key in mock_logic.candle_cache:
-        cached_data, timestamp = mock_logic.candle_cache[cache_key]
-        if current_time - timestamp < 60:
-            return cached_data
     
     try:
         url = f"{mock_logic.live_api_base}/v1/candles/minutes/{unit}"
         params = {'market': market, 'count': count}
-        if to:
-            params['to'] = to
+        if to: params['to'] = to
             
+        logging.info(f"🌐 [UPBIT API PROXY] Minutes/{unit} for {market} (to={to})")
         resp = requests.get(url, params=params, timeout=5)
         if resp.status_code == 200:
-            data = resp.json()
-            
-            # Initialize cache if needed
-            if not hasattr(mock_logic, 'candle_cache'):
-                mock_logic.candle_cache = {}
-                
-            # Update cache
-            mock_logic.candle_cache[cache_key] = (data, current_time)
-            
-            # Clean old cache entries occasionally (simple approach: clear all if too big)
-            if len(mock_logic.candle_cache) > 100:
-                mock_logic.candle_cache = {}
-                
-            return data
-        elif resp.status_code == 429:
-             logging.warning(f"Upbit API Rate Limit (429) for candles. Returning cached if available.")
-             # Try to return stale cache if available
-             if hasattr(mock_logic, 'candle_cache') and cache_key in mock_logic.candle_cache:
-                 return mock_logic.candle_cache[cache_key][0]
-             raise HTTPException(status_code=429, detail="Upbit API Rate Limit")
+            return resp.json()
         else:
             logging.error(f"Upbit API Error {resp.status_code}: {resp.text}")
             raise HTTPException(status_code=resp.status_code, detail="Upbit API Error")
-            
     except Exception as e:
-        logging.error(f"Failed to proxy candles: {e}")
+        logging.error(f"Failed to proxy minute candles: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -855,7 +796,7 @@ def ticker(markets: str):
     
     market_list = markets.split(",")
     prices = mock_logic.get_prices_for_markets(market_list)
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     timestamp_ms = int(time.time() * 1000)
 
     result = []
