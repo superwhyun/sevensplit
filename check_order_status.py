@@ -10,12 +10,12 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv("backend/.env.real")
 
-ACCESS_KEY = os.getenv("UPBIT_OPEN_API_ACCESS_KEY")
-SECRET_KEY = os.getenv("UPBIT_OPEN_API_SECRET_KEY")
+ACCESS_KEY = os.getenv("UPBIT_ACCESS_KEY")
+SECRET_KEY = os.getenv("UPBIT_SECRET_KEY")
 SERVER_URL = os.getenv("UPBIT_OPEN_API_SERVER_URL", "https://api.upbit.com")
 
 if not ACCESS_KEY or not SECRET_KEY:
-    print("Error: UPBIT_OPEN_API_ACCESS_KEY or UPBIT_OPEN_API_SECRET_KEY not found in backend/.env.real")
+    print("Error: UPBIT_ACCESS_KEY or UPBIT_SECRET_KEY not found in backend/.env.real")
     sys.exit(1)
 
 def get_order_status(order_uuid):

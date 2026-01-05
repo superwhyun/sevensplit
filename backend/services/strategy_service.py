@@ -136,7 +136,8 @@ class StrategyService:
                 strategy_id,
                 next_split_id=1,
                 last_buy_price=None,
-                last_sell_price=None
+                last_sell_price=None,
+                manual_target_price=None
             )
 
             # Recreate instance

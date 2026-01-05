@@ -604,17 +604,20 @@ class SevenSplitStrategy(BaseStrategy):
             # Handle 'done' (Filled) OR 'cancel' (Partial Fill or Cancelled)
             if state == 'done' or state == 'cancel':
                 executed_vol = float(order.get('executed_volume', 0))
-                
+
                 if executed_vol > 0:
                     # Filled or Partially Filled -> Treat as success
                     split.status = "BUY_FILLED"
                     split.bought_at = datetime.now(timezone.utc).isoformat()
-                    
+
+                    # Calculate actual execution metrics from order
+                    actual_price, volume = self._calculate_execution_metrics(order, split.buy_price or 0.0)
+
                     # Sync buy_price to actual for display consistency
                     split.actual_buy_price = actual_price
                     split.buy_price = actual_price
                     split.buy_volume = volume # Use actual volume from trades/order if available
-                    
+
                     if split.buy_volume <= 0:
                         split.buy_volume = executed_vol
 
@@ -747,7 +750,7 @@ class SevenSplitStrategy(BaseStrategy):
             "gross_profit": sell_total - buy_total,
             "net_profit": net_profit,
             "profit_rate": profit_rate,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "bought_at": split.bought_at,
             "buy_rsi": split.buy_rsi
         })
@@ -799,12 +802,12 @@ class SevenSplitStrategy(BaseStrategy):
             # Determine Operation Status
             logic_status = "Normal"
             active_splits_count = status_counts["buy_filled"] + status_counts["pending_sell"]
-            
+
             # Limit Logic:
             # 1. Budget is global.
             # 2. max_holdings is RSI-specific (as per UI config).
             is_max_holdings_reached = (self.config.strategy_mode == "RSI" and active_splits_count >= self.config.max_holdings)
-            
+
             if not self.is_running:
                 logic_status = "Stopped"
             elif not self.has_sufficient_budget() or is_max_holdings_reached:

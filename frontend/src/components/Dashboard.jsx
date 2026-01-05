@@ -400,7 +400,7 @@ const Dashboard = () => {
 
     const handleStart = async () => {
         try {
-            await axios.post(`${API_BASE_URL}/start`, { strategy_id: selectedStrategyId });
+            await axios.post(`${API_BASE_URL}/bot/start`, { strategy_id: selectedStrategyId });
             fetchStatus();
         } catch (error) {
             console.error('Error starting bot:', error);
@@ -409,7 +409,7 @@ const Dashboard = () => {
 
     const handleStop = async () => {
         try {
-            await axios.post(`${API_BASE_URL}/stop`, { strategy_id: selectedStrategyId });
+            await axios.post(`${API_BASE_URL}/bot/stop`, { strategy_id: selectedStrategyId });
             fetchStatus();
         } catch (error) {
             console.error('Error stopping bot:', error);
@@ -421,7 +421,7 @@ const Dashboard = () => {
             return;
         }
         try {
-            await axios.post(`${API_BASE_URL}/reset`, { strategy_id: selectedStrategyId });
+            await axios.post(`${API_BASE_URL}/bot/reset`, { strategy_id: selectedStrategyId });
             fetchStatus();
             fetchPortfolio();
         } catch (error) {
@@ -519,7 +519,7 @@ const Dashboard = () => {
 
     const handleSetManualTarget = async (price) => {
         try {
-            await axios.post(`${API_BASE_URL}/strategies/${selectedStrategyId}/target`, {
+            await axios.post(`${API_BASE_URL}/strategies/${selectedStrategyId}/manual-target`, {
                 target_price: price
             });
             fetchStatus(); // Refresh UI
@@ -527,6 +527,25 @@ const Dashboard = () => {
             console.error('Error setting manual target:', error);
             alert('Failed to set manual target price');
         }
+    };
+
+    const getNextBuyTarget = (statusData) => {
+        if (!statusData) return null;
+
+        // Manual target has priority
+        if (statusData.manual_target_price !== null && statusData.manual_target_price !== undefined) {
+            const manual = Number(statusData.manual_target_price);
+            if (Number.isFinite(manual) && manual > 0) return Math.floor(manual);
+        }
+
+        // Calculate from last_buy_price
+        const lastBuy = Number(statusData.last_buy_price);
+        if (!Number.isFinite(lastBuy) || lastBuy <= 0) return null;
+
+        const buyRate = Number(statusData.config?.buy_rate ?? strategyConfig?.buy_rate);
+        const resolvedBuyRate = Number.isFinite(buyRate) ? buyRate : 0.005;
+
+        return Math.floor(lastBuy * (1 - resolvedBuyRate));
     };
 
     const resolvedConfig = simResult?.config ?? strategyConfig ?? status?.config ?? {};
@@ -593,7 +612,7 @@ const Dashboard = () => {
                 isOpen={isManualTargetModalOpen}
                 onClose={() => setIsManualTargetModalOpen(false)}
                 onSave={handleSetManualTarget}
-                currentTarget={status?.manual_target_price || (status?.last_buy_price ? status.last_buy_price * (1 - (status?.config?.buy_rate || 0.005)) : null)}
+                currentTarget={getNextBuyTarget(status)}
             />
 
             {/* Global Portfolio Header */}
@@ -1187,7 +1206,8 @@ const Dashboard = () => {
                                             <span style={{ color: (!simResult && status?.manual_target_price) ? '#f59e0b' : '#3b82f6', fontWeight: 'bold' }}>
                                                 {(() => {
                                                     if (!simResult) {
-                                                        return `₩${(status?.manual_target_price || Math.floor(status?.last_buy_price * (1 - status?.config?.buy_rate))).toLocaleString()}`;
+                                                        const nextTarget = getNextBuyTarget(status);
+                                                        return nextTarget !== null ? `₩${nextTarget.toLocaleString()}` : '-';
                                                     } else {
                                                         // Calculate from sim splits
                                                         const activeSplits = simResult.splits.filter(s => s.status !== "SELL_FILLED");
