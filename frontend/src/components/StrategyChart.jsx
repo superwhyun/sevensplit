@@ -213,7 +213,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             if (newVisibleLogicalRange === null) return;
 
             // If scrolled close to the start (left side)
-            if (newVisibleLogicalRange.from < 10 && !isLoadingMore) {
+            if (newVisibleLogicalRange.from < 30 && !isLoadingMore) {
                 if (candleData.length > 0) {
                     const firstTime = candleData[0].time;
                     // Convert unix timestamp back to ISO UTC string for API

@@ -833,7 +833,7 @@ class SevenSplitStrategy(BaseStrategy):
                 "status_counts": status_counts,
                 "last_buy_price": self.last_buy_price,
                 "manual_target_price": self.manual_target_price,
-                "trade_history": self.trade_history[:10], # Return last 10 trades
+                "trade_history": self.trade_history[:200], # Return last 200 trades (increased from 10)
                 "rsi": self.rsi_logic.current_rsi,  # Expose RSI
                 "rsi_short": self.rsi_logic.current_rsi_short, # Expose Short RSI
                 "rsi_daily": self.rsi_logic.current_rsi_daily, # Expose Daily RSI
