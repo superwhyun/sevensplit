@@ -2,25 +2,54 @@
 
 /* Global Layout */
 .dashboard-layout {
-  display: grid;
-  grid-template-columns: 400px 1fr;
-  gap: 1.5rem;
+  display: block;
+  /* No more top-level grid needed */
   padding: 1.5rem;
-  align-items: start;
 }
 
-.dashboard-sidebar {
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
-}
+/* sidebar class is no longer used in Dashboard.jsx */
 
 .dashboard-main {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 400px 1fr;
+  /* Mimic the previous layout: Config | Rest */
+  grid-template-areas:
+    "config controls"
+    "config chart"
+    "config segment"
+    "config grid-status"
+    "config trades"
+    "config events";
   gap: 1.5rem;
   min-width: 0;
-  /* Prevents grid blowout */
+}
+
+.strategy-config-container {
+  grid-area: config;
+}
+
+.controls-container {
+  grid-area: controls;
+}
+
+.strategy-chart-container {
+  grid-area: chart;
+}
+
+.segment-status-card {
+  grid-area: segment;
+}
+
+.grid-status-container {
+  grid-area: grid-status;
+}
+
+.trades-container {
+  grid-area: trades;
+}
+
+.event-log-container {
+  grid-area: events;
 }
 
 /* Header & Top Row */
@@ -238,10 +267,37 @@
     gap: 1rem;
   }
 
-  /* Reorder: Main content (Chart) first, then Sidebar (Config) */
+  /* Reorder within .dashboard-main for mobile:
+     Chart -> Segment Status -> Strategy Config -> Events -> ... */
   .dashboard-main {
+    display: flex;
+    /* Override grid to stack */
+    flex-direction: column;
     order: -1;
     gap: 1rem;
+  }
+
+  .strategy-config-container {
+    order: 2;
+    /* 1: Controls/Chart/Segment, 2: Config, 3: Grid/Trades, 4: Events */
+  }
+
+  .controls-container,
+  .strategy-chart-container {
+    order: 0;
+  }
+
+  .segment-status-card {
+    order: 1;
+  }
+
+  .grid-status-container,
+  .trades-container {
+    order: 3;
+  }
+
+  .event-log-container {
+    order: 4;
   }
 
   .portfolio-summary-card {

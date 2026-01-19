@@ -228,6 +228,8 @@ const Dashboard = () => {
     const [showRsiDebugModal, setShowRsiDebugModal] = useState(false);
     const [debugRsiValue, setDebugRsiValue] = useState(50);
     const [debugPrevRsiValue, setDebugPrevRsiValue] = useState(50);
+    const [tradesPage, setTradesPage] = useState(1);
+    const TRADES_PER_PAGE = 10;
 
     const selectedStrategyIdRef = useRef(selectedStrategyId);
 
@@ -395,6 +397,7 @@ const Dashboard = () => {
         if (selectedStrategyId) {
             localStorage.setItem('selectedStrategyId', selectedStrategyId);
             fetchStatus();
+            setTradesPage(1); // Reset page when strategy changes
         }
     }, [selectedStrategyId]);
 
@@ -911,29 +914,20 @@ const Dashboard = () => {
                         </div>
                     )}
 
-                    {/* Main Content Grid */}
                     <div className="dashboard-layout">
-                        {/* Left Sidebar: Config */}
-                        <aside className="dashboard-sidebar">
-                            <Config
-                                config={strategyConfig}
-                                onUpdate={() => {
-                                    fetchStatus();
-                                    fetchStrategies();
-                                }}
-                                strategyId={selectedStrategyId}
-                                currentPrice={status?.current_price}
-                            />
-                            <div style={{ padding: '1rem', backgroundColor: '#1e293b', borderRadius: '0.5rem', border: '1px solid #334155' }}>
-                                <div style={{ color: '#94a3b8', fontSize: '0.875rem', marginBottom: '0.5rem' }}>Budget</div>
-                                <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#f8fafc' }}>
-                                    ₩{status?.budget?.toLocaleString()}
-                                </div>
-                            </div>
-                        </aside>
-
                         {/* Right Content: Controls, Chart, Tables */}
                         <main className="dashboard-main">
+                            <div className="strategy-config-container">
+                                <Config
+                                    config={strategyConfig}
+                                    onUpdate={() => {
+                                        fetchStatus();
+                                        fetchStrategies();
+                                    }}
+                                    strategyId={selectedStrategyId}
+                                    currentPrice={status?.current_price}
+                                />
+                            </div>
                             {/* Control Panel */}
                             {/* Control Panel */}
                             <div style={{
@@ -1119,17 +1113,9 @@ const Dashboard = () => {
                                 />
                             </div>
 
-                            {/* System Event Log */}
-                            <EventLog
-                                strategyId={selectedStrategyId}
-                                apiBaseUrl={API_BASE_URL}
-                                status={status?.status}
-                                simulationEvents={simResult?.events}
-                            />
-
                             {/* Segment Summary (if segments are defined) */}
                             {(simResult ? simResult.config?.price_segments : strategyConfig?.price_segments)?.length > 0 && (
-                                <div className="card" style={{ marginBottom: '1rem' }}>
+                                <div className="card segment-status-card" style={{ marginBottom: '1rem' }}>
                                     <div className="card-header">
                                         <span className="card-title">Segment Status</span>
                                     </div>
@@ -1182,337 +1168,380 @@ const Dashboard = () => {
                             )}
 
                             {/* Grid Status List */}
-                            <div className="card" style={{ maxHeight: '600px', overflowY: 'auto', overflowX: 'auto' }}>
-                                <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <span className="card-title">
-                                        {simResult ? 'Simulated Grid Status' : 'Grid Status'} ({simResult ? simResult.splits.length : (status?.splits?.length || 0)} Lines)
-                                    </span>
-                                    {(simResult || status?.last_buy_price || status?.manual_target_price) && (
-                                        <span
-                                            onClick={() => !simResult && setIsManualTargetModalOpen(true)}
-                                            style={{
-                                                fontSize: '0.9rem',
-                                                color: '#94a3b8',
-                                                cursor: simResult ? 'default' : 'pointer',
-                                                padding: '0.25rem 0.5rem',
-                                                borderRadius: '0.25rem',
-                                                backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                                                border: '1px dashed rgba(59, 130, 246, 0.3)',
-                                                transition: 'all 0.2s'
-                                            }}
-                                            className={simResult ? "" : "hover-bright"}
-                                        >
-                                            {simResult ? 'Next Sim Target: ' : 'Next Buy Target: '}
-                                            <span style={{ color: (!simResult && status?.manual_target_price) ? '#f59e0b' : '#3b82f6', fontWeight: 'bold' }}>
-                                                {(() => {
-                                                    if (!simResult) {
-                                                        const nextTarget = getNextBuyTarget(status);
-                                                        return nextTarget !== null ? `₩${nextTarget.toLocaleString()}` : '-';
-                                                    } else {
-                                                        // Calculate from sim splits
-                                                        const activeSplits = simResult.splits.filter(s => s.status !== "SELL_FILLED");
-                                                        const lastBuy = activeSplits.length > 0 ? Math.max(...activeSplits.map(s => s.buy_price)) : simResult.final_price;
-                                                        // Note: PRICE logic uses lowest buy_price as ref, but UI usually expects next drop from currently lowest ACTIVE buy?
-                                                        // Actually strategy.last_buy_price is what matters. 
-                                                        // In simResult, we don't return last_buy_price explicitly, but we can guess it from the splits.
-                                                        const simLastBuy = simResult.splits.length > 0 ? simResult.splits[simResult.splits.length - 1].buy_price : simResult.final_price;
-                                                        return `₩${Math.floor(simLastBuy * (1 - (simResult.config?.buy_rate || 0.005))).toLocaleString()}`;
-                                                    }
-                                                })()}
-                                            </span>
-                                            {!simResult && <span style={{ marginLeft: '0.5rem', fontSize: '0.8rem' }}>✏️</span>}
+                            <div className="grid-status-container">
+                                <div className="card" style={{ maxHeight: '600px', overflowY: 'auto', overflowX: 'auto' }}>
+                                    <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <span className="card-title">
+                                            {simResult ? 'Simulated Grid Status' : 'Grid Status'} ({simResult ? simResult.splits.length : (status?.splits?.length || 0)} Lines)
                                         </span>
-                                    )}
-                                </div>
-                                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-                                    <thead style={{ position: 'sticky', top: 0, backgroundColor: '#1e293b', zIndex: 10 }}>
-                                        <tr style={{ borderBottom: '1px solid #334155', color: '#94a3b8' }}>
-                                            <th style={{ padding: '1rem' }}>ID</th>
-                                            <th style={{ padding: '1rem' }}>Status</th>
-                                            <th style={{ padding: '1rem' }}>Buy Time</th>
-                                            <th style={{ padding: '1rem' }}>Info</th>
-                                            <th style={{ padding: '1rem' }}>Buy Price (vs Current)</th>
-                                            <th style={{ padding: '1rem' }}>Invested</th>
-                                            <th style={{ padding: '1rem' }}>Sell Target (vs Current)</th>
-                                            <th style={{ padding: '1rem' }}>Current P/L</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {(simResult ? simResult.splits : (status?.splits || [])).map(split => {
-                                            const isBought = split.status === "BUY_FILLED" || split.status === "PENDING_SELL";
+                                        {(simResult || status?.last_buy_price || status?.manual_target_price) && (
+                                            <span
+                                                onClick={() => !simResult && setIsManualTargetModalOpen(true)}
+                                                style={{
+                                                    fontSize: '0.9rem',
+                                                    color: '#94a3b8',
+                                                    cursor: simResult ? 'default' : 'pointer',
+                                                    padding: '0.25rem 0.5rem',
+                                                    borderRadius: '0.25rem',
+                                                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                                                    border: '1px dashed rgba(59, 130, 246, 0.3)',
+                                                    transition: 'all 0.2s'
+                                                }}
+                                                className={simResult ? "" : "hover-bright"}
+                                            >
+                                                {simResult ? 'Next Sim Target: ' : 'Next Buy Target: '}
+                                                <span style={{ color: (!simResult && status?.manual_target_price) ? '#f59e0b' : '#3b82f6', fontWeight: 'bold' }}>
+                                                    {(() => {
+                                                        if (!simResult) {
+                                                            const nextTarget = getNextBuyTarget(status);
+                                                            return nextTarget !== null ? `₩${nextTarget.toLocaleString()}` : '-';
+                                                        } else {
+                                                            // Calculate from sim splits
+                                                            const activeSplits = simResult.splits.filter(s => s.status !== "SELL_FILLED");
+                                                            const lastBuy = activeSplits.length > 0 ? Math.max(...activeSplits.map(s => s.buy_price)) : simResult.final_price;
+                                                            // Note: PRICE logic uses lowest buy_price as ref, but UI usually expects next drop from currently lowest ACTIVE buy?
+                                                            // Actually strategy.last_buy_price is what matters. 
+                                                            // In simResult, we don't return last_buy_price explicitly, but we can guess it from the splits.
+                                                            const simLastBuy = simResult.splits.length > 0 ? simResult.splits[simResult.splits.length - 1].buy_price : simResult.final_price;
+                                                            return `₩${Math.floor(simLastBuy * (1 - (simResult.config?.buy_rate || 0.005))).toLocaleString()}`;
+                                                        }
+                                                    })()}
+                                                </span>
+                                                {!simResult && <span style={{ marginLeft: '0.5rem', fontSize: '0.8rem' }}>✏️</span>}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                                        <thead style={{ position: 'sticky', top: 0, backgroundColor: '#1e293b', zIndex: 10 }}>
+                                            <tr style={{ borderBottom: '1px solid #334155', color: '#94a3b8' }}>
+                                                <th style={{ padding: '1rem' }}>ID</th>
+                                                <th style={{ padding: '1rem' }}>Status</th>
+                                                <th style={{ padding: '1rem' }}>Buy Time</th>
+                                                <th style={{ padding: '1rem' }}>Info</th>
+                                                <th style={{ padding: '1rem' }}>Buy Price (vs Current)</th>
+                                                <th style={{ padding: '1rem' }}>Invested</th>
+                                                <th style={{ padding: '1rem' }}>Sell Target (vs Current)</th>
+                                                <th style={{ padding: '1rem' }}>Current P/L</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {(simResult ? simResult.splits : (status?.splits || [])).map(split => {
+                                                const isBought = split.status === "BUY_FILLED" || split.status === "PENDING_SELL";
 
-                                            // [CRITICAL] Use final simulation price if in simulation mode
-                                            const effectivePrice = simResult ? simResult.final_price : status?.current_price;
+                                                // [CRITICAL] Use final simulation price if in simulation mode
+                                                const effectivePrice = simResult ? simResult.final_price : status?.current_price;
 
-                                            const profitRate = isBought ? ((effectivePrice - split.buy_price) / split.buy_price * 100) : 0;
+                                                const profitRate = isBought ? ((effectivePrice - split.buy_price) / split.buy_price * 100) : 0;
 
-                                            // Calculate rate vs current price
-                                            const buyPriceRate = ((split.buy_price - effectivePrice) / effectivePrice * 100);
-                                            const sellTargetPrice = split.target_sell_price > 0
-                                                ? split.target_sell_price
-                                                : split.buy_price * (1 + (simResult ? (simResult.config?.sell_rate || 0.005) : (status?.config?.sell_rate || 0.005)));
-                                            const sellTargetRate = ((sellTargetPrice - effectivePrice) / effectivePrice * 100);
+                                                // Calculate rate vs current price
+                                                const buyPriceRate = ((split.buy_price - effectivePrice) / effectivePrice * 100);
+                                                const sellTargetPrice = split.target_sell_price > 0
+                                                    ? split.target_sell_price
+                                                    : split.buy_price * (1 + (simResult ? (simResult.config?.sell_rate || 0.005) : (status?.config?.sell_rate || 0.005)));
+                                                const sellTargetRate = ((sellTargetPrice - effectivePrice) / effectivePrice * 100);
 
-                                            return (
-                                                <tr key={split.id} style={{ borderBottom: '1px solid #1e293b', backgroundColor: isBought ? 'rgba(16, 185, 129, 0.1)' : 'transparent' }}>
-                                                    <td style={{ padding: '1rem' }}>#{split.id}</td>
-                                                    <td style={{ padding: '1rem' }}>
-                                                        <span style={{
-                                                            padding: '0.25rem 0.5rem',
-                                                            borderRadius: '0.25rem',
-                                                            fontSize: '0.75rem',
-                                                            fontWeight: 'bold',
-                                                            backgroundColor: isBought ? '#10b981' : '#64748b',
-                                                            color: 'white'
-                                                        }}>
-                                                            {split.status}
-                                                        </span>
-                                                    </td>
-                                                    <td style={{ padding: '1rem', fontSize: '0.85rem', color: '#cbd5e1' }}>
-                                                        {formatTime(split.bought_at)}
-                                                    </td>
-                                                    <td style={{ padding: '1rem' }}>
-                                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                                                            {(() => {
-                                                                const segments = simResult ? simResult.config?.price_segments : strategyConfig?.price_segments;
-                                                                if (segments && segments.length > 0) {
-                                                                    const segmentIndex = segments.findIndex(seg =>
-                                                                        split.buy_price >= seg.min_price && split.buy_price <= seg.max_price
-                                                                    );
-                                                                    if (segmentIndex !== -1) {
-                                                                        const colors = [
-                                                                            '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
-                                                                            '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#84cc16'
-                                                                        ];
-                                                                        return (
-                                                                            <span style={{
-                                                                                fontSize: '0.7rem',
-                                                                                backgroundColor: colors[segmentIndex % colors.length],
-                                                                                color: 'white',
-                                                                                padding: '0.1rem 0.4rem',
-                                                                                borderRadius: '0.2rem',
-                                                                                width: 'fit-content'
-                                                                            }}>
-                                                                                Seg {segmentIndex + 1}
-                                                                            </span>
-                                                                        );
-                                                                    }
-                                                                }
-                                                                return null;
-                                                            })()}
-                                                            {split.is_accumulated && (
-                                                                <span style={{
-                                                                    fontSize: '0.7rem',
-                                                                    backgroundColor: '#8b5cf6',
-                                                                    color: 'white',
-                                                                    padding: '0.1rem 0.4rem',
-                                                                    borderRadius: '0.2rem',
-                                                                    width: 'fit-content'
-                                                                }}>
-                                                                    Accumulated
-                                                                </span>
-                                                            )}
-                                                            {split.buy_rsi !== undefined && split.buy_rsi !== null && (
-                                                                <span style={{ fontSize: '0.75rem', color: '#cbd5e1' }}>
-                                                                    RSI: {split.buy_rsi.toFixed(1)}
-                                                                </span>
-                                                            )}
-                                                            {!split.is_accumulated && (split.buy_rsi === undefined || split.buy_rsi === null) && (
-                                                                (() => {
+                                                return (
+                                                    <tr key={split.id} style={{ borderBottom: '1px solid #1e293b', backgroundColor: isBought ? 'rgba(16, 185, 129, 0.1)' : 'transparent' }}>
+                                                        <td style={{ padding: '1rem' }}>#{split.id}</td>
+                                                        <td style={{ padding: '1rem' }}>
+                                                            <span style={{
+                                                                padding: '0.25rem 0.5rem',
+                                                                borderRadius: '0.25rem',
+                                                                fontSize: '0.75rem',
+                                                                fontWeight: 'bold',
+                                                                backgroundColor: isBought ? '#10b981' : '#64748b',
+                                                                color: 'white'
+                                                            }}>
+                                                                {split.status}
+                                                            </span>
+                                                        </td>
+                                                        <td style={{ padding: '1rem', fontSize: '0.85rem', color: '#cbd5e1' }}>
+                                                            {formatTime(split.bought_at)}
+                                                        </td>
+                                                        <td style={{ padding: '1rem' }}>
+                                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                                                {(() => {
                                                                     const segments = simResult ? simResult.config?.price_segments : strategyConfig?.price_segments;
-                                                                    const hasSegmentBadge = segments && segments.length > 0 && segments.some(seg =>
-                                                                        split.buy_price >= seg.min_price && split.buy_price <= seg.max_price
-                                                                    );
-                                                                    return hasSegmentBadge ? null : <span style={{ fontSize: '0.75rem', color: '#64748b' }}>-</span>;
-                                                                })()
-                                                            )}
-                                                        </div>
-                                                    </td>
-                                                    <td style={{ padding: '1rem' }}>
-                                                        <div>₩{split.buy_price.toLocaleString()}</div>
-                                                        <div style={{
-                                                            fontSize: '0.75rem',
-                                                            color: buyPriceRate < 0 ? '#10b981' : buyPriceRate > 0 ? '#ef4444' : '#94a3b8'
-                                                        }}>
-                                                            {buyPriceRate > 0 ? '+' : ''}{buyPriceRate.toFixed(2)}%
-                                                        </div>
-                                                    </td>
-                                                    <td style={{ padding: '1rem' }}>
-                                                        ₩{(split.buy_amount || 0).toLocaleString()}
-                                                    </td>
-                                                    <td style={{ padding: '1rem' }}>
-                                                        <div>₩{sellTargetPrice.toLocaleString()}</div>
-                                                        <div style={{
-                                                            fontSize: '0.75rem',
-                                                            color: sellTargetRate < 0 ? '#ef4444' : sellTargetRate > 0 ? '#10b981' : '#94a3b8'
-                                                        }}>
-                                                            {sellTargetRate > 0 ? '+' : ''}{sellTargetRate.toFixed(2)}%
-                                                        </div>
-                                                    </td>
-                                                    <td style={{ padding: '1rem', color: profitRate > 0 ? '#10b981' : profitRate < 0 ? '#ef4444' : '#94a3b8' }}>
-                                                        {isBought ? `${profitRate.toFixed(2)}%` : '-'}
-                                                    </td>
-                                                </tr>
-                                            );
-                                        })}
-                                    </tbody>
-                                </table>
+                                                                    if (segments && segments.length > 0) {
+                                                                        const segmentIndex = segments.findIndex(seg =>
+                                                                            split.buy_price >= seg.min_price && split.buy_price <= seg.max_price
+                                                                        );
+                                                                        if (segmentIndex !== -1) {
+                                                                            const colors = [
+                                                                                '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
+                                                                                '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#84cc16'
+                                                                            ];
+                                                                            return (
+                                                                                <span style={{
+                                                                                    fontSize: '0.7rem',
+                                                                                    backgroundColor: colors[segmentIndex % colors.length],
+                                                                                    color: 'white',
+                                                                                    padding: '0.1rem 0.4rem',
+                                                                                    borderRadius: '0.2rem',
+                                                                                    width: 'fit-content'
+                                                                                }}>
+                                                                                    Seg {segmentIndex + 1}
+                                                                                </span>
+                                                                            );
+                                                                        }
+                                                                    }
+                                                                    return null;
+                                                                })()}
+                                                                {split.is_accumulated && (
+                                                                    <span style={{
+                                                                        fontSize: '0.7rem',
+                                                                        backgroundColor: '#8b5cf6',
+                                                                        color: 'white',
+                                                                        padding: '0.1rem 0.4rem',
+                                                                        borderRadius: '0.2rem',
+                                                                        width: 'fit-content'
+                                                                    }}>
+                                                                        Accumulated
+                                                                    </span>
+                                                                )}
+                                                                {split.buy_rsi !== undefined && split.buy_rsi !== null && (
+                                                                    <span style={{ fontSize: '0.75rem', color: '#cbd5e1' }}>
+                                                                        RSI: {split.buy_rsi.toFixed(1)}
+                                                                    </span>
+                                                                )}
+                                                                {!split.is_accumulated && (split.buy_rsi === undefined || split.buy_rsi === null) && (
+                                                                    (() => {
+                                                                        const segments = simResult ? simResult.config?.price_segments : strategyConfig?.price_segments;
+                                                                        const hasSegmentBadge = segments && segments.length > 0 && segments.some(seg =>
+                                                                            split.buy_price >= seg.min_price && split.buy_price <= seg.max_price
+                                                                        );
+                                                                        return hasSegmentBadge ? null : <span style={{ fontSize: '0.75rem', color: '#64748b' }}>-</span>;
+                                                                    })()
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                        <td style={{ padding: '1rem' }}>
+                                                            <div>₩{split.buy_price.toLocaleString()}</div>
+                                                            <div style={{
+                                                                fontSize: '0.75rem',
+                                                                color: buyPriceRate < 0 ? '#10b981' : buyPriceRate > 0 ? '#ef4444' : '#94a3b8'
+                                                            }}>
+                                                                {buyPriceRate > 0 ? '+' : ''}{buyPriceRate.toFixed(2)}%
+                                                            </div>
+                                                        </td>
+                                                        <td style={{ padding: '1rem' }}>
+                                                            ₩{(split.buy_amount || 0).toLocaleString()}
+                                                        </td>
+                                                        <td style={{ padding: '1rem' }}>
+                                                            <div>₩{sellTargetPrice.toLocaleString()}</div>
+                                                            <div style={{
+                                                                fontSize: '0.75rem',
+                                                                color: sellTargetRate < 0 ? '#ef4444' : sellTargetRate > 0 ? '#10b981' : '#94a3b8'
+                                                            }}>
+                                                                {sellTargetRate > 0 ? '+' : ''}{sellTargetRate.toFixed(2)}%
+                                                            </div>
+                                                        </td>
+                                                        <td style={{ padding: '1rem', color: profitRate > 0 ? '#10b981' : profitRate < 0 ? '#ef4444' : '#94a3b8' }}>
+                                                            {isBought ? `${profitRate.toFixed(2)}%` : '-'}
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
 
                             {/* Recent Trades Section */}
                             {(simResult ? simResult.trades : status?.trade_history) && (simResult ? simResult.trades : status?.trade_history).length > 0 && (
-                                <div className="card">
-                                    <div className="card-header">
-                                        <span className="card-title">
-                                            {simResult ? 'Simulated Trades' : `Recent Trades (${status?.name})`}
-                                        </span>
-                                    </div>
-                                    <div style={{ overflowX: 'auto' }}>
-                                        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-                                            <thead>
-                                                <tr style={{ borderBottom: '2px solid #334155', color: '#94a3b8' }}>
-                                                    <th style={{ padding: '1rem' }}>Buy Time</th>
-                                                    <th style={{ padding: '1rem' }}>Sell Time</th>
-                                                    <th style={{ padding: '1rem' }}>Split</th>
-                                                    <th style={{ padding: '1rem' }}>Info</th>
-                                                    <th style={{ padding: '1rem', textAlign: 'right' }}>Buy Amount</th>
-                                                    <th style={{ padding: '1rem', textAlign: 'right' }}>Sell Amount</th>
-                                                    <th style={{ padding: '1rem', textAlign: 'right' }}>Gross Profit</th>
-                                                    <th style={{ padding: '1rem', textAlign: 'right' }}>Total Fee</th>
-                                                    <th style={{ padding: '1rem', textAlign: 'right' }}>Net Profit</th>
-                                                    <th style={{ padding: '1rem', textAlign: 'right' }}>Rate</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {(simResult ? simResult.trades : (status?.trade_history || [])).map((trade, index) => {
-                                                    const buyAmount = trade.buy_amount || 0;
-                                                    const sellAmount = trade.sell_amount || 0;
-                                                    const grossProfit = trade.gross_profit || (sellAmount - buyAmount);
-                                                    const totalFee = trade.total_fee || 0;
-                                                    const netProfit = trade.net_profit || (grossProfit - totalFee);
-                                                    const profitRate = trade.profit_rate || 0;
+                                <div className="trades-container">
+                                    <div className="card">
+                                        <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <span className="card-title">
+                                                {simResult ? 'Simulated Trades' : `Recent Trades (${status?.name})`}
+                                            </span>
+                                            <div className="pagination" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                                <button
+                                                    onClick={() => setTradesPage(p => Math.max(1, p - 1))}
+                                                    disabled={tradesPage === 1}
+                                                    style={{
+                                                        padding: '0.25rem 0.6rem',
+                                                        backgroundColor: tradesPage === 1 ? '#334155' : '#3b82f6',
+                                                        color: 'white', border: 'none', borderRadius: '0.25rem', cursor: tradesPage === 1 ? 'default' : 'pointer'
+                                                    }}
+                                                >
+                                                    &lt;
+                                                </button>
+                                                <span style={{ fontSize: '0.85rem', color: '#cbd5e1' }}>
+                                                    Page {tradesPage} / {Math.ceil((simResult ? simResult.trades : (status?.trade_history || [])).length / TRADES_PER_PAGE) || 1}
+                                                </span>
+                                                <button
+                                                    onClick={() => setTradesPage(p => Math.min(Math.ceil((simResult ? simResult.trades : (status?.trade_history || [])).length / TRADES_PER_PAGE), p + 1))}
+                                                    disabled={tradesPage >= Math.ceil((simResult ? simResult.trades : (status?.trade_history || [])).length / TRADES_PER_PAGE)}
+                                                    style={{
+                                                        padding: '0.25rem 0.6rem',
+                                                        backgroundColor: tradesPage >= Math.ceil((simResult ? simResult.trades : (status?.trade_history || [])).length / TRADES_PER_PAGE) ? '#334155' : '#3b82f6',
+                                                        color: 'white', border: 'none', borderRadius: '0.25rem', cursor: tradesPage >= Math.ceil((simResult ? simResult.trades : (status?.trade_history || [])).length / TRADES_PER_PAGE) ? 'default' : 'pointer'
+                                                    }}
+                                                >
+                                                    &gt;
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div style={{ overflowX: 'auto' }}>
+                                            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                                                <thead>
+                                                    <tr style={{ borderBottom: '2px solid #334155', color: '#94a3b8' }}>
+                                                        <th style={{ padding: '1rem' }}>Buy Time</th>
+                                                        <th style={{ padding: '1rem' }}>Sell Time</th>
+                                                        <th style={{ padding: '1rem' }}>Split</th>
+                                                        <th style={{ padding: '1rem' }}>Info</th>
+                                                        <th style={{ padding: '1rem', textAlign: 'right' }}>Buy Amount</th>
+                                                        <th style={{ padding: '1rem', textAlign: 'right' }}>Sell Amount</th>
+                                                        <th style={{ padding: '1rem', textAlign: 'right' }}>Gross Profit</th>
+                                                        <th style={{ padding: '1rem', textAlign: 'right' }}>Total Fee</th>
+                                                        <th style={{ padding: '1rem', textAlign: 'right' }}>Net Profit</th>
+                                                        <th style={{ padding: '1rem', textAlign: 'right' }}>Rate</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {(simResult ? simResult.trades : (status?.trade_history || []))
+                                                        .slice((tradesPage - 1) * TRADES_PER_PAGE, tradesPage * TRADES_PER_PAGE)
+                                                        .map((trade, index) => {
+                                                            const buyAmount = trade.buy_amount || 0;
+                                                            const sellAmount = trade.sell_amount || 0;
+                                                            const grossProfit = trade.gross_profit || (sellAmount - buyAmount);
+                                                            const totalFee = trade.total_fee || 0;
+                                                            const netProfit = trade.net_profit || (grossProfit - totalFee);
+                                                            const profitRate = trade.profit_rate || 0;
 
-                                                    return (
-                                                        <tr key={index} style={{ borderBottom: '1px solid #1e293b' }}>
-                                                            <td style={{ padding: '1rem', fontSize: '0.875rem', color: '#94a3b8' }}>
-                                                                {formatTime(trade.bought_at)}
-                                                            </td>
-                                                            <td style={{ padding: '1rem', fontSize: '0.875rem' }}>
-                                                                {formatTime(trade.timestamp)}
-                                                            </td>
-                                                            <td style={{ padding: '1rem', fontWeight: 'bold' }}>#{trade.split_id}</td>
-                                                            <td style={{ padding: '1rem' }}>
-                                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', alignItems: 'flex-start' }}>
-                                                                    {(() => {
-                                                                        const segments = simResult ? simResult.config?.price_segments : strategyConfig?.price_segments;
-                                                                        if (segments && segments.length > 0 && trade.buy_price) {
-                                                                            const segmentIndex = segments.findIndex(seg =>
-                                                                                trade.buy_price >= seg.min_price && trade.buy_price <= seg.max_price
-                                                                            );
-                                                                            if (segmentIndex !== -1) {
-                                                                                const colors = [
-                                                                                    '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
-                                                                                    '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#84cc16'
-                                                                                ];
-                                                                                return (
-                                                                                    <span style={{
-                                                                                        fontSize: '0.7rem',
-                                                                                        backgroundColor: colors[segmentIndex % colors.length],
-                                                                                        color: 'white',
-                                                                                        padding: '0.1rem 0.4rem',
-                                                                                        borderRadius: '0.2rem'
-                                                                                    }}>
-                                                                                        Seg {segmentIndex + 1}
-                                                                                    </span>
-                                                                                );
-                                                                            }
-                                                                        }
-                                                                        return null;
-                                                                    })()}
-                                                                    {trade.is_accumulated && (
-                                                                        <span style={{
-                                                                            fontSize: '0.7rem',
-                                                                            backgroundColor: '#8b5cf6',
-                                                                            color: 'white',
-                                                                            padding: '0.1rem 0.4rem',
-                                                                            borderRadius: '0.2rem'
-                                                                        }}>
-                                                                            Accumulated
-                                                                        </span>
-                                                                    )}
-                                                                    {trade.buy_rsi !== undefined && trade.buy_rsi !== null && (
-                                                                        <span style={{ fontSize: '0.75rem', color: '#cbd5e1' }}>
-                                                                            RSI: {trade.buy_rsi.toFixed(1)}
-                                                                        </span>
-                                                                    )}
-                                                                    {!trade.is_accumulated && (trade.buy_rsi === undefined || trade.buy_rsi === null) && (
-                                                                        (() => {
-                                                                            const segments = simResult ? simResult.config?.price_segments : strategyConfig?.price_segments;
-                                                                            const hasSegmentBadge = segments && segments.length > 0 && trade.buy_price && segments.some(seg =>
-                                                                                trade.buy_price >= seg.min_price && trade.buy_price <= seg.max_price
-                                                                            );
-                                                                            return hasSegmentBadge ? null : <span style={{ fontSize: '0.75rem', color: '#64748b' }}>-</span>;
-                                                                        })()
-                                                                    )}
-                                                                </div>
-                                                            </td>
-                                                            <td style={{ padding: '1rem', textAlign: 'right' }}>
-                                                                <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>
-                                                                    ₩{Math.round(buyAmount).toLocaleString()}
-                                                                </div>
-                                                                <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                                                                    @₩{trade.buy_price?.toLocaleString()}
-                                                                </div>
-                                                            </td>
-                                                            <td style={{ padding: '1rem', textAlign: 'right' }}>
-                                                                <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>
-                                                                    ₩{Math.round(sellAmount).toLocaleString()}
-                                                                </div>
-                                                                <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                                                                    @₩{trade.sell_price?.toLocaleString()}
-                                                                </div>
-                                                            </td>
-                                                            <td style={{
-                                                                padding: '1rem',
-                                                                textAlign: 'right',
-                                                                color: grossProfit > 0 ? '#10b981' : grossProfit < 0 ? '#ef4444' : '#94a3b8',
-                                                                fontSize: '0.875rem'
-                                                            }}>
-                                                                {grossProfit > 0 ? '+' : ''}₩{Math.round(grossProfit).toLocaleString()}
-                                                            </td>
-                                                            <td style={{
-                                                                padding: '1rem',
-                                                                textAlign: 'right',
-                                                                color: '#ef4444',
-                                                                fontSize: '0.875rem'
-                                                            }}>
-                                                                -₩{Math.round(totalFee).toLocaleString()}
-                                                            </td>
-                                                            <td style={{
-                                                                padding: '1rem',
-                                                                textAlign: 'right',
-                                                                fontWeight: 'bold',
-                                                                fontSize: '0.95rem',
-                                                                color: netProfit > 0 ? '#10b981' : netProfit < 0 ? '#ef4444' : '#94a3b8'
-                                                            }}>
-                                                                {netProfit > 0 ? '+' : ''}₩{Math.round(netProfit).toLocaleString()}
-                                                            </td>
-                                                            <td style={{
-                                                                padding: '1rem',
-                                                                textAlign: 'right',
-                                                                color: profitRate > 0 ? '#10b981' : profitRate < 0 ? '#ef4444' : '#94a3b8',
-                                                                fontWeight: 'bold'
-                                                            }}>
-                                                                {profitRate.toFixed(2)}%
-                                                            </td>
-                                                        </tr>
-                                                    );
-                                                })}
-                                            </tbody>
-                                        </table>
+                                                            return (
+                                                                <tr key={index} style={{ borderBottom: '1px solid #1e293b' }}>
+                                                                    <td style={{ padding: '1rem', fontSize: '0.875rem', color: '#94a3b8' }}>
+                                                                        {formatTime(trade.bought_at)}
+                                                                    </td>
+                                                                    <td style={{ padding: '1rem', fontSize: '0.875rem' }}>
+                                                                        {formatTime(trade.timestamp)}
+                                                                    </td>
+                                                                    <td style={{ padding: '1rem', fontWeight: 'bold' }}>#{trade.split_id}</td>
+                                                                    <td style={{ padding: '1rem' }}>
+                                                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', alignItems: 'flex-start' }}>
+                                                                            {(() => {
+                                                                                const segments = simResult ? simResult.config?.price_segments : strategyConfig?.price_segments;
+                                                                                if (segments && segments.length > 0 && trade.buy_price) {
+                                                                                    const segmentIndex = segments.findIndex(seg =>
+                                                                                        trade.buy_price >= seg.min_price && trade.buy_price <= seg.max_price
+                                                                                    );
+                                                                                    if (segmentIndex !== -1) {
+                                                                                        const colors = [
+                                                                                            '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
+                                                                                            '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#84cc16'
+                                                                                        ];
+                                                                                        return (
+                                                                                            <span style={{
+                                                                                                fontSize: '0.7rem',
+                                                                                                backgroundColor: colors[segmentIndex % colors.length],
+                                                                                                color: 'white',
+                                                                                                padding: '0.1rem 0.4rem',
+                                                                                                borderRadius: '0.2rem'
+                                                                                            }}>
+                                                                                                Seg {segmentIndex + 1}
+                                                                                            </span>
+                                                                                        );
+                                                                                    }
+                                                                                }
+                                                                                return null;
+                                                                            })()}
+                                                                            {trade.is_accumulated && (
+                                                                                <span style={{
+                                                                                    fontSize: '0.7rem',
+                                                                                    backgroundColor: '#8b5cf6',
+                                                                                    color: 'white',
+                                                                                    padding: '0.1rem 0.4rem',
+                                                                                    borderRadius: '0.2rem'
+                                                                                }}>
+                                                                                    Accumulated
+                                                                                </span>
+                                                                            )}
+                                                                            {trade.buy_rsi !== undefined && trade.buy_rsi !== null && (
+                                                                                <span style={{ fontSize: '0.75rem', color: '#cbd5e1' }}>
+                                                                                    RSI: {trade.buy_rsi.toFixed(1)}
+                                                                                </span>
+                                                                            )}
+                                                                            {!trade.is_accumulated && (trade.buy_rsi === undefined || trade.buy_rsi === null) && (
+                                                                                (() => {
+                                                                                    const segments = simResult ? simResult.config?.price_segments : strategyConfig?.price_segments;
+                                                                                    const hasSegmentBadge = segments && segments.length > 0 && trade.buy_price && segments.some(seg =>
+                                                                                        trade.buy_price >= seg.min_price && trade.buy_price <= seg.max_price
+                                                                                    );
+                                                                                    return hasSegmentBadge ? null : <span style={{ fontSize: '0.75rem', color: '#64748b' }}>-</span>;
+                                                                                })()
+                                                                            )}
+                                                                        </div>
+                                                                    </td>
+                                                                    <td style={{ padding: '1rem', textAlign: 'right' }}>
+                                                                        <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>
+                                                                            ₩{Math.round(buyAmount).toLocaleString()}
+                                                                        </div>
+                                                                        <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                                                                            @₩{trade.buy_price?.toLocaleString()}
+                                                                        </div>
+                                                                    </td>
+                                                                    <td style={{ padding: '1rem', textAlign: 'right' }}>
+                                                                        <div style={{ fontSize: '0.875rem', color: '#94a3b8' }}>
+                                                                            ₩{Math.round(sellAmount).toLocaleString()}
+                                                                        </div>
+                                                                        <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                                                                            @₩{trade.sell_price?.toLocaleString()}
+                                                                        </div>
+                                                                    </td>
+                                                                    <td style={{
+                                                                        padding: '1rem',
+                                                                        textAlign: 'right',
+                                                                        color: grossProfit > 0 ? '#10b981' : grossProfit < 0 ? '#ef4444' : '#94a3b8',
+                                                                        fontSize: '0.875rem'
+                                                                    }}>
+                                                                        {grossProfit > 0 ? '+' : ''}₩{Math.round(grossProfit).toLocaleString()}
+                                                                    </td>
+                                                                    <td style={{
+                                                                        padding: '1rem',
+                                                                        textAlign: 'right',
+                                                                        color: '#ef4444',
+                                                                        fontSize: '0.875rem'
+                                                                    }}>
+                                                                        -₩{Math.round(totalFee).toLocaleString()}
+                                                                    </td>
+                                                                    <td style={{
+                                                                        padding: '1rem',
+                                                                        textAlign: 'right',
+                                                                        fontWeight: 'bold',
+                                                                        fontSize: '0.95rem',
+                                                                        color: netProfit > 0 ? '#10b981' : netProfit < 0 ? '#ef4444' : '#94a3b8'
+                                                                    }}>
+                                                                        {netProfit > 0 ? '+' : ''}₩{Math.round(netProfit).toLocaleString()}
+                                                                    </td>
+                                                                    <td style={{
+                                                                        padding: '1rem',
+                                                                        textAlign: 'right',
+                                                                        color: profitRate > 0 ? '#10b981' : profitRate < 0 ? '#ef4444' : '#94a3b8',
+                                                                        fontWeight: 'bold'
+                                                                    }}>
+                                                                        {profitRate.toFixed(2)}%
+                                                                    </td>
+                                                                </tr>
+                                                            );
+                                                        })}
+                                                </tbody>
+                                            </table>
+                                        </div>
                                     </div>
                                 </div>
                             )}
+
+                            {/* System Event Log */}
+                            <div className="event-log-container">
+                                <EventLog
+                                    strategyId={selectedStrategyId}
+                                    apiBaseUrl={API_BASE_URL}
+                                    status={status?.status}
+                                    simulationEvents={simResult?.events}
+                                />
+                            </div>
                         </main>
                     </div>
                 </>
