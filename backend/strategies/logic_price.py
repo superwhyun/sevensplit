@@ -89,7 +89,7 @@ class PriceStrategyLogic:
              # STRICT CHECK: Even if exiting watch mode, price MUST be below target
              if current_price <= target_price:
                   if not self.validate_buy(current_price):
-                       msg = f"Price Logic: Buy at {current_price} blocked by validation (range or max_splits)."
+                       msg = f"Price Logic: Buy at {current_price} blocked by validation : {self.strategy.last_status_msg}"
                        logging.info(msg)
                        self.strategy.last_status_msg = msg
                        return

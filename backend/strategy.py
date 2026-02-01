@@ -47,7 +47,14 @@ class SevenSplitStrategy(BaseStrategy):
 
         
         # Load state first to see if we have existing config
-        state_loaded = self.load_state()
+        try:
+            state_loaded = self.load_state()
+        except Exception as e:
+            logging.critical(f"❌ [CRITICAL] Strategy {strategy_id} state load failed: {e}")
+            logging.critical("⚠️ Skipping default initialization to prevent data loss. Please check database connectivity or schema.")
+            # Set state_loaded to True to bypass the default initialization block below
+            state_loaded = True 
+            self.is_running = False # Force stop safety
 
         # Check for "bad defaults" from previous runs
         # Old default was 50,000,000. If we see this, it's likely wrong (even for BTC, 50m is too low now).
@@ -268,7 +275,9 @@ class SevenSplitStrategy(BaseStrategy):
             return True
         except Exception as e:
             logging.error(f"Failed to load state from database: {e}")
-            return False
+            import traceback
+            logging.error(traceback.format_exc())
+            raise e
 
     def start(self, current_price=None):
         """Start the strategy. Create first buy order at current price."""
