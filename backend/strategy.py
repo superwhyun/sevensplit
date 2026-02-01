@@ -26,6 +26,7 @@ class SevenSplitStrategy(BaseStrategy):
         self.last_sell_date = None # Track the last sell date for daily limits
         self.manual_target_price = None # Manual override for next buy
         self.budget = budget
+        self.last_status_msg = "" # Latest reason for skipping buy or bot action
         
         # Constants
         self.MIN_ORDER_AMOUNT_KRW = 5000
@@ -839,5 +840,6 @@ class SevenSplitStrategy(BaseStrategy):
                 "rsi_daily": self.rsi_logic.current_rsi_daily, # Expose Daily RSI
                 "rsi_daily_short": self.rsi_logic.current_rsi_daily_short, # Expose Daily Short RSI
                 "is_watching": self.is_watching,
-                "watch_lowest_price": self.watch_lowest_price
+                "watch_lowest_price": self.watch_lowest_price,
+                "status_msg": self.last_status_msg
             }

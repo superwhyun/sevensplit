@@ -115,10 +115,12 @@ class WatchModeLogic:
                 val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
                 self.strategy.log_event("WARNING", "WATCH_START", f"RSI(5m) {val_str} < {rsi_threshold}. Entering Watch Mode.")
                 self.strategy.save_state()
-            else:
                 if self.strategy.watch_lowest_price is None or current_price < self.strategy.watch_lowest_price:
                     self.strategy.watch_lowest_price = current_price
                     self.strategy.save_state()
+            
+            val_str = f"{rsi_5m:.1f}" if rsi_5m is not None else "None"
+            self.strategy.last_status_msg = f"Watch Mode: RSI(5m) {val_str} is below threshold {rsi_threshold}. Waiting for rebound."
             return (False, False)
 
         # --- 2. RSI IS SAFE (> Threshold): Check Rebound from LOWEST PRICE ---
@@ -148,4 +150,7 @@ class WatchModeLogic:
                 self.strategy.save_state()
                 return (True, True)  # CRITICAL: just_exited_watch = True, buy immediately
             else:
+                rebound_needed = rebound_target - current_price
+                rebound_pct_current = ((current_price - self.strategy.watch_lowest_price) / self.strategy.watch_lowest_price) * 100
+                self.strategy.last_status_msg = f"Watch Mode: RSI Safe ({rsi_5m:.1f}). Waiting for rebound: {rebound_pct_current:.2f}% / {self.strategy.config.trailing_buy_rebound_percent}% Target."
                 return (False, False)

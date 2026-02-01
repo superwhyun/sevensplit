@@ -191,6 +191,36 @@ const RenameStrategyModal = ({ isOpen, onClose, onRename, currentName }) => {
     );
 };
 
+const StatusPeekModal = ({ isOpen, onClose, statusMsg, ticker }) => {
+    if (!isOpen) return null;
+    return (
+        <div style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10001
+        }}>
+            <div style={{
+                backgroundColor: '#1e293b', padding: '1.5rem', borderRadius: '0.5rem', width: '450px',
+                border: '1px solid #334155', boxShadow: '0 10px 25px rgba(0,0,0,0.5)'
+            }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                    <h3 style={{ margin: 0, color: '#f8fafc' }}>{ticker} Bot Status Peek</h3>
+                    <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
+                </div>
+                <div style={{
+                    backgroundColor: '#0f172a', padding: '1rem', borderRadius: '0.375rem',
+                    border: '1px solid #334155', color: '#e2e8f0', minHeight: '80px',
+                    fontFamily: 'monospace', fontSize: '0.9rem', whiteSpace: 'pre-wrap'
+                }}>
+                    {statusMsg || "No status information available yet."}
+                </div>
+                <div style={{ marginTop: '1.5rem', display: 'flex', justifyContent: 'flex-end' }}>
+                    <button onClick={onClose} style={{ padding: '0.5rem 1.5rem', borderRadius: '0.25rem', border: 'none', backgroundColor: '#3b82f6', color: 'white', cursor: 'pointer' }}>Close</button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const formatTime = (t) => {
     if (!t) return '-';
     // Use ko-KR locale and Asia/Seoul timeZone to ensure KST
@@ -224,6 +254,7 @@ const Dashboard = () => {
     const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
     const [isManualTargetModalOpen, setIsManualTargetModalOpen] = useState(false);
     const [isSimulating, setIsSimulating] = useState(false);
+    const [isStatusPeekModalOpen, setIsStatusPeekModalOpen] = useState(false);
     const [simResult, setSimResult] = useState(null);
     const [showRsiDebugModal, setShowRsiDebugModal] = useState(false);
     const [debugRsiValue, setDebugRsiValue] = useState(50);
@@ -611,6 +642,13 @@ const Dashboard = () => {
                 currentName={status?.name}
             />
 
+            <StatusPeekModal
+                isOpen={isStatusPeekModalOpen}
+                onClose={() => setIsStatusPeekModalOpen(false)}
+                statusMsg={status?.status_msg}
+                ticker={status?.ticker}
+            />
+
             <ManualTargetModal
                 isOpen={isManualTargetModalOpen}
                 onClose={() => setIsManualTargetModalOpen(false)}
@@ -837,12 +875,12 @@ const Dashboard = () => {
                                 borderRadius: '0.5rem',
                                 border: '1px solid rgba(16, 185, 129, 0.3)'
                             }}>
-                                <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>{simResult ? 'Simulated Equity' : 'Current Valuation'}</div>
+                                <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>{simResult ? 'Simulated Equity' : 'Market Value'}</div>
                                 <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#10b981' }}>
                                     ₩{Math.round(simResult ? simResult.final_balance : (status.total_valuation || 0)).toLocaleString()}
                                 </div>
                                 <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '0.25rem' }}>
-                                    {simResult ? `Start: ₩${Math.round(simResult.config?.budget || 0).toLocaleString()}` : `Invested: ₩${Math.round(status.total_invested || 0).toLocaleString()}`}
+                                    {simResult ? `Start: ₩${Math.round(simResult.config?.budget || 0).toLocaleString()}` : `Invested Amount: ₩${Math.round(status.total_invested || 0).toLocaleString()}`}
                                 </div>
                             </div>
 
@@ -1154,7 +1192,7 @@ const Dashboard = () => {
                                                             </div>
                                                         </div>
                                                         <div>
-                                                            <div style={{ color: '#94a3b8' }}>Invested</div>
+                                                            <div style={{ color: '#94a3b8' }}>Invested Amount</div>
                                                             <div style={{ color: '#10b981', fontWeight: 'bold' }}>
                                                                 ₩{totalInvested.toLocaleString()}
                                                             </div>
@@ -1163,6 +1201,48 @@ const Dashboard = () => {
                                                 </div>
                                             );
                                         })}
+                                        {(() => {
+                                            const allSegments = (simResult ? simResult.config?.price_segments : strategyConfig?.price_segments) || [];
+                                            const splits = (simResult ? simResult.splits : status?.splits || []);
+                                            const outOfRangeSplits = splits.filter(s =>
+                                                s.status !== "SELL_FILLED" &&
+                                                !allSegments.some(seg => s.buy_price >= seg.min_price && s.buy_price <= seg.max_price)
+                                            );
+                                            const outOfRangeInvested = outOfRangeSplits.reduce((sum, s) => sum + (s.buy_amount || 0), 0);
+
+                                            if (outOfRangeSplits.length === 0) return null;
+
+                                            return (
+                                                <div style={{
+                                                    padding: '0.75rem',
+                                                    background: '#1e293b',
+                                                    borderRadius: '0.5rem',
+                                                    border: '1px solid #ef4444',
+                                                    borderLeft: `4px solid #ef4444`
+                                                }}>
+                                                    <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.25rem' }}>
+                                                        Out of Range
+                                                    </div>
+                                                    <div style={{ fontSize: '0.85rem', color: '#ef4444', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                                                        Positions outside defined segments
+                                                    </div>
+                                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', fontSize: '0.75rem' }}>
+                                                        <div>
+                                                            <div style={{ color: '#94a3b8' }}>Count</div>
+                                                            <div style={{ fontWeight: 'bold', color: '#e2e8f0' }}>
+                                                                {outOfRangeSplits.length}
+                                                            </div>
+                                                        </div>
+                                                        <div>
+                                                            <div style={{ color: '#94a3b8' }}>Invested Amount</div>
+                                                            <div style={{ color: '#ef4444', fontWeight: 'bold' }}>
+                                                                ₩{outOfRangeInvested.toLocaleString()}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })()}
                                     </div>
                                 </div>
                             )}
@@ -1176,38 +1256,60 @@ const Dashboard = () => {
                                         </span>
                                         {(simResult || status?.last_buy_price || status?.manual_target_price) && (
                                             <span
-                                                onClick={() => !simResult && setIsManualTargetModalOpen(true)}
-                                                style={{
-                                                    fontSize: '0.9rem',
-                                                    color: '#94a3b8',
-                                                    cursor: simResult ? 'default' : 'pointer',
-                                                    padding: '0.25rem 0.5rem',
-                                                    borderRadius: '0.25rem',
-                                                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                                                    border: '1px dashed rgba(59, 130, 246, 0.3)',
-                                                    transition: 'all 0.2s'
-                                                }}
-                                                className={simResult ? "" : "hover-bright"}
+                                                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
                                             >
-                                                {simResult ? 'Next Sim Target: ' : 'Next Buy Target: '}
-                                                <span style={{ color: (!simResult && status?.manual_target_price) ? '#f59e0b' : '#3b82f6', fontWeight: 'bold' }}>
-                                                    {(() => {
-                                                        if (!simResult) {
-                                                            const nextTarget = getNextBuyTarget(status);
-                                                            return nextTarget !== null ? `₩${nextTarget.toLocaleString()}` : '-';
-                                                        } else {
-                                                            // Calculate from sim splits
-                                                            const activeSplits = simResult.splits.filter(s => s.status !== "SELL_FILLED");
-                                                            const lastBuy = activeSplits.length > 0 ? Math.max(...activeSplits.map(s => s.buy_price)) : simResult.final_price;
-                                                            // Note: PRICE logic uses lowest buy_price as ref, but UI usually expects next drop from currently lowest ACTIVE buy?
-                                                            // Actually strategy.last_buy_price is what matters. 
-                                                            // In simResult, we don't return last_buy_price explicitly, but we can guess it from the splits.
-                                                            const simLastBuy = simResult.splits.length > 0 ? simResult.splits[simResult.splits.length - 1].buy_price : simResult.final_price;
-                                                            return `₩${Math.floor(simLastBuy * (1 - (simResult.config?.buy_rate || 0.005))).toLocaleString()}`;
-                                                        }
-                                                    })()}
+                                                <span
+                                                    onClick={() => !simResult && setIsManualTargetModalOpen(true)}
+                                                    style={{
+                                                        fontSize: '0.9rem',
+                                                        color: '#94a3b8',
+                                                        cursor: simResult ? 'default' : 'pointer',
+                                                        padding: '0.25rem 0.5rem',
+                                                        borderRadius: '0.25rem',
+                                                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                                                        border: '1px dashed rgba(59, 130, 246, 0.3)',
+                                                        transition: 'all 0.2s'
+                                                    }}
+                                                    className={simResult ? "" : "hover-bright"}
+                                                >
+                                                    {simResult ? 'Next Sim Target: ' : 'Next Buy Target: '}
+                                                    <span style={{ color: (!simResult && status?.manual_target_price) ? '#f59e0b' : '#3b82f6', fontWeight: 'bold' }}>
+                                                        {(() => {
+                                                            if (!simResult) {
+                                                                const nextTarget = getNextBuyTarget(status);
+                                                                return nextTarget !== null ? `₩${nextTarget.toLocaleString()}` : '-';
+                                                            } else {
+                                                                const simLastBuy = simResult.splits.length > 0 ? simResult.splits[simResult.splits.length - 1].buy_price : simResult.final_price;
+                                                                return `₩${Math.floor(simLastBuy * (1 - (simResult.config?.buy_rate || 0.005))).toLocaleString()}`;
+                                                            }
+                                                        })()}
+                                                    </span>
+                                                    {!simResult && <span style={{ marginLeft: '0.5rem', fontSize: '0.8rem' }}>✏️</span>}
                                                 </span>
-                                                {!simResult && <span style={{ marginLeft: '0.5rem', fontSize: '0.8rem' }}>✏️</span>}
+
+                                                {!simResult && (
+                                                    <span
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setIsStatusPeekModalOpen(true);
+                                                        }}
+                                                        style={{
+                                                            backgroundColor: '#3b82f6',
+                                                            color: 'white',
+                                                            padding: '0.2rem 0.5rem',
+                                                            borderRadius: '0.25rem',
+                                                            fontSize: '0.75rem',
+                                                            fontWeight: 'bold',
+                                                            cursor: 'pointer',
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            gap: '0.25rem'
+                                                        }}
+                                                        className="hover-bright"
+                                                    >
+                                                        🔍 PEEK
+                                                    </span>
+                                                )}
                                             </span>
                                         )}
                                     </div>

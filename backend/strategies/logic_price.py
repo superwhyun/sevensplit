@@ -21,10 +21,14 @@ class PriceStrategyLogic:
         """
         # 1. Guard: Check Budget & Trade Limits
         if not self.strategy.has_sufficient_budget(market_context=market_context):
-             logging.info("Price Logic: Buy skipped due to insufficient budget.")
+             msg = "Price Logic: Buy skipped due to insufficient budget."
+             logging.info(msg)
+             self.strategy.last_status_msg = msg
              return
         if not self.strategy.check_trade_limit():
-             logging.info("Price Logic: Buy skipped due to trade limit (24h).")
+             msg = "Price Logic: Buy skipped due to trade limit (24h)."
+             logging.info(msg)
+             self.strategy.last_status_msg = msg
              return
 
         # Check active positions
@@ -53,10 +57,14 @@ class PriceStrategyLogic:
             max_price = self.strategy.config.max_price
 
             if current_price < min_price:
-                logging.debug(f"Price Logic: Current price {current_price} below min_price {min_price}")
+                msg = f"Price Logic: Current price {current_price} below min_price {min_price}"
+                logging.debug(msg)
+                self.strategy.last_status_msg = msg
                 return
             if max_price > 0 and current_price > max_price:
-                logging.debug(f"Price Logic: Current price {current_price} above max_price {max_price}")
+                msg = f"Price Logic: Current price {current_price} above max_price {max_price}"
+                logging.debug(msg)
+                self.strategy.last_status_msg = msg
                 return
 
             if self.strategy.config.rebuy_strategy == "reset_on_clear":
@@ -81,8 +89,10 @@ class PriceStrategyLogic:
              # STRICT CHECK: Even if exiting watch mode, price MUST be below target
              if current_price <= target_price:
                   if not self.validate_buy(current_price):
-                      logging.info(f"Price Logic: Buy at {current_price} blocked by validation (range or max_splits).")
-                      return
+                       msg = f"Price Logic: Buy at {current_price} blocked by validation (range or max_splits)."
+                       logging.info(msg)
+                       self.strategy.last_status_msg = msg
+                       return
 
                   if is_grid_buy:
                       levels_crossed = self._calculate_levels_crossed(self.strategy.last_buy_price, current_price)
@@ -129,7 +139,9 @@ class PriceStrategyLogic:
                           self.strategy.set_manual_target(None)
              else:
                   # Current price is HIGHER than target
-                  logging.info(f"Price Logic: Price ({current_price}) is currently ABOVE target ({target_price:.1f}). Waiting for dip.")
+                  msg = f"Price Logic: Price ({current_price}) is currently ABOVE target ({target_price:.1f}). Waiting for dip."
+                  logging.info(msg)
+                  self.strategy.last_status_msg = msg
         else:
              logging.debug("Price Logic: No valid buy target price set.")
 
