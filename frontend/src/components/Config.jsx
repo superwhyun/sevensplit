@@ -100,7 +100,9 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
             onUpdate();
             alert(`Configuration updated!`);
         } catch (error) {
-            alert('Failed to update config');
+            console.error('Failed to update config:', error);
+            const errorMsg = error.response?.data?.detail || error.message || 'Unknown error';
+            alert(`Failed to update config:\n${errorMsg}`);
         }
     };
 
@@ -349,7 +351,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                     </>
                 ) : (
                     <div style={{ color: '#94a3b8', fontSize: '0.9rem', textAlign: 'center', padding: '2rem' }}>
-                        No segments defined. Using global config.<br/>
+                        No segments defined. Using global config.<br />
                         <span style={{ fontSize: '0.8rem' }}>Use slider above to create segments</span>
                     </div>
                 )}

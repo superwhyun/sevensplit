@@ -39,11 +39,24 @@ class BaseStrategy(ABC):
         pass
         
     def update_config(self, config: StrategyConfig):
-        """Update strategy configuration."""
+        """Update strategy configuration with defensive logging."""
         with self.lock:
-            logging.info(f"Updating config for Strategy {self.strategy_id}")
-            self.config = config
-            self.save_state()
+            if not config:
+                logging.error(f"❌ Strategy {self.strategy_id}: Received empty config update!")
+                return
+                
+            logging.info(f"🔄 Updating config for Strategy {self.strategy_id}")
+            logging.info(f"   - Mode: {config.strategy_mode}")
+            logging.info(f"   - Min: {config.min_price:,.0f}, Max: {config.max_price:,.0f}")
+            logging.info(f"   - Segments: {len(config.price_segments) if config.price_segments else 0}")
+            
+            try:
+                self.config = config
+                self.save_state()
+                logging.info(f"✅ Strategy {self.strategy_id} config updated and saved.")
+            except Exception as e:
+                logging.error(f"❌ Strategy {self.strategy_id} failed to update/save config: {e}")
+                raise e
             
     @abstractmethod
     def get_state(self, current_price=None):

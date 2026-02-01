@@ -526,15 +526,24 @@ class DatabaseManager:
         return self.update_strategy_state(strategy_id, **kwargs)
 
     def update_strategy_state(self, strategy_id: int, **kwargs):
-        """Update strategy state"""
+        """Update strategy state with robust error handling"""
         session = self.get_session()
         try:
             strategy = session.query(Strategy).filter_by(id=strategy_id).first()
             if strategy:
                 for key, value in kwargs.items():
                     if hasattr(strategy, key):
-                        setattr(strategy, key, value)
+                        try:
+                            setattr(strategy, key, value)
+                        except Exception as attr_e:
+                            logging.error(f"❌ [DATABASE] Failed to set attribute {key}={value}: {attr_e}")
                 session.commit()
+            else:
+                logging.warning(f"⚠️ [DATABASE] Strategy {strategy_id} not found for update")
+        except Exception as e:
+            logging.error(f"❌ [DATABASE] Failed to update strategy {strategy_id} state: {e}")
+            session.rollback()
+            raise e # Bubble up to let the caller (API) know
         finally:
             session.close()
 

@@ -95,7 +95,8 @@ class SevenSplitStrategy(BaseStrategy):
         """Save state to database"""
         try:
             # Update strategy state
-            state_data = self.config.model_dump()
+            # mode='json' ensures nested objects like price_segments are converted to lists/dicts for SQLite JSON columns
+            state_data = self.config.model_dump(mode='json')
             state_data.update({
                 'is_running': self.is_running,
                 'next_split_id': self.next_split_id,
@@ -110,6 +111,7 @@ class SevenSplitStrategy(BaseStrategy):
 
             # Save efficiently using kwargs and model_dump
             self.db.update_strategy_state(self.strategy_id, **state_data)
+            logging.debug(f"✅ Strategy {self.strategy_id} state successfully persisted.")
 
             # Sync splits to database
             db_splits = self.db.get_splits(self.strategy_id)
@@ -144,7 +146,9 @@ class SevenSplitStrategy(BaseStrategy):
                     self.db.add_split(self.strategy_id, self.ticker, split_data)
 
         except Exception as e:
-            logging.error(f"Failed to save state to database: {e}")
+            logging.error(f"❌ Failed to save state for Strategy {self.strategy_id} to database: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
 
     def load_state(self):
         """Load state from database. Returns True if state was loaded, False otherwise."""

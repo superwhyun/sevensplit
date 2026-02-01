@@ -332,12 +332,24 @@ class PriceStrategyLogic:
                 if segment.min_price <= price <= segment.max_price:
                     match_found = True
                     active_count = sum(1 for s in self.strategy.splits if s.status != "SELL_FILLED" and segment.min_price <= s.buy_price <= segment.max_price)
-                    if active_count >= segment.max_splits: return False
-                    break
-            if not match_found: return False
+                    if active_count >= segment.max_splits:
+                        self.strategy.last_status_msg = f"구매 보류: 세그먼트 한도 초과 ({active_count}/{segment.max_splits})"
+                        return False
+                    return True
+            if not match_found:
+                self.strategy.last_status_msg = f"구매 보류: 현재 가격({price:,.0f})에 매칭되는 세그먼트가 없습니다."
+                return False
             return True
-        if price < self.strategy.config.min_price: return False
-        if self.strategy.config.max_price > 0 and price > self.strategy.config.max_price: return False
+        
+        # Classic Mode Validation
+        if price < self.strategy.config.min_price:
+            self.strategy.last_status_msg = f"구매 보류: 현재 가격({price:,.0f})이 최소 설정가({self.strategy.config.min_price:,.0f})보다 낮습니다."
+            return False
+            
+        if self.strategy.config.max_price > 0 and price > self.strategy.config.max_price:
+            self.strategy.last_status_msg = f"구매 보류: 현재 가격({price:,.0f})이 최대 설정가({self.strategy.config.max_price:,.0f})보다 높습니다."
+            return False
+            
         return True
 
     def _calculate_levels_crossed(self, reference_price: float, current_price: float) -> int:
