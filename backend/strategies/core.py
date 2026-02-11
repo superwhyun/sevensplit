@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 import threading
 import logging
+from datetime import datetime, timezone, timedelta
 from models.strategy_state import StrategyConfig
 
 class BaseStrategy(ABC):
@@ -49,6 +50,9 @@ class BaseStrategy(ABC):
             logging.info(f"   - Mode: {config.strategy_mode}")
             logging.info(f"   - Min: {config.min_price:,.0f}, Max: {config.max_price:,.0f}")
             logging.info(f"   - Segments: {len(config.price_segments) if config.price_segments else 0}")
+            if config.price_segments:
+                first_seg = config.price_segments[0]
+                logging.info(f"   - First Segment: {first_seg.min_price:,.0f} ~ {first_seg.max_price:,.0f}")
             
             try:
                 self.config = config
@@ -64,8 +68,14 @@ class BaseStrategy(ABC):
         pass
 
     def get_current_time_kst(self):
-        """Get current time in KST timezone. Can be overridden for simulation."""
-        from datetime import datetime, timezone, timedelta
+        """Get current time in KST timezone."""
         KST = timezone(timedelta(hours=9))
-        now_utc = datetime.now(timezone.utc)
+        now_utc = self.get_now_utc()
         return now_utc.astimezone(KST)
+
+    def get_now_utc(self):
+        """Strategy clock source (can be overridden by simulation runtime)."""
+        sim_now = getattr(self, "_sim_now_utc", None)
+        if sim_now is not None:
+            return sim_now
+        return datetime.now(timezone.utc)

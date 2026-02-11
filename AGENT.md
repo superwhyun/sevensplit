@@ -1,7 +1,7 @@
 # Seven Split Trading Bot - Project Documentation
 
 ## 1. Project Overview
-The **Seven Split Trading Bot** is an automated cryptocurrency trading system designed to execute a grid-based "split" trading strategy. It interacts with the Upbit exchange (both real and mock) to automatically buy on price drops and sell on rebounds, aiming to accumulate profit through volatility.
+The **Seven Split Trading Bot** is an automated cryptocurrency trading system designed to execute a grid-based "split" trading strategy. It interacts with the Upbit exchange to automatically buy on price drops and sell on rebounds, aiming to accumulate profit through volatility.
 
 ## 2. Architecture
 The project follows a microservices-like architecture with three main components:
@@ -25,16 +25,6 @@ The project follows a microservices-like architecture with three main components
     *   **Database:** Stores trade history, active splits, and configuration in `sevensplit.db`.
     *   **API:** REST endpoints for frontend interaction (`/status`, `/config`, `/start`, `/stop`).
     *   **WebSocket:** Pushes real-time state to the frontend.
-
-### 2.3. Mock Exchange (`/mock-exchange`)
-*   **Tech Stack:** Python, FastAPI.
-*   **Port:** 5001.
-*   **Role:** Simulates the Upbit API for safe testing and development.
-*   **Key Features:**
-    *   **Price Simulation:** Can fetch real prices from Upbit or be manually overridden.
-    *   **Order Matching:** Simulates limit and market order execution in memory.
-    *   **Control Panel:** Web UI (at `http://localhost:5001`) to manually set prices and control the market.
-    *   **Recursion Protection:** Smartly handles live price fetching to avoid self-referential loops.
 
 ## 3. Trading Strategy: Seven Split (Hybrid Grid)
 The bot implements a strategy that divides capital into multiple "splits" to average down costs and sell for profit.
@@ -61,11 +51,7 @@ The bot implements a strategy that divides capital into multiple "splits" to ave
 *   **Grid Status:** Table showing all active splits, their entry prices, and current P/L.
 *   **Trade History:** Log of recent buy/sell executions with net profit calculations.
 
-### 4.2. Modes
-*   **MOCK Mode:**
-    *   Uses the local Mock Exchange server.
-    *   Safe for testing strategy logic without real money.
-    *   Allows manual price manipulation to test "what-if" scenarios.
+### 4.2. Mode
 *   **REAL Mode:**
     *   Connects directly to Upbit API.
     *   Requires valid Access/Secret keys.
@@ -91,9 +77,8 @@ The entire stack can be started with a single script:
 ./run-dev.sh
 ```
 This script:
-1.  Starts the Mock Exchange (Port 5001).
-2.  Starts the Backend (Port 8000).
-3.  Starts the Frontend (Port 5173).
+1.  Starts the Backend (Port 8000).
+2.  Starts the Frontend (Port 5173).
 
 ### 6.2. Directory Structure
 ```
@@ -104,17 +89,13 @@ This script:
 │   └── database.py     # SQLite Interface
 ├── frontend/           # React Frontend
 │   └── src/components/ # UI Components
-├── mock-exchange/      # Mock Upbit Server
-│   └── main.py         # Mock Logic
 └── run-dev.sh          # Unified startup script
 ```
 
 ## 7. Current Status
 *   **Implemented:**
     *   Full Seven Split strategy logic.
-    *   Mock Exchange with live price fetching and manual override.
     *   Real-time Dashboard with WebSocket updates.
-    *   Seamless switching between Mock and Real modes.
     *   Database persistence for bot state (survives restarts).
 *   **Pending/Future Goals:**
     *   Advanced charting in Dashboard.

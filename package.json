@@ -1,0 +1,11 @@
+{
+  "name": "sevensplit",
+  "private": true,
+  "version": "1.0.0",
+  "description": "SevenSplit monorepo scripts",
+  "scripts": {
+    "dev": "ENV_FILE=.env.dev TRADING_MODE=DEV sh -c \"(cd backend && uvicorn main:app --reload --host 0.0.0.0 --port 8000) & (npm --prefix frontend run dev -- --host 0.0.0.0 --port 5173) & wait\"",
+    "real": "ENV_FILE=.env.real TRADING_MODE=REAL sh -c \"(cd backend && uvicorn main:app --reload --host 0.0.0.0 --port 8000) & (npm --prefix frontend run dev -- --host 0.0.0.0 --port 5173) & wait\"",
+    "build:docker": "docker compose build"
+  }
+}

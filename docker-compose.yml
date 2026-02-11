@@ -10,12 +10,11 @@ services:
     ports:
       - "8001:8000"
     environment:
-      - MODE=REAL
       - UPBIT_ACCESS_KEY=${USER1_ACCESS_KEY}
       - UPBIT_SECRET_KEY=${USER1_SECRET_KEY}
-      - DB_PATH=/app/backend/sevensplit.db
+      - DB_PATH=/app/backend/database/sevensplit.db
     volumes:
-      - ./data/user1.db:/app/backend/sevensplit.db
+      - ./data/user1.db:/app/backend/database/sevensplit.db
 
   # User 2 Bot Instance (Example)
   # bot-user2:
@@ -25,18 +24,7 @@ services:
   #   ports:
   #     - "8002:8000"
   #   environment:
-  #     - MODE=REAL
   #     - UPBIT_ACCESS_KEY=${USER2_ACCESS_KEY}
   #     - UPBIT_SECRET_KEY=${USER2_SECRET_KEY}
   #   volumes:
-  #     - ./data/user2.db:/app/backend/sevensplit.db
-
-  # Mock Exchange (Optional, for testing)
-  mock-exchange:
-    build: 
-      context: .
-      dockerfile: mock-exchange/Dockerfile
-    image: sevensplit-mock-exchange:${IMAGE_TAG:-latest}
-    container_name: sevensplit-mock
-    ports:
-      - "5001:5001"
+  #     - ./data/user2.db:/app/backend/database/sevensplit.db

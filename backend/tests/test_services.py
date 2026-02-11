@@ -3,12 +3,11 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import unittest
-from unittest.mock import MagicMock
 from services.exchange_service import ExchangeService
 from services.strategy_service import StrategyService
 from models.strategy_state import StrategyConfig
 
-class MockExchange:
+class StubExchange:
     def get_current_price(self, ticker):
         return 100000.0
     def get_orders(self, ticker=None, state='wait'):
@@ -16,24 +15,26 @@ class MockExchange:
     def cancel_order(self, uuid):
         pass
 
-class MockDB:
+class StubDB:
     def get_all_strategies(self):
         return []
     def create_strategy(self, name, ticker, budget, config):
-        mock_s = MagicMock()
-        mock_s.id = 1
-        mock_s.ticker = ticker
-        mock_s.budget = budget
-        return mock_s
+        class StrategyRecord:
+            pass
+        rec = StrategyRecord()
+        rec.id = 1
+        rec.ticker = ticker
+        rec.budget = budget
+        return rec
     def delete_strategy(self, strategy_id):
         pass
 
 class TestServices(unittest.TestCase):
     def setUp(self):
-        self.mock_exchange = MockExchange()
-        self.exchange_service = ExchangeService(self.mock_exchange)
-        self.mock_db = MockDB()
-        self.strategy_service = StrategyService(self.mock_db, self.exchange_service)
+        self.stub_exchange = StubExchange()
+        self.exchange_service = ExchangeService(self.stub_exchange)
+        self.stub_db = StubDB()
+        self.strategy_service = StrategyService(self.stub_db, self.exchange_service)
 
     def test_exchange_service_delegation(self):
         price = self.exchange_service.get_current_price("KRW-BTC")

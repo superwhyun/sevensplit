@@ -1,26 +1,19 @@
-"""Backward-compatible database exports.
+"""Database package exports."""
 
-This module remains as a compatibility layer for existing imports.
-Implementation details now live under `backend/db/`.
-"""
-
-from db import (  # noqa: F401
+from .factory import get_candle_db, get_db, get_price_db
+from .managers import DatabaseManager, PriceDatabaseManager
+from .models import (
     Base,
     CandleDays,
     CandleMinutes5,
     CandleMinutes60,
-    DatabaseManager,
     PriceBase,
-    PriceDatabaseManager,
     PriceTick,
     Split,
     Strategy,
     SystemConfig,
     SystemEvent,
     Trade,
-    get_candle_db,
-    get_db,
-    get_price_db,
 )
 
 __all__ = [

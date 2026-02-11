@@ -6,15 +6,24 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import StreamingResponse
 
-from core.config import db, strategy_service, exchange, real_exchange, shared_prices, accounts_cache
+from core.config import (
+    db,
+    strategy_service,
+    exchange,
+    real_exchange,
+    shared_prices,
+    accounts_cache,
+    simulation_service,
+)
 from database import get_candle_db
 from core.schemas import (
     CreateStrategyRequest, CommandRequest, ConfigRequest, 
-    ManualTargetRequest, UpdateNameRequest, SimulationRequest,
-    DebugRSIRequest
+    ManualTargetRequest, UpdateNameRequest,
+    DebugRSIRequest,
+    BacktestRequest,
+    LiveSimulationStartRequest,
 )
 from core.engine import calculate_portfolio
-from services.simulation_service import simulate_strategy_from_time_logic
 
 router = APIRouter()
 
@@ -255,7 +264,7 @@ def update_config(req: ConfigRequest):
 def set_manual_target(strategy_id: int, req: ManualTargetRequest):
     try:
         strategy_service.set_manual_target(strategy_id, req.target_price)
-        return {"status": "success", "message": "Manual target updated"}
+        return {"status": "success", "message": "Next buy target updated"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -272,10 +281,6 @@ def update_strategy_name(strategy_id: int, req: UpdateNameRequest):
         db.session.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/strategies/{strategy_id}/simulate")
-def simulate_strategy_from_time(strategy_id: int, req: SimulationRequest):
-    return simulate_strategy_from_time_logic(strategy_id, req.start_time)
-
 @router.post("/bot/reset")
 def reset_strategy(cmd: CommandRequest):
     """Reset a specific strategy"""
@@ -288,7 +293,7 @@ def reset_strategy(cmd: CommandRequest):
 
 @router.post("/debug/rsi")
 def set_debug_rsi(req: DebugRSIRequest):
-    """[MOCK ONLY] Force set RSI values for testing."""
+    """Force set RSI values for testing."""
     strategy = strategy_service.get_strategy(req.strategy_id)
     if not strategy:
         raise HTTPException(status_code=404, detail="Strategy not found")
@@ -301,30 +306,6 @@ def set_debug_rsi(req: DebugRSIRequest):
         strategy.debug_rsi_short = req.rsi_short
         
     return {"status": "success", "rsi": req.rsi, "prev_rsi": req.prev_rsi}
-
-@router.post("/debug/reset-all")
-def reset_all_mock():
-    """Reset all strategies and exchange (MOCK mode only)"""
-    try:
-        if not hasattr(exchange, "reset_all"):
-             raise HTTPException(status_code=400, detail="Reset only supported in MOCK mode")
-        
-        # 1. Stop all strategies
-        for s_id in list(strategy_service.strategies.keys()):
-            strategy_service.stop_strategy(s_id)
-        
-        # 2. Reset Exchange (Mock server)
-        exchange.reset_all()
-        
-        # 3. Clear DB and reload
-        db.clear_all_data()
-        strategy_service.strategies.clear()
-        strategy_service.load_strategies()
-        
-        return {"status": "success", "message": "System reset completed"}
-    except Exception as e:
-        logging.error(f"Failed to reset system: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/portfolio")
 def get_portfolio():
@@ -343,3 +324,56 @@ def get_portfolio():
         pass
 
     return calculate_portfolio(prices=shared_prices, accounts_raw=accounts_raw)
+
+
+@router.post("/simulations/backtest")
+def run_backtest(req: BacktestRequest):
+    try:
+        return simulation_service.run_backtest(
+            strategy_id=req.strategy_id,
+            start_time=req.start_time,
+            end_time=req.end_time,
+            exec_interval=req.exec_interval,
+            max_candles=req.max_candles,
+            initial_krw=req.initial_krw,
+        )
+    except Exception as e:
+        logging.error(f"Backtest failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/simulations/live/start")
+def start_live_simulation(req: LiveSimulationStartRequest):
+    try:
+        return simulation_service.start_live(
+            strategy_id=req.strategy_id,
+            exec_interval=req.exec_interval,
+            poll_seconds=req.poll_seconds,
+            initial_krw=req.initial_krw,
+        )
+    except Exception as e:
+        logging.error(f"Live simulation start failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/simulations/live/{session_id}/stop")
+def stop_live_simulation(session_id: str):
+    try:
+        return simulation_service.stop_live(session_id)
+    except Exception as e:
+        logging.error(f"Live simulation stop failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/simulations/live/{session_id}")
+def get_live_simulation(session_id: str):
+    try:
+        return simulation_service.get_live(session_id)
+    except Exception as e:
+        logging.error(f"Live simulation status failed: {e}")
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/simulations/live")
+def list_live_simulations():
+    return {"sessions": simulation_service.list_live()}

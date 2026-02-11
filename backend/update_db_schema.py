@@ -51,10 +51,6 @@ if __name__ == "__main__":
         else:
             # Default behavior: check standard files in the backend directory
             base_dir = os.path.dirname(os.path.abspath(__file__))
-            
-            # Check both mock and real databases
-            mock_db = os.path.join(base_dir, "sevensplit_mock.db")
-            real_db = os.path.join(base_dir, "sevensplit_real.db")
-            
-            check_and_update_db(mock_db)
-            check_and_update_db(real_db)
+
+            default_db = os.path.join(base_dir, "database", "sevensplit.db")
+            check_and_update_db(default_db)

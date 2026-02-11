@@ -1,4 +1,7 @@
 #!/bin/bash
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${ROOT_DIR}"
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -18,25 +21,21 @@ echo ""
 
 # Set Environment for Real Mode
 export ENV_FILE=".env.real"
+export TRADING_MODE="REAL"
 
 # Source the real config
-if [ -f ".env.real" ]; then
-    echo -e "${YELLOW}Loading configuration from .env.real...${NC}"
-    set -a
-    source .env.real
-    set +a
-elif [ -f ".env" ]; then
-    echo -e "${YELLOW}Loading configuration from .env...${NC}"
-    set -a
-    source .env
-    set +a
-elif [ -f "./backend/.env.real" ]; then
+if [ -f "./backend/.env.real" ]; then
     echo -e "${YELLOW}Loading configuration from backend/.env.real...${NC}"
     set -a
     source ./backend/.env.real
     set +a
+elif [ -f "./backend/.env.dev" ]; then
+    echo -e "${YELLOW}Loading configuration from backend/.env.dev...${NC}"
+    set -a
+    source ./backend/.env.dev
+    set +a
 else
-    echo -e "${RED}Error: Configuration file not found (.env.real or .env)${NC}"
+    echo -e "${RED}Error: Configuration file not found (backend/.env.real or backend/.env.dev)${NC}"
     exit 1
 fi
 

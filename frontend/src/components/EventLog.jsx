@@ -1,47 +1,34 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 
-const EventLog = ({ strategyId, apiBaseUrl, status, simulationEvents }) => {
+const EventLog = ({ strategyId, apiBaseUrl, status, simulationEvents = null }) => {
     const [events, setEvents] = useState([]);
     const [page, setPage] = useState(1);
     const [totalPages, setTotalPages] = useState(1);
-    const [loading, setLoading] = useState(false);
-
-    // Filter and Paginate local events if in simulation mode
+    const useSimulationEvents = Array.isArray(simulationEvents);
     useEffect(() => {
-        if (simulationEvents) {
-            const limit = 10;
-            const start = (page - 1) * limit;
-            const end = start + limit;
-
-            // Sort by time descending (latest first)
-            const sortedEvents = [...simulationEvents].sort((a, b) =>
-                new Date(b.created_at || b.timestamp) - new Date(a.created_at || a.timestamp)
-            );
-
-            // Add ID for map key if missing
-            const mappedEvents = sortedEvents.map((ev, idx) => ({
-                ...ev,
-                id: ev.id || `sim-${idx}`,
-                timestamp: ev.created_at || ev.timestamp // Ensure consistent key
-            }));
-
-            setEvents(mappedEvents.slice(start, end));
-            setTotalPages(Math.ceil(mappedEvents.length / limit));
+        if (!strategyId) return;
+        if (useSimulationEvents) {
+            setPage(1);
+            return;
         }
-    }, [simulationEvents, page]);
-
-    // Auto-refresh interval (Only if NOT in simulation mode)
-    useEffect(() => {
-        if (!strategyId || simulationEvents) return;
 
         fetchEvents();
         const interval = setInterval(fetchEvents, 5000); // Poll every 5 seconds
 
         return () => clearInterval(interval);
-    }, [strategyId, page, simulationEvents]);
+    }, [strategyId, page, useSimulationEvents]);
+
+    useEffect(() => {
+        if (!useSimulationEvents) return;
+        const total = simulationEvents.length;
+        const pages = Math.max(1, Math.ceil(total / 10));
+        if (page > pages) setPage(1);
+        setTotalPages(pages);
+    }, [simulationEvents, useSimulationEvents, page]);
 
     const fetchEvents = async () => {
+        if (useSimulationEvents) return;
         try {
             // Don't set loading on poll to avoid flickering
             // setLoading(true); 
@@ -63,6 +50,10 @@ const EventLog = ({ strategyId, apiBaseUrl, status, simulationEvents }) => {
     };
 
     if (!strategyId) return null;
+
+    const displayEvents = useSimulationEvents
+        ? simulationEvents.slice((page - 1) * 10, page * 10)
+        : events;
 
     // Helper to get color by level/type
     const getRowStyle = (event) => {
@@ -135,19 +126,21 @@ const EventLog = ({ strategyId, apiBaseUrl, status, simulationEvents }) => {
                     {status && (
                         <span style={getStatusBadgeStyle(status)}>{status}</span>
                     )}
-                    <button
-                        onClick={handleClearEvents}
-                        title="Clear All Events"
-                        style={{
-                            background: 'none', border: 'none', color: '#64748b', cursor: 'pointer',
-                            fontSize: '1rem', display: 'flex', alignItems: 'center', padding: '4px',
-                            transition: 'color 0.2s',
-                        }}
-                        onMouseOver={(e) => e.currentTarget.style.color = '#ef4444'}
-                        onMouseOut={(e) => e.currentTarget.style.color = '#64748b'}
-                    >
-                        🗑️
-                    </button>
+                    {!useSimulationEvents && (
+                        <button
+                            onClick={handleClearEvents}
+                            title="Clear All Events"
+                            style={{
+                                background: 'none', border: 'none', color: '#64748b', cursor: 'pointer',
+                                fontSize: '1rem', display: 'flex', alignItems: 'center', padding: '4px',
+                                transition: 'color 0.2s',
+                            }}
+                            onMouseOver={(e) => e.currentTarget.style.color = '#ef4444'}
+                            onMouseOut={(e) => e.currentTarget.style.color = '#64748b'}
+                        >
+                            🗑️
+                        </button>
+                    )}
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', fontSize: '0.8rem' }}>
                     <button
@@ -169,10 +162,10 @@ const EventLog = ({ strategyId, apiBaseUrl, status, simulationEvents }) => {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column' }}>
-                {events.length === 0 ? (
+                {displayEvents.length === 0 ? (
                     <div style={{ padding: '1rem', textAlign: 'center', color: '#64748b' }}>No recent events</div>
                 ) : (
-                    events.map(event => (
+                    displayEvents.map(event => (
                         <div key={event.id} style={getRowStyle(event)}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.2rem' }}>
                                 <span style={{ fontWeight: 'bold' }}>[{event.event_type}]</span>

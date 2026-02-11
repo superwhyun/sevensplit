@@ -1,7 +1,6 @@
 import logging
-import math
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from utils.indicators import calculate_rsi
 from models.strategy_state import SplitState
 
@@ -24,39 +23,87 @@ class RSIStrategyLogic:
         self.last_failed_buy_date = None
         self._insufficient_funds_until = 0
 
-    def tick(self, current_price: float, market_context: dict = None):
-        """RSI Daily Delta Strategy Logic"""
-        # 1. Update Daily RSI Indicators (Always for UI)
-        self._update_daily_rsi(current_price, market_context=market_context)
+    def tick(self, current_price: float, market_context: dict = None, indicators_updated: bool = False):
+        """RSI strategy tick: data -> evaluate -> plan -> execute."""
+        # 1) Data refresh
+        if not indicators_updated:
+            self._update_daily_rsi(current_price, market_context=market_context)
 
-        # 2. Logic Guard: Only execution if mode is RSI/ALL
+        # 2) Mode guard
         if self.strategy.config.strategy_mode not in ["RSI", "ALL"]:
             return
 
-        current_dt_kst = self.strategy.get_current_time_kst()
-        current_date_str = current_dt_kst.strftime("%Y-%m-%d")
-
-        if self.prev_rsi is None:
+        # 3) Data readiness guard
+        if not self._has_rsi_inputs():
             return
 
-        # Date-based Reset
+        # 4) Runtime context sync
+        current_date_str = self._sync_rsi_runtime_context()
+
+        # 5) Condition evaluation / action planning
+        action_plan = self._build_rsi_action_plan(
+            current_price=current_price,
+            current_date_str=current_date_str,
+            market_context=market_context,
+        )
+
+        # 6) Execute planned actions
+        self._execute_rsi_action_plan(action_plan, current_price, current_date_str)
+
+    def _has_rsi_inputs(self) -> bool:
+        return self.prev_rsi is not None and self.current_rsi_daily is not None
+
+    def _sync_rsi_runtime_context(self) -> str:
+        current_date_str = self.strategy.get_current_time_kst().strftime("%Y-%m-%d")
         if self.last_tick_date != current_date_str:
             self.rsi_highest = 0.0
             self.rsi_lowest = 100.0
             self.last_tick_date = current_date_str
-            
-        if self.current_rsi_daily is not None:
-             if self.current_rsi_daily > self.rsi_highest:
-                 self.rsi_highest = self.current_rsi_daily
-             if self.current_rsi_daily < self.rsi_lowest:
-                 self.rsi_lowest = self.current_rsi_daily
 
-        # --- Buying Logic ---
-        if self.strategy.has_sufficient_budget(market_context=market_context):
-            self._process_buy_logic(current_price, current_date_str, current_dt_kst)
-        
-        # --- Selling Logic ---
-        self._process_sell_logic(current_price, current_date_str, current_dt_kst)
+        if self.current_rsi_daily is not None:
+            if self.current_rsi_daily > self.rsi_highest:
+                self.rsi_highest = self.current_rsi_daily
+            if self.current_rsi_daily < self.rsi_lowest:
+                self.rsi_lowest = self.current_rsi_daily
+        return current_date_str
+
+    def _build_rsi_action_plan(self, current_price: float, current_date_str: str, market_context: dict = None):
+        actions = []
+
+        buy_plan = self._plan_rsi_buy(
+            current_price=current_price,
+            current_date_str=current_date_str,
+            market_context=market_context,
+        )
+        if buy_plan is not None:
+            actions.append(buy_plan)
+
+        sell_plan = self._plan_rsi_sell(
+            current_price=current_price,
+            current_date_str=current_date_str,
+        )
+        if sell_plan is not None:
+            actions.append(sell_plan)
+
+        return actions
+
+    def _execute_rsi_action_plan(self, actions: list, current_price: float, current_date_str: str):
+        for action in actions:
+            action_type = action.get("type")
+            if action_type == "buy":
+                success = self._execute_rsi_buy(
+                    price=current_price,
+                    count=action.get("count", 1),
+                    buy_rsi=self.current_rsi_daily,
+                )
+                if success:
+                    self.strategy.last_buy_date = current_date_str
+                    self.strategy.save_state()
+            elif action_type == "sell":
+                self.strategy.last_sell_date = current_date_str
+                self.strategy.save_state()
+                for split in action.get("splits", []):
+                    self._execute_market_sell(split)
 
     def _update_daily_rsi(self, current_price: float, market_context: dict = None):
         """Update daily RSI using robust ascending sorting."""
@@ -112,27 +159,33 @@ class RSIStrategyLogic:
         except Exception as e:
             logging.error(f"Failed to update Daily RSI: {e}")
 
-    def _process_buy_logic(self, current_price: float, current_date_str: str, current_dt_kst: datetime):
-        if self.prev_rsi is None or self.current_rsi_daily is None: return
-        
-        buy_cond_1 = self.prev_rsi < self.strategy.config.rsi_buy_max
+    def _plan_rsi_buy(self, current_price: float, current_date_str: str, market_context: dict = None):
+        if self.prev_rsi is None or self.current_rsi_daily is None:
+            return
+        if self.strategy.last_buy_date == current_date_str:
+            return None
+        if not self.strategy.has_sufficient_budget(market_context=market_context):
+            return None
+
         rsi_delta = self.current_rsi_daily - self.prev_rsi
+        if not self._validate_rsi_buy_trigger(rsi_delta):
+            return None
+        if not self.strategy.check_trade_limit():
+            return None
+        if not self._validate_rsi_buy_zone(rsi_delta):
+            return None
+
+        return {"type": "buy", "count": self.strategy.config.rsi_buy_first_amount or 1}
+
+    def _validate_rsi_buy_trigger(self, rsi_delta: float) -> bool:
+        buy_cond_1 = self.prev_rsi < self.strategy.config.rsi_buy_max
         buy_cond_2 = rsi_delta >= self.strategy.config.rsi_buy_first_threshold
-        
-        if buy_cond_1 and buy_cond_2:
-            if self.strategy.last_buy_date == current_date_str: return
-            
-            if self.strategy.check_trade_limit():
-                # Correct condition: Rebound and cross up
-                is_rebound = rsi_delta >= self.strategy.config.rsi_buy_first_threshold
-                is_safe_zone = self.current_rsi_daily <= (self.strategy.config.rsi_buy_max + 5)
-                
-                if is_rebound and is_safe_zone:
-                    count = self.strategy.config.rsi_buy_first_amount or 1
-                    success = self._execute_rsi_buy(current_price, count, buy_rsi=self.current_rsi_daily)
-                    if success:
-                        self.strategy.last_buy_date = current_date_str
-                        self.strategy.save_state()
+        return buy_cond_1 and buy_cond_2
+
+    def _validate_rsi_buy_zone(self, rsi_delta: float) -> bool:
+        is_rebound = rsi_delta >= self.strategy.config.rsi_buy_first_threshold
+        is_safe_zone = self.current_rsi_daily <= (self.strategy.config.rsi_buy_max + 5)
+        return is_rebound and is_safe_zone
 
     def _execute_rsi_buy(self, price: float, count: int, buy_rsi: float) -> bool:
         success_count = 0
@@ -156,8 +209,8 @@ class RSIStrategyLogic:
                  split = SplitState(
                      id=self.strategy.next_split_id, status="BUY_FILLED", buy_price=target_price,
                      actual_buy_price=target_price, buy_amount=amount, buy_volume=amount / target_price,
-                     buy_order_uuid=result.get('uuid'), bought_at=datetime.now(timezone.utc).isoformat(),
-                     created_at=datetime.now(timezone.utc).isoformat(), buy_rsi=buy_rsi
+                     buy_order_uuid=result.get('uuid'), bought_at=self.strategy.get_now_utc().isoformat(),
+                     created_at=self.strategy.get_now_utc().isoformat(), buy_rsi=buy_rsi
                  )
                  self.strategy.splits.append(split)
                  self.strategy.next_split_id += 1
@@ -168,31 +221,36 @@ class RSIStrategyLogic:
              if "insufficient" in str(e).lower(): self._insufficient_funds_until = time.time() + 3600
         return None
 
-    def _process_sell_logic(self, current_price: float, current_date_str: str, current_dt_kst: datetime):
-        if self.current_rsi_daily is None: return
+    def _plan_rsi_sell(self, current_price: float, current_date_str: str):
+        if self.current_rsi_daily is None:
+            return None
         reference_peak = max(self.prev_rsi or 0, self.rsi_highest, self.current_rsi_daily or 0)
         rsi_drop = reference_peak - self.current_rsi_daily
         sell_cond_1 = reference_peak > self.strategy.config.rsi_sell_min
         sell_cond_2 = rsi_drop >= self.strategy.config.rsi_sell_first_threshold
 
-        if sell_cond_1 and sell_cond_2:
-            if self.strategy.last_sell_date == current_date_str: return
-            candidates = [s for s in self.strategy.splits if s.status in ["BUY_FILLED", "PENDING_SELL"]]
-            candidates_with_profit = []
-            for s in candidates:
-                profit_rate = (current_price - s.actual_buy_price) / s.actual_buy_price
-                if profit_rate >= self.strategy.config.sell_rate:
-                    candidates_with_profit.append(s)
+        if not (sell_cond_1 and sell_cond_2):
+            return None
+        if self.strategy.last_sell_date == current_date_str:
+            return None
 
-            if candidates_with_profit:
-                sell_percent = self.strategy.config.rsi_sell_first_amount or 100
-                count = max(1, int(len(candidates_with_profit) * (sell_percent / 100.0)))
-                to_sell = candidates_with_profit[:count]
-                
-                self.strategy.last_sell_date = current_date_str
-                self.strategy.save_state()
-                for split in to_sell:
-                    self._execute_market_sell(split)
+        candidates_with_profit = self._select_sell_candidates(current_price)
+        if not candidates_with_profit:
+            return None
+
+        sell_percent = self.strategy.config.rsi_sell_first_amount or 100
+        count = max(1, int(len(candidates_with_profit) * (sell_percent / 100.0)))
+        to_sell = candidates_with_profit[:count]
+        return {"type": "sell", "splits": to_sell}
+
+    def _select_sell_candidates(self, current_price: float):
+        candidates = [s for s in self.strategy.splits if s.status in ["BUY_FILLED", "PENDING_SELL"]]
+        candidates_with_profit = []
+        for split in candidates:
+            profit_rate = (current_price - split.actual_buy_price) / split.actual_buy_price
+            if profit_rate >= self.strategy.config.sell_rate:
+                candidates_with_profit.append(split)
+        return candidates_with_profit
 
     def _execute_market_sell(self, split: SplitState):
         if split.status == "PENDING_SELL" and split.sell_order_uuid:

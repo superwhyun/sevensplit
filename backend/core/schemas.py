@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List, Union
+from typing import Optional
 from models.strategy_state import StrategyConfig
 
 class CreateStrategyRequest(BaseModel):
@@ -22,11 +22,25 @@ class ManualTargetRequest(BaseModel):
 class UpdateNameRequest(BaseModel):
     name: str
 
-class SimulationRequest(BaseModel):
-    start_time: Union[str, float]
 
 class DebugRSIRequest(BaseModel):
     strategy_id: int
     rsi: float
     prev_rsi: Optional[float] = None
     rsi_short: Optional[float] = None
+
+
+class BacktestRequest(BaseModel):
+    strategy_id: int
+    start_time: Optional[str] = None  # ISO8601 UTC
+    end_time: Optional[str] = None    # ISO8601 UTC
+    exec_interval: Optional[str] = None  # "minutes/5" or "days"
+    max_candles: int = 2000
+    initial_krw: float = 10000000.0
+
+
+class LiveSimulationStartRequest(BaseModel):
+    strategy_id: int
+    exec_interval: Optional[str] = None  # default by strategy mode
+    poll_seconds: float = 10.0
+    initial_krw: float = 10000000.0

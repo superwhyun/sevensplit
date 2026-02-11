@@ -2,15 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { createChart, ColorType, CrosshairMode } from 'lightweight-charts';
 import axios from 'axios';
 
-const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], isSimulating = false, simResult, onSimulationComplete, onChartClick, trailingBuyState }) => {
+const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], trailingBuyState }) => {
     const chartContainerRef = useRef();
     const chartRef = useRef();
-    const onChartClickRef = useRef(onChartClick);
-
-    // Update ref when prop changes
-    useEffect(() => {
-        onChartClickRef.current = onChartClick;
-    }, [onChartClick]);
     const candlestickSeriesRef = useRef();
     const volumeSeriesRef = useRef();
     const rsiSeries14Ref = useRef();
@@ -33,7 +27,6 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
     // Data State
     const [candleData, setCandleData] = useState([]);
     const [volumeData, setVolumeData] = useState([]);
-    const [showResultPopup, setShowResultPopup] = useState(true);
 
     // Pagination State
     const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -41,11 +34,6 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
 
     // Scaling State
     const [isAutoScaling, setIsAutoScaling] = useState(true);
-
-    // Reset popup visibility when simResult changes
-    useEffect(() => {
-        if (simResult) setShowResultPopup(true);
-    }, [simResult]);
 
     // Helper: Parse exact UTC ISO string to Unix Timestamp
     const parseUTC = (utcString) => {
@@ -419,15 +407,6 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             }
         });
 
-        // Click Handler for Simulation
-        chart.subscribeClick(param => {
-            if (onChartClickRef.current && param.time) {
-                // The chart now uses Real UTC timestamps internally. 
-                // param.time is Real UTC.
-                onChartClickRef.current(param.time);
-            }
-        });
-
         chartRef.current = chart;
 
         const candlestickSeries = chart.addCandlestickSeries({
@@ -550,77 +529,39 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             return parseUTC(val);
         };
 
-        if (isSimulating || simResult) {
-            if (simResult && simResult.trades) {
-                simResult.trades.forEach(t => {
-                    // Buy Marker
-                    if (t.bought_at) {
-                        const buyTime = ensureTimestamp(t.bought_at);
-                        if (buyTime) {
-                            markers.push({ time: buyTime, position: 'belowBar', color: '#10b981', shape: 'arrowUp', text: '', size: 1 });
-                        }
+        if (splits && splits.length > 0) {
+            splits.forEach(split => {
+                if (split.bought_at) {
+                    const time = ensureTimestamp(split.bought_at);
+                    if (time) {
+                        const isOpenPosition = split.status === 'BUY_FILLED' || split.status === 'PENDING_SELL';
+                        markers.push({
+                            time: time,
+                            position: 'belowBar',
+                            color: isOpenPosition ? '#f59e0b' : '#10b981',
+                            shape: 'arrowUp',
+                            text: '',
+                            size: 1,
+                        });
                     }
-                    // Sell Marker
-                    if (t.timestamp) {
-                        const sellTime = ensureTimestamp(t.timestamp);
-                        if (sellTime) {
-                            markers.push({ time: sellTime, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: '', size: 1 });
-                        }
+                }
+            });
+        }
+        if (tradeHistory && tradeHistory.length > 0) {
+            tradeHistory.forEach(trade => {
+                if (trade.timestamp) {
+                    const time = ensureTimestamp(trade.timestamp);
+                    if (time) {
+                        markers.push({ time: time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: '', size: 1 });
                     }
-                });
-            }
-            if (simResult && simResult.splits) {
-                simResult.splits.forEach(s => {
-                    if (s.bought_at) {
-                        const buyTime = ensureTimestamp(s.bought_at);
-                        if (buyTime) {
-                            // Active Splits (Holding) = Yellow
-                            markers.push({
-                                time: buyTime,
-                                position: 'belowBar',
-                                color: '#eab308', // Active Splits (Holding) = Yellow
-                                shape: 'arrowUp',
-                                text: '',
-                                size: 1
-                            });
-                        }
+                }
+                if (trade.bought_at) {
+                    const time = ensureTimestamp(trade.bought_at);
+                    if (time) {
+                        markers.push({ time: time, position: 'belowBar', color: '#10b981', shape: 'arrowUp', text: '', size: 1 });
                     }
-                });
-            }
-        } else {
-            if (splits && splits.length > 0) {
-                splits.forEach(split => {
-                    if (split.bought_at) {
-                        const time = ensureTimestamp(split.bought_at);
-                        if (time) {
-                            markers.push({
-                                time: time,
-                                position: 'belowBar',
-                                color: split.status === 'PENDING_SELL' ? '#eab308' : '#10b981',
-                                shape: 'arrowUp',
-                                text: '',
-                                size: 1,
-                            });
-                        }
-                    }
-                });
-            }
-            if (tradeHistory && tradeHistory.length > 0) {
-                tradeHistory.forEach(trade => {
-                    if (trade.timestamp) {
-                        const time = ensureTimestamp(trade.timestamp);
-                        if (time) {
-                            markers.push({ time: time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: '', size: 1 });
-                        }
-                    }
-                    if (trade.bought_at) {
-                        const time = ensureTimestamp(trade.bought_at);
-                        if (time) {
-                            markers.push({ time: time, position: 'belowBar', color: '#10b981', shape: 'arrowUp', text: '', size: 1 });
-                        }
-                    }
-                });
-            }
+                }
+            });
         }
 
         // Consolidate overlapping markers
@@ -667,55 +608,10 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
         try {
             candlestickSeriesRef.current.setMarkers(consolidatedMarkers);
 
-            // HIGHLIGHT WATCH INTERVALS (Trailing Buy)
-            if (simResult && simResult.watch_intervals && simResult.watch_intervals.length > 0 && candleData.length > 0) {
-                const updatedData = candleData.map(c => {
-                    // Check if this candle is inside any watch interval
-                    const isWatching = simResult.watch_intervals.some(interval => {
-                        const start = interval.start; // seconds?
-                        const end = interval.end || 9999999999;
-                        // Upbit candles are in seconds in frontend (parseUTC returns seconds)
-                        // simResult intervals are from runner.py which got them from 'candle.get("time")' (Seconds or MS?)
-                        // WE MUST CHECK UNITS. runner.py uses 'candle.get("timestamp") or candle.get("time")'.
-                        // sim_config loading normalizes them.
-                        // But wait, earlier bug was ms. runner.py detects this.
-                        // Let's assume runner normalized them or they are what they are.
-                        // Frontend 'c.time' is seconds.
-                        // If runner intervals are MS, we fail.
-                        // Runner 'current_watch_start' comes from `candle.get('timestamp')`.
-                        // In runner loop, `candle` is from `sim_config.candles`.
-                        // If we didn't normalize them in place, they might be mixed.
-                        // BUT we fixed the `is_daily` check, not the data source itself.
-                        // Wait, `runner.py` DOES NOT normalize the source `candles` list in place for everyone, only extract variables.
-                        // Actually `runner.py` line 225: `candle['timestamp'] = candle['time']`.
-                        // Upbit `timestamp` is MS. `time` is usually MS string?
-                        // Let's protect against unit mismatch:
-                        // If interval > 10000000000, assume MS and divide by 1000.
-
-                        let startSec = start > 10000000000 ? start / 1000 : start;
-                        let endSec = end > 10000000000 ? end / 1000 : end;
-
-                        return c.time >= startSec && c.time <= endSec;
-                    });
-
-                    if (isWatching) {
-                        return {
-                            ...c,
-                            color: '#eab308', // Yellow
-                            wickColor: '#eab308',
-                            borderColor: '#eab308'
-                        };
-                    }
-                    return c;
-                });
-                // Re-set data with colors
-                candlestickSeriesRef.current.setData(updatedData);
-            }
-
         } catch (e) {
             console.error("Error setting markers:", e);
         }
-    }, [splits, tradeHistory, candleData, isSimulating, simResult]);
+    }, [splits, tradeHistory, candleData]);
 
     // Draw Trailing Buy Lines
     useEffect(() => {
@@ -793,67 +689,8 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], is
             borderRadius: '0.5rem',
             border: '1px solid #334155'
         }}>
-            <h3 style={{ margin: '0 0 1rem 0', color: '#f8fafc' }}>Price Chart {isSimulating ? '(SIMULATION MODE)' : ''}</h3>
+            <h3 style={{ margin: '0 0 1rem 0', color: '#f8fafc' }}>Price Chart</h3>
             <div ref={chartContainerRef} style={{ position: 'relative', height: '400px', width: '100%', touchAction: 'none' }}>
-                {simResult && showResultPopup && (
-                    <div style={{
-                        position: 'absolute',
-                        top: '10px',
-                        left: '10px',
-                        zIndex: 20,
-                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                        padding: '1rem',
-                        borderRadius: '0.5rem',
-                        border: '1px solid #eab308',
-                        color: 'white',
-                        boxShadow: '0 4px 6px rgba(0,0,0,0.3)'
-                    }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                            <h4 style={{ margin: 0, color: '#eab308' }}>Simulation Result</h4>
-                            <button
-                                onClick={(e) => {
-                                    e.stopPropagation(); // Prevent chart click
-                                    // We can't clear simResult here because it's a prop.
-                                    // But we can hide this specific popup if we had local state, 
-                                    // or we can ask parent to clear.
-                                    // The user asked for a button to "remove" it.
-                                    // Since simResult drives the whole view, maybe just a local "visible" state for this popup?
-                                    // Or call onSimulationComplete(null)? No, that exits the mode.
-                                    // Let's use a local state to toggle visibility of this box.
-                                    setShowResultPopup(false);
-                                }}
-                                style={{
-                                    background: 'transparent',
-                                    border: 'none',
-                                    color: '#94a3b8',
-                                    cursor: 'pointer',
-                                    fontSize: '1.2rem',
-                                    padding: '0 0.5rem'
-                                }}
-                            >
-                                ×
-                            </button>
-                        </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'auto auto', gap: '0.5rem 1rem', fontSize: '0.9rem' }}>
-                            <span style={{ color: '#94a3b8' }}>Realized Profit:</span>
-                            <span style={{ fontWeight: 'bold', color: simResult.total_profit >= 0 ? '#10b981' : '#ef4444' }}>
-                                ₩{Math.round(simResult.total_profit).toLocaleString()}
-                            </span>
-
-                            <span style={{ color: '#94a3b8' }}>Unrealized Profit:</span>
-                            <span style={{ fontWeight: 'bold', color: (simResult.unrealized_profit || 0) >= 0 ? '#10b981' : '#ef4444' }}>
-                                ₩{Math.round(simResult.unrealized_profit || 0).toLocaleString()}
-                            </span>
-
-                            <span style={{ color: '#94a3b8' }}>Trades:</span>
-                            <span>{simResult.trade_count}</span>
-
-                            <span style={{ color: '#94a3b8' }}>Final Balance:</span>
-                            <span>₩{Math.round(simResult.final_balance).toLocaleString()}</span>
-                        </div>
-                    </div>
-                )}
-
                 {/* Scale Lock Toggle Button */}
                 <button
                     onClick={(e) => {

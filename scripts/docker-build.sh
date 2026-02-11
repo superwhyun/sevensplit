@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${ROOT_DIR}"
 
 VERSION_FILE=".version"
 
@@ -25,7 +28,6 @@ docker compose build
 
 # latest 태깅
 docker tag "sevensplit-bot:$IMAGE_VERSION" "sevensplit-bot:latest"
-docker tag "sevensplit-mock-exchange:$IMAGE_VERSION" "sevensplit-mock-exchange:latest"
 
 echo "✅ Tagged:"
 echo " - sevensplit-bot:$IMAGE_VERSION"

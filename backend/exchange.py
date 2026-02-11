@@ -1,6 +1,8 @@
 import pyupbit
 import logging
 from datetime import datetime
+from datetime import timezone
+from typing import Dict
 from database import get_db
 
 class Exchange:
@@ -100,19 +102,14 @@ class UpbitExchange(Exchange):
         # Update cache every hour (3600 seconds)
         if not self.valid_markets or (current_time - self.last_markets_update > 3600):
             try:
-                # Fetch all markets (warning: this is a public endpoint, no auth needed)
-                # If we are in Mock mode (localhost), this might fail if mock doesn't implement /v1/market/all
-                # So we try/except and fallback safely
+                # Fetch all markets (public endpoint, no auth needed)
                 resp = self._request('GET', '/v1/market/all', params={'isDetails': 'false'}, auth=False)
                 if isinstance(resp, list):
                     new_markets = {m['market'] for m in resp if m['market'].startswith('KRW-')}
                     if new_markets:
                         self.valid_markets = new_markets
                         self.last_markets_update = current_time
-                        import os
-                        is_mock = "localhost" in self.server_url or "127.0.0.1" in self.server_url or os.getenv("MODE", "").upper() == "MOCK"
-                        if not is_mock:
-                            logging.info(f"Refreshed valid markets: {len(self.valid_markets)} KRW pairs found")
+                        logging.info(f"Refreshed valid markets: {len(self.valid_markets)} KRW pairs found")
             except Exception as e:
                 logging.warning(f"Failed to fetch valid markets: {e}")
                 
@@ -146,12 +143,6 @@ class UpbitExchange(Exchange):
             token = self.jwt.encode(payload, self.secret_key, algorithm='HS256')
             headers = {'Authorization': f'Bearer {token}'}
         
-        # Log request only if NOT in mock mode
-        import os
-        # is_mock = "localhost" in self.server_url or "127.0.0.1" in self.server_url or os.getenv("MODE", "").upper() == "MOCK"
-        # if not is_mock:
-        # logging.info(f"🌐 Upbit API Request: {method} {url} {params or ''}")
-
         try:
             if method == 'GET':
                 resp = self.requests.get(url, params=params, headers=headers)
@@ -164,7 +155,7 @@ class UpbitExchange(Exchange):
             if not resp.ok:
                 error_msg = f"Upbit API Error: {resp.status_code} {resp.text}"
                 
-                # Downgrade 404 (Order not found) to WARNING to avoid noise in logs (esp. Mock mode)
+                # Downgrade 404 (Order not found) to WARNING to avoid noise in logs
                 if resp.status_code == 404:
                     logging.warning(error_msg)
                 else:
@@ -172,13 +163,6 @@ class UpbitExchange(Exchange):
                     
                 raise Exception(error_msg)
             
-            # Log success only if NOT in mock mode (to reduce noise)
-            # We determine mock mode by checking if server_url contains localhost or 127.0.0.1
-            # import os
-            # is_mock = "localhost" in self.server_url or "127.0.0.1" in self.server_url or os.getenv("MODE", "").upper() == "MOCK"
-            # if not is_mock:
-            #     logging.info(f"✅ Upbit API Response: {len(resp) if isinstance(resp, list) else 1} items fetched")
-                
             return resp.json()
         except Exception as e:
             logging.error(f"Request failed: {e} for url: {url}")
@@ -348,37 +332,276 @@ class UpbitExchange(Exchange):
     def cancel_order(self, uuid):
         return self._request('DELETE', '/v1/order', params={'uuid': uuid})
 
-    def set_mock_price(self, ticker, price):
-        if "api.upbit.com" in self.server_url:
-            logging.warning("set_mock_price called on real Upbit exchange")
+
+class PaperExchange(Exchange):
+    """Paper trading exchange: public market data + in-memory simulated orders/fills."""
+
+    def __init__(self, public_client: UpbitExchange, initial_krw: float = 10_000_000.0):
+        self.public_client = public_client
+        self.orders: Dict[str, dict] = {}
+        self.order_seq = 0
+        self.balances: Dict[str, dict] = {
+            "KRW": {"balance": float(initial_krw), "locked": 0.0, "avg_buy_price": 1.0}
+        }
+
+    def _new_order_id(self) -> str:
+        self.order_seq += 1
+        return f"paper-{self.order_seq}"
+
+    def get_tick_size(self, price):
+        return self.public_client.get_tick_size(price)
+
+    def normalize_price(self, price):
+        return self.public_client.normalize_price(price)
+
+    def get_current_price(self, ticker="KRW-BTC"):
+        return self.public_client.get_current_price(ticker)
+
+    def get_current_prices(self, tickers):
+        return self.public_client.get_current_prices(tickers)
+
+    def get_candles(self, ticker, count=200, interval="minutes/5", to=None):
+        return self.public_client.get_candles(ticker, count=count, interval=interval, to=to)
+
+    def _currency_from_ticker(self, ticker: str) -> str:
+        if "-" in ticker:
+            return ticker.split("-")[1]
+        return ticker
+
+    def _ensure_currency(self, currency: str):
+        if currency not in self.balances:
+            self.balances[currency] = {"balance": 0.0, "locked": 0.0, "avg_buy_price": 0.0}
+
+    def _available(self, currency: str) -> float:
+        self._ensure_currency(currency)
+        return float(self.balances[currency]["balance"])
+
+    def _lock(self, currency: str, amount: float) -> bool:
+        self._ensure_currency(currency)
+        if self.balances[currency]["balance"] < amount:
+            return False
+        self.balances[currency]["balance"] -= amount
+        self.balances[currency]["locked"] += amount
+        return True
+
+    def _unlock(self, currency: str, amount: float):
+        self._ensure_currency(currency)
+        self.balances[currency]["locked"] = max(0.0, self.balances[currency]["locked"] - amount)
+        self.balances[currency]["balance"] += amount
+
+    def get_balance(self, ticker="KRW"):
+        currency = self._currency_from_ticker(ticker)
+        self._ensure_currency(currency)
+        return float(self.balances[currency]["balance"])
+
+    def get_accounts(self):
+        tickers = [
+            f"KRW-{cur}"
+            for cur, data in self.balances.items()
+            if cur != "KRW" and (data["balance"] > 0 or data["locked"] > 0)
+        ]
+        prices = self.get_current_prices(tickers) if tickers else {}
+
+        accounts = []
+        for currency, data in self.balances.items():
+            balance = float(data["balance"])
+            locked = float(data["locked"])
+            if balance == 0 and locked == 0:
+                continue
+            ticker = f"KRW-{currency}" if currency != "KRW" else None
+            current_price = 1.0 if currency == "KRW" else float(prices.get(ticker, 0.0))
+            total_balance = balance + locked
+            accounts.append(
+                {
+                    "currency": currency,
+                    "balance": str(balance),
+                    "locked": str(locked),
+                    "avg_buy_price": str(float(data.get("avg_buy_price", 0.0))),
+                    "ticker": ticker,
+                    "current_price": current_price,
+                    "balance_value": total_balance * current_price,
+                    "total_balance": total_balance,
+                }
+            )
+        return accounts
+
+    def _fill_if_match(self, order: dict):
+        if order.get("state") != "wait":
             return
-        try:
-            self.requests.post(f"{self.server_url}/mock/price", json={"ticker": ticker, "price": price})
-        except Exception as e:
-            logging.error(f"set_mock_price failed: {e}")
-
-    def hold_price(self, ticker, hold=True):
-        if "api.upbit.com" in self.server_url:
-            logging.warning("hold_price called on real Upbit exchange")
+        side = order.get("side")
+        ticker = order.get("market")
+        price = float(order.get("price") or 0.0)
+        volume = float(order.get("volume") or 0.0)
+        current = self.get_current_price(ticker)
+        if not current:
             return
-        try:
-            self.requests.post(f"{self.server_url}/mock/hold", json={"ticker": ticker, "hold": hold})
-        except Exception as e:
-            logging.error(f"hold_price failed: {e}")
 
-    def is_price_held(self, ticker):
-        if "api.upbit.com" in self.server_url:
-            return False
-        try:
-            resp = self.requests.get(f"{self.server_url}/mock/hold", params={"ticker": ticker})
-            if resp.status_code == 200:
-                return resp.json().get("held", False)
-            return False
-        except Exception as e:
-            logging.error(f"is_price_held failed: {e}")
-            return False
+        should_fill = (side == "bid" and current <= price) or (side == "ask" and current >= price)
+        if not should_fill:
+            return
 
-class MockExchange(Exchange):
-    """Removed internal mock exchange. Use external mock API server instead."""
-    def __init__(self, *args, **kwargs):
-        raise RuntimeError("MockExchange is removed. Use the mock API server via UpbitExchange pointing to its URL.")
+        base_currency = self._currency_from_ticker(ticker)
+        order["state"] = "done"
+        order["executed_volume"] = volume
+        order["trades"] = [{"price": price, "volume": volume, "funds": price * volume}]
+
+        if side == "bid":
+            locked_krw = price * volume
+            self._ensure_currency(base_currency)
+            self.balances["KRW"]["locked"] = max(0.0, self.balances["KRW"]["locked"] - locked_krw)
+            prev_qty = self.balances[base_currency]["balance"]
+            prev_avg = self.balances[base_currency]["avg_buy_price"]
+            new_qty = prev_qty + volume
+            if new_qty > 0:
+                self.balances[base_currency]["avg_buy_price"] = (
+                    ((prev_qty * prev_avg) + (volume * price)) / new_qty
+                )
+            self.balances[base_currency]["balance"] = new_qty
+        else:
+            proceeds = price * volume
+            self._ensure_currency(base_currency)
+            self.balances[base_currency]["locked"] = max(0.0, self.balances[base_currency]["locked"] - volume)
+            self.balances["KRW"]["balance"] += proceeds
+
+    def buy_limit_order(self, ticker, price, volume):
+        price = float(price)
+        volume = float(volume)
+        required = price * volume
+        if not self._lock("KRW", required):
+            raise Exception("insufficient KRW for paper buy limit order")
+
+        uuid = self._new_order_id()
+        self.orders[uuid] = {
+            "uuid": uuid,
+            "market": ticker,
+            "side": "bid",
+            "ord_type": "limit",
+            "price": price,
+            "volume": volume,
+            "executed_volume": 0.0,
+            "state": "wait",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "trades": [],
+        }
+        return {"uuid": uuid}
+
+    def sell_limit_order(self, ticker, price, volume):
+        price = float(price)
+        volume = float(volume)
+        base_currency = self._currency_from_ticker(ticker)
+        if not self._lock(base_currency, volume):
+            raise Exception("insufficient asset for paper sell limit order")
+
+        uuid = self._new_order_id()
+        self.orders[uuid] = {
+            "uuid": uuid,
+            "market": ticker,
+            "side": "ask",
+            "ord_type": "limit",
+            "price": price,
+            "volume": volume,
+            "executed_volume": 0.0,
+            "state": "wait",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "trades": [],
+        }
+        return {"uuid": uuid}
+
+    def buy_market_order(self, ticker, amount):
+        amount = float(amount)
+        price = float(self.get_current_price(ticker))
+        if not price:
+            raise Exception("current price unavailable for paper buy market order")
+        if self._available("KRW") < amount:
+            raise Exception("insufficient KRW for paper buy market order")
+
+        volume = amount / price
+        self.balances["KRW"]["balance"] -= amount
+        base_currency = self._currency_from_ticker(ticker)
+        self._ensure_currency(base_currency)
+        prev_qty = self.balances[base_currency]["balance"]
+        prev_avg = self.balances[base_currency]["avg_buy_price"]
+        new_qty = prev_qty + volume
+        if new_qty > 0:
+            self.balances[base_currency]["avg_buy_price"] = (((prev_qty * prev_avg) + amount) / new_qty)
+        self.balances[base_currency]["balance"] = new_qty
+
+        uuid = self._new_order_id()
+        self.orders[uuid] = {
+            "uuid": uuid,
+            "market": ticker,
+            "side": "bid",
+            "ord_type": "price",
+            "price": price,
+            "volume": volume,
+            "executed_volume": volume,
+            "state": "done",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "trades": [{"price": price, "volume": volume, "funds": amount}],
+        }
+        return {"uuid": uuid}
+
+    def sell_market_order(self, ticker, volume):
+        volume = float(volume)
+        base_currency = self._currency_from_ticker(ticker)
+        if self._available(base_currency) < volume:
+            raise Exception("insufficient asset for paper sell market order")
+        price = float(self.get_current_price(ticker))
+        if not price:
+            raise Exception("current price unavailable for paper sell market order")
+
+        self.balances[base_currency]["balance"] -= volume
+        self.balances["KRW"]["balance"] += (price * volume)
+
+        uuid = self._new_order_id()
+        self.orders[uuid] = {
+            "uuid": uuid,
+            "market": ticker,
+            "side": "ask",
+            "ord_type": "market",
+            "price": price,
+            "volume": volume,
+            "executed_volume": volume,
+            "state": "done",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "trades": [{"price": price, "volume": volume, "funds": price * volume}],
+        }
+        return {"uuid": uuid}
+
+    def get_order(self, uuid):
+        order = self.orders.get(uuid)
+        if not order:
+            raise Exception("Order not found")
+        self._fill_if_match(order)
+        return dict(order)
+
+    def get_orders(self, ticker=None, state='wait', page=1, limit=100):
+        for order in self.orders.values():
+            if order.get("state") == "wait":
+                self._fill_if_match(order)
+
+        filtered = []
+        for order in self.orders.values():
+            if ticker and order.get("market") != ticker:
+                continue
+            if state and order.get("state") != state:
+                continue
+            filtered.append(dict(order))
+        return filtered[:limit]
+
+    def cancel_order(self, uuid):
+        order = self.orders.get(uuid)
+        if not order:
+            raise Exception("Order not found")
+        if order.get("state") != "wait":
+            return {"uuid": uuid}
+
+        side = order.get("side")
+        price = float(order.get("price") or 0.0)
+        volume = float(order.get("volume") or 0.0)
+        if side == "bid":
+            self._unlock("KRW", price * volume)
+        elif side == "ask":
+            self._unlock(self._currency_from_ticker(order.get("market")), volume)
+        order["state"] = "cancel"
+        return {"uuid": uuid}

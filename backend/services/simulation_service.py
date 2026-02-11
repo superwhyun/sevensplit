@@ -1,169 +1,415 @@
 import logging
-from datetime import datetime, timezone, timedelta
-from database import get_db, get_candle_db
-from fastapi import HTTPException
-from core.config import exchange, real_exchange, db
+import threading
+import time
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from typing import Dict, Optional
+
+from exchange import PaperExchange, UpbitExchange
 from models.strategy_state import StrategyConfig
-from simulation import run_simulation, SimulationConfig
+from strategy import SevenSplitStrategy
 
-def simulate_strategy_from_time_logic(strategy_id: int, start_time_str: str):
-    """Run simulation for a specific strategy starting from a given time"""
-    logging.info(f"Received simulation request for strategy {strategy_id} from {start_time_str}")
-    
-    s_rec = db.get_strategy(strategy_id)
-    if not s_rec:
-        logging.error(f"Strategy {strategy_id} not found in DB")
-        raise HTTPException(status_code=404, detail="Strategy not found")
-        
-    config_dict = {
-        'investment_per_split': s_rec.investment_per_split,
-        'min_price': s_rec.min_price,
-        'max_price': s_rec.max_price,
-        'buy_rate': s_rec.buy_rate,
-        'sell_rate': s_rec.sell_rate,
-        'fee_rate': s_rec.fee_rate,
-        'tick_interval': s_rec.tick_interval,
-        'rebuy_strategy': s_rec.rebuy_strategy,
-        'max_trades_per_day': s_rec.max_trades_per_day,
-        
-        'strategy_mode': s_rec.strategy_mode,
-        'rsi_period': s_rec.rsi_period,
-        'rsi_timeframe': s_rec.rsi_timeframe,
 
-        'rsi_buy_max': s_rec.rsi_buy_max,
-        'rsi_buy_first_threshold': s_rec.rsi_buy_first_threshold,
-        'rsi_buy_first_amount': s_rec.rsi_buy_first_amount,
-        'rsi_buy_next_threshold': s_rec.rsi_buy_next_threshold,
-        'rsi_buy_next_amount': s_rec.rsi_buy_next_amount,
-
-        'rsi_sell_min': s_rec.rsi_sell_min,
-        'rsi_sell_first_threshold': s_rec.rsi_sell_first_threshold,
-        'rsi_sell_first_amount': s_rec.rsi_sell_first_amount,
-        'rsi_sell_next_threshold': s_rec.rsi_sell_next_threshold,
-        'rsi_sell_next_amount': s_rec.rsi_sell_next_amount,
-
-        'stop_loss': s_rec.stop_loss,
-        'max_holdings': s_rec.max_holdings,
-
-        'use_trailing_buy': s_rec.use_trailing_buy,
-        'trailing_buy_rebound_percent': s_rec.trailing_buy_rebound_percent,
-        'trailing_buy_batch': getattr(s_rec, 'trailing_buy_batch', True),
-        'price_segments': getattr(s_rec, 'price_segments', []) or []
-    }
-    candle_db = get_candle_db()
-    config = StrategyConfig(**config_dict)
-    ticker = s_rec.ticker
-    budget = s_rec.budget
-    
-    logging.info(f"SIM START: Loaded Strategy {strategy_id} ({ticker}) from DB. Budget={budget}")
-
-    interval = "minutes/5"
-    
-    start_dt = None
+def _parse_iso_to_ts(value: Optional[str]) -> Optional[float]:
+    if not value:
+        return None
     try:
-        if isinstance(start_time_str, (int, float)):
-            start_dt = datetime.fromtimestamp(start_time_str, tz=timezone.utc)
-        else:
-            start_dt = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
-    except Exception as e:
-        logging.warning(f"Failed to parse start_time {start_time_str}: {e}")
-        start_dt = datetime.now(timezone.utc)
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
 
-    # Determine required time range
-    # Standard RSI(14) needs at least 15 candles. Let's take 1 day (288 candles) for robust indicators.
-    start_ts = start_dt.timestamp()
-    history_buffer = 24 * 60 * 60 # 1 day
-    warmup_start_ts = start_ts - history_buffer
-    now_ts = datetime.now(timezone.utc).timestamp()
 
-    # 1. Try to get from local Market DB cache
-    candles = candle_db.get_candles(ticker, interval, warmup_start_ts)
-    
-    # 2. Check if we have sufficient data
-    needs_fetch = False
-    if not candles:
-        needs_fetch = True
-    else:
-        oldest_ts = candles[0]['timestamp']
-        latest_ts = candles[-1]['timestamp']
-        if oldest_ts > warmup_start_ts + 600: # Allow 10 min tolerance
-            needs_fetch = True
-        elif latest_ts < now_ts - 1200: # More than 20 min gap from now
-            needs_fetch = True
+class _InMemorySimDB:
+    """Minimal DB adapter used by simulation strategy to avoid real DB writes."""
 
-    fetch_logs = []
-    if needs_fetch:
-        logging.info(f"🌐 [UPBIT API] (SIM) Market Cache miss for {ticker} ({interval}). Fetching from exchange...")
-        to_cursor = None
-        max_pages = 20 
-        pages_fetched = 0
-        
-        while pages_fetched < max_pages:
-            try:
-                batch = real_exchange.get_candles(ticker, count=200, interval=interval, to=to_cursor)
-                if not batch:
-                    break
-                
-                candle_db.save_candles(ticker, interval, batch)
-                
-                # Check how far back we've reached
-                oldest_in_batch = batch[-1]
-                o_ts = oldest_in_batch.get('timestamp') or oldest_in_batch.get('time')
-                if o_ts and o_ts > 10000000000: o_ts /= 1000.0
-                
-                msg = f"FETCH: Page {pages_fetched+1}, Oldest={oldest_in_batch.get('candle_date_time_kst')}"
-                fetch_logs.append(msg)
-                logging.info(msg)
+    def __init__(self, strategy_id: int, name: str):
+        self._strategy = SimpleNamespace(id=strategy_id, name=name)
 
-                if o_ts and o_ts < warmup_start_ts:
-                    break
-                
-                to_cursor = oldest_in_batch.get('candle_date_time_kst')
-                pages_fetched += 1
-                import time
-                time.sleep(0.1) 
-                
-                if len(batch) < 200:
-                    break
-            except Exception as e:
-                logging.error(f"Error during simulation fetch: {e}")
-                break
-        
-        # Re-load from Market DB after fetching
-        candles = candle_db.get_candles(ticker, interval, warmup_start_ts)
+    def get_strategy(self, strategy_id: int):
+        if strategy_id != self._strategy.id:
+            return None
+        return self._strategy
 
-    if not candles:
-        logging.error("No 5-minute candles available for simulation")
-        raise HTTPException(status_code=500, detail="Failed to retrieve candle data for simulation")
+    def get_splits(self, strategy_id: int):
+        return []
 
-    logging.info(f"SIM: Prepared {len(candles)} candles for ticker {ticker}")
-    
-    # Find start_index for the runner (the first candle at or after start_dt)
-    start_index = 0
-    for i, c in enumerate(candles):
-        if c['timestamp'] >= start_ts:
-            start_index = i
-            break
-            
-    if start_index == -1:
-        start_index = 0
+    def get_trades(self, strategy_id: int, limit: int = None):
+        return []
 
-    sim_config = SimulationConfig(
-        strategy_config=config,
-        candles=candles,
-        start_index=start_index,
-        start_time=start_dt.timestamp(),
-        ticker=ticker,
-        budget=budget
-    )
+    def update_strategy_state(self, strategy_id: int, **kwargs):
+        return None
 
-    try:
-        result = run_simulation(sim_config)
-        if 'debug_logs' in result:
-             result['debug_logs'].extend(fetch_logs)
+    def add_split(self, strategy_id: int, ticker: str, split_data: dict):
+        return None
+
+    def update_split(self, strategy_id: int, split_id: int, **kwargs):
+        return None
+
+    def delete_split(self, strategy_id: int, split_id: int):
+        return None
+
+    def add_trade(self, strategy_id: int, ticker: str, trade_data: dict):
+        return None
+
+    def add_event(self, strategy_id: int, level: str, event_type: str, message: str):
+        return None
+
+
+class _ReplayPaperExchange(PaperExchange):
+    def __init__(self, public_client: UpbitExchange, initial_krw: float):
+        super().__init__(public_client=public_client, initial_krw=initial_krw)
+        self._price_map: Dict[str, float] = {}
+
+    def set_price(self, ticker: str, price: float):
+        self._price_map[ticker] = float(price)
+
+    def get_current_price(self, ticker="KRW-BTC"):
+        if ticker in self._price_map:
+            return float(self._price_map[ticker])
+        return super().get_current_price(ticker)
+
+    def get_current_prices(self, tickers):
+        result = {}
+        for t in tickers:
+            result[t] = self.get_current_price(t)
         return result
-    except Exception as e:
-        import traceback
-        error_detail = f"{str(e)}\n{traceback.format_exc()}"
-        logging.error(f"Simulation failed: {e}")
-        raise HTTPException(status_code=500, detail=error_detail)
+
+
+class _SimulationStrategy(SevenSplitStrategy):
+    """SevenSplitStrategy variant that never persists to real DB."""
+
+    def __init__(self, exchange, strategy_id: int, ticker: str, budget: float, name: str = "Simulation"):
+        super().__init__(exchange, strategy_id=strategy_id, ticker=ticker, budget=budget)
+        self.db = _InMemorySimDB(strategy_id=strategy_id, name=name)
+        # Runtime defaults that are normally restored from DB state
+        self.is_watching = False
+        self.watch_lowest_price = None
+        self.pending_buy_units = 0
+        self.last_buy_date = None
+        self.debug_rsi = None
+        self.debug_prev_rsi = None
+        self.debug_rsi_short = None
+        self._sim_now_utc = None
+        self.sim_events = []
+        self._sim_event_seq = 1
+
+    def load_state(self):
+        return False
+
+    def save_state(self):
+        return None
+
+    def log_event(self, level: str, event_type: str, message: str):
+        self.log_message(f"[{event_type}] {message}", level=level.lower())
+        self.sim_events.insert(
+            0,
+            {
+                "id": self._sim_event_seq,
+                "level": level,
+                "event_type": event_type,
+                "message": message,
+                "timestamp": self.get_now_utc().isoformat(),
+            },
+        )
+        self._sim_event_seq += 1
+
+
+@dataclass
+class LiveSession:
+    id: str
+    strategy_id: int
+    ticker: str
+    exec_interval: str
+    started_at: float
+    status: str = "running"
+    last_candle_ts: float = 0.0
+    last_tick_price: float = 0.0
+    last_error: Optional[str] = None
+
+
+class SimulationService:
+    def __init__(self, db, candle_db, public_exchange: UpbitExchange):
+        self.db = db
+        self.candle_db = candle_db
+        self.public_exchange = public_exchange
+        self.live_sessions: Dict[str, LiveSession] = {}
+        self._live_runtime: Dict[str, dict] = {}
+        self._lock = threading.Lock()
+
+    def _build_strategy_config(self, strategy_rec) -> StrategyConfig:
+        return StrategyConfig(
+            investment_per_split=strategy_rec.investment_per_split,
+            min_price=strategy_rec.min_price,
+            max_price=strategy_rec.max_price,
+            buy_rate=strategy_rec.buy_rate,
+            sell_rate=strategy_rec.sell_rate,
+            fee_rate=strategy_rec.fee_rate,
+            tick_interval=0.0,
+            rebuy_strategy=getattr(strategy_rec, "rebuy_strategy", "reset_on_clear"),
+            max_trades_per_day=getattr(strategy_rec, "max_trades_per_day", 100),
+            strategy_mode=getattr(strategy_rec, "strategy_mode", "PRICE"),
+            rsi_period=getattr(strategy_rec, "rsi_period", 14),
+            rsi_timeframe=getattr(strategy_rec, "rsi_timeframe", "minutes/60"),
+            rsi_buy_max=getattr(strategy_rec, "rsi_buy_max", 30.0),
+            rsi_buy_first_threshold=getattr(strategy_rec, "rsi_buy_first_threshold", 5.0),
+            rsi_buy_first_amount=getattr(strategy_rec, "rsi_buy_first_amount", 1),
+            rsi_buy_next_threshold=getattr(strategy_rec, "rsi_buy_next_threshold", 1.0),
+            rsi_buy_next_amount=getattr(strategy_rec, "rsi_buy_next_amount", 1),
+            rsi_sell_min=getattr(strategy_rec, "rsi_sell_min", 70.0),
+            rsi_sell_first_threshold=getattr(strategy_rec, "rsi_sell_first_threshold", 5.0),
+            rsi_sell_first_amount=getattr(strategy_rec, "rsi_sell_first_amount", 1),
+            rsi_sell_next_threshold=getattr(strategy_rec, "rsi_sell_next_threshold", 1.0),
+            rsi_sell_next_amount=getattr(strategy_rec, "rsi_sell_next_amount", 1),
+            stop_loss=getattr(strategy_rec, "stop_loss", -10.0),
+            max_holdings=getattr(strategy_rec, "max_holdings", 20),
+            use_trailing_buy=getattr(strategy_rec, "use_trailing_buy", False),
+            trailing_buy_rebound_percent=getattr(strategy_rec, "trailing_buy_rebound_percent", 0.2),
+            trailing_buy_batch=getattr(strategy_rec, "trailing_buy_batch", True),
+            price_segments=getattr(strategy_rec, "price_segments", []) or [],
+        )
+
+    def _default_exec_interval(self, config: StrategyConfig) -> str:
+        return "days" if config.strategy_mode == "RSI" else "minutes/5"
+
+    def _get_strategy_record_or_raise(self, strategy_id: int):
+        s = self.db.get_strategy(strategy_id)
+        if not s:
+            raise ValueError(f"Strategy not found: {strategy_id}")
+        return s
+
+    def _get_market_context(self, ticker: str, ts: float):
+        m5 = self.candle_db.get_candles(ticker, "minutes/5", ts - (300 * 300), ts)
+        days = self.candle_db.get_candles(ticker, "days", ts - (86400 * 300), ts)
+        return {
+            "candles": {
+                ticker: {
+                    "minutes/5": m5[-300:],
+                    "days": days[-300:],
+                }
+            }
+        }
+
+    def run_backtest(
+        self,
+        strategy_id: int,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        exec_interval: Optional[str] = None,
+        max_candles: int = 2000,
+        initial_krw: float = 10_000_000.0,
+    ) -> dict:
+        strategy_rec = self._get_strategy_record_or_raise(strategy_id)
+        config = self._build_strategy_config(strategy_rec)
+        exec_interval = exec_interval or self._default_exec_interval(config)
+
+        start_ts = _parse_iso_to_ts(start_time) or 0.0
+        end_ts = _parse_iso_to_ts(end_time) or time.time()
+
+        candles = self.candle_db.get_candles(strategy_rec.ticker, exec_interval, start_ts, end_ts)
+        if not candles:
+            raise ValueError(f"No candles in DB for {strategy_rec.ticker} ({exec_interval})")
+        if max_candles > 0 and len(candles) > max_candles:
+            candles = candles[-max_candles:]
+
+        sim_exchange = _ReplayPaperExchange(self.public_exchange, initial_krw=initial_krw)
+        sim_strategy = _SimulationStrategy(
+            sim_exchange,
+            strategy_id=strategy_id,
+            ticker=strategy_rec.ticker,
+            budget=float(strategy_rec.budget),
+            name=f"[SIM] {strategy_rec.name}",
+        )
+        sim_strategy.update_config(config)
+
+        first_price = float(candles[0].get("trade_price") or candles[0].get("close") or 0.0)
+        first_ts = float(candles[0].get("timestamp") or 0.0)
+        if first_price <= 0:
+            raise ValueError("Invalid first candle price")
+
+        if first_ts > 0:
+            sim_strategy._sim_now_utc = datetime.fromtimestamp(first_ts, tz=timezone.utc)
+        sim_exchange.set_price(strategy_rec.ticker, first_price)
+        sim_strategy.start(current_price=first_price)
+
+        for candle in candles:
+            ts = float(candle.get("timestamp") or 0.0)
+            price = float(candle.get("trade_price") or candle.get("close") or 0.0)
+            if ts <= 0 or price <= 0:
+                continue
+            sim_strategy._sim_now_utc = datetime.fromtimestamp(ts, tz=timezone.utc)
+            sim_exchange.set_price(strategy_rec.ticker, price)
+            market_context = self._get_market_context(strategy_rec.ticker, ts)
+            sim_strategy.tick(current_price=price, market_context=market_context)
+
+        sim_strategy.stop()
+
+        realized = sum(float(t.get("net_profit", 0.0)) for t in sim_strategy.trade_history)
+        return {
+            "strategy_id": strategy_id,
+            "ticker": strategy_rec.ticker,
+            "mode": "backtest",
+            "exec_interval": exec_interval,
+            "start_ts": candles[0].get("timestamp"),
+            "end_ts": candles[-1].get("timestamp"),
+            "candles_used": len(candles),
+            "trades": len(sim_strategy.trade_history),
+            "realized_profit": realized,
+            "final_state": sim_strategy.get_state(current_price=sim_exchange.get_current_price(strategy_rec.ticker)),
+            "trade_history": sim_strategy.trade_history[:200],
+            "sim_events": sim_strategy.sim_events[:200],
+        }
+
+    def start_live(
+        self,
+        strategy_id: int,
+        exec_interval: Optional[str] = None,
+        poll_seconds: float = 10.0,
+        initial_krw: float = 10_000_000.0,
+    ) -> dict:
+        strategy_rec = self._get_strategy_record_or_raise(strategy_id)
+        config = self._build_strategy_config(strategy_rec)
+        exec_interval = exec_interval or self._default_exec_interval(config)
+
+        session_id = str(uuid.uuid4())
+        sim_exchange = _ReplayPaperExchange(self.public_exchange, initial_krw=initial_krw)
+        sim_strategy = _SimulationStrategy(
+            sim_exchange,
+            strategy_id=strategy_id,
+            ticker=strategy_rec.ticker,
+            budget=float(strategy_rec.budget),
+            name=f"[LIVE-SIM] {strategy_rec.name}",
+        )
+        sim_strategy.update_config(config)
+
+        session = LiveSession(
+            id=session_id,
+            strategy_id=strategy_id,
+            ticker=strategy_rec.ticker,
+            exec_interval=exec_interval,
+            started_at=time.time(),
+        )
+
+        with self._lock:
+            self.live_sessions[session_id] = session
+            self._live_runtime[session_id] = {
+                "strategy": sim_strategy,
+                "exchange": sim_exchange,
+                "poll_seconds": max(1.0, float(poll_seconds)),
+                "bootstrapped": False,
+            }
+
+        thread = threading.Thread(target=self._run_live_session, args=(session_id,), daemon=True)
+        thread.start()
+        return {"session_id": session_id, "status": "running", "strategy_id": strategy_id, "ticker": strategy_rec.ticker}
+
+    def _run_live_session(self, session_id: str):
+        while True:
+            with self._lock:
+                session = self.live_sessions.get(session_id)
+                runtime = self._live_runtime.get(session_id)
+            if not session or not runtime:
+                return
+            if session.status != "running":
+                return
+
+            try:
+                self._tick_live_session(session, runtime)
+            except Exception as e:
+                logging.error(f"[SIM] Live session error: {e}")
+                session.last_error = str(e)
+
+            time.sleep(runtime["poll_seconds"])
+
+    def _tick_live_session(self, session: LiveSession, runtime: dict):
+        strategy = runtime["strategy"]
+        exchange = runtime["exchange"]
+        ticker = session.ticker
+
+        now = time.time()
+        lookback = 86400 * 14 if session.exec_interval == "days" else 300 * 1000
+        candles = self.candle_db.get_candles(ticker, session.exec_interval, now - lookback, now)
+        if not candles:
+            return
+
+        latest = candles[-1]
+        latest_ts = float(latest.get("timestamp") or 0.0)
+        latest_price = float(latest.get("trade_price") or latest.get("close") or 0.0)
+        if latest_ts <= 0 or latest_price <= 0:
+            return
+        if latest_ts <= session.last_candle_ts:
+            return
+
+        exchange.set_price(ticker, latest_price)
+        strategy._sim_now_utc = datetime.fromtimestamp(latest_ts, tz=timezone.utc)
+        if not runtime["bootstrapped"]:
+            strategy.start(current_price=latest_price)
+            runtime["bootstrapped"] = True
+
+        market_context = self._get_market_context(ticker, latest_ts)
+        strategy.tick(current_price=latest_price, market_context=market_context)
+
+        session.last_candle_ts = latest_ts
+        session.last_tick_price = latest_price
+
+    def stop_live(self, session_id: str):
+        with self._lock:
+            session = self.live_sessions.get(session_id)
+            runtime = self._live_runtime.get(session_id)
+            if not session:
+                raise ValueError("Live simulation session not found")
+            session.status = "stopped"
+            if runtime and runtime.get("strategy"):
+                try:
+                    runtime["strategy"].stop()
+                except Exception:
+                    pass
+        return {"session_id": session_id, "status": "stopped"}
+
+    def get_live(self, session_id: str) -> dict:
+        with self._lock:
+            session = self.live_sessions.get(session_id)
+            runtime = self._live_runtime.get(session_id)
+        if not session or not runtime:
+            raise ValueError("Live simulation session not found")
+
+        strategy = runtime["strategy"]
+        exchange = runtime["exchange"]
+        current_price = exchange.get_current_price(session.ticker)
+        realized = sum(float(t.get("net_profit", 0.0)) for t in strategy.trade_history)
+
+        return {
+            "session_id": session.id,
+            "status": session.status,
+            "mode": "live",
+            "strategy_id": session.strategy_id,
+            "ticker": session.ticker,
+            "exec_interval": session.exec_interval,
+            "started_at": session.started_at,
+            "last_candle_ts": session.last_candle_ts,
+            "last_tick_price": session.last_tick_price,
+            "last_error": session.last_error,
+            "trades": len(strategy.trade_history),
+            "realized_profit": realized,
+            "final_state": strategy.get_state(current_price=current_price),
+            "trade_history": strategy.trade_history[:200],
+            "sim_events": strategy.sim_events[:200],
+        }
+
+    def list_live(self) -> list:
+        with self._lock:
+            sessions = list(self.live_sessions.values())
+        return [
+            {
+                "session_id": s.id,
+                "strategy_id": s.strategy_id,
+                "ticker": s.ticker,
+                "status": s.status,
+                "exec_interval": s.exec_interval,
+                "started_at": s.started_at,
+                "last_candle_ts": s.last_candle_ts,
+                "last_tick_price": s.last_tick_price,
+            }
+            for s in sessions
+        ]

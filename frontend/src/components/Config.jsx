@@ -43,6 +43,39 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
         return parseFloat(val.toString().replace(/,/g, ''));
     };
 
+    const buildFallbackSegment = (data) => {
+        const minPrice = Number(data.min_price) || 0;
+        const rawMaxPrice = Number(data.max_price) || 0;
+        const maxPrice = rawMaxPrice > minPrice ? rawMaxPrice : 1000000000;
+        return {
+            min_price: minPrice,
+            max_price: maxPrice,
+            investment_per_split: Number(data.investment_per_split) || 100000,
+            max_splits: Number(data.max_holdings) || 20,
+        };
+    };
+
+    const ensureSegments = (data) => {
+        const segments = Array.isArray(data.price_segments) ? data.price_segments : [];
+        if (segments.length > 0) {
+            return segments;
+        }
+        return [buildFallbackSegment(data)];
+    };
+
+    React.useEffect(() => {
+        const mode = formData?.strategy_mode || 'PRICE';
+        if (mode !== 'PRICE') {
+            return;
+        }
+        if (!Array.isArray(formData?.price_segments) || formData.price_segments.length === 0) {
+            setFormData(prev => ({
+                ...prev,
+                price_segments: ensureSegments(prev || {}),
+            }));
+        }
+    }, [formData?.strategy_mode, formData?.price_segments?.length]);
+
     const handleChange = (e) => {
         setIsEditing(true);
         const { name, value, type, checked } = e.target;
@@ -90,7 +123,11 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                 ? `http://${window.location.hostname}:8000`
                 : '';
 
-            const { budget: newBudget, ...configData } = formData;
+            const { budget: newBudget, ...rawConfigData } = formData;
+            const configData = {
+                ...rawConfigData,
+                price_segments: ensureSegments(rawConfigData),
+            };
             await axios.post(`${API_BASE_URL}/strategies/config`, {
                 strategy_id: strategyId,
                 config: configData,
@@ -167,16 +204,11 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                     </label>
                     <div style={{ padding: '0 10px', marginBottom: '0.5rem' }}>
                         <Slider
-                            min={0}
+                            min={1}
                             max={10}
                             value={formData.price_segments?.length || 0}
                             onChange={(count) => {
                                 setIsEditing(true);
-                                if (count === 0) {
-                                    setFormData(prev => ({ ...prev, price_segments: [] }));
-                                    return;
-                                }
-
                                 const minPrice = formData.min_price || 0;
                                 const maxPrice = formData.max_price || 100000000;
                                 const range = maxPrice - minPrice;
@@ -199,7 +231,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                         />
                     </div>
                     <div style={{ fontSize: '0.75rem', color: '#94a3b8', textAlign: 'center' }}>
-                        Drag to set segment count (0 = disabled)
+                        Drag to set segment count
                     </div>
                 </div>
 
@@ -351,8 +383,8 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                     </>
                 ) : (
                     <div style={{ color: '#94a3b8', fontSize: '0.9rem', textAlign: 'center', padding: '2rem' }}>
-                        No segments defined. Using global config.<br />
-                        <span style={{ fontSize: '0.8rem' }}>Use slider above to create segments</span>
+                        No segments defined.<br />
+                        <span style={{ fontSize: '0.8rem' }}>Use slider above to create at least one segment</span>
                     </div>
                 )}
             </div>

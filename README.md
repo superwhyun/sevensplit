@@ -29,39 +29,37 @@ npm install
 cd ..
 ```
 
-### 3. 환경 변수 설정 (Real Mode)
+### 3. 환경 변수 설정
 
-실제 거래(Real Mode)를 위해서는 `backend` 디렉토리 안에 `.env.real` 파일을 생성하고 업비트 API 키를 설정해야 합니다.
+`backend` 디렉토리 안에 `.env.real` 파일을 생성하고 업비트 API 키를 설정하세요.
 
 **`backend/.env.real` 파일 생성:**
 
 ```bash
-MODE=REAL
 UPBIT_ACCESS_KEY=your_actual_access_key_here
 UPBIT_SECRET_KEY=your_actual_secret_key_here
+UPBIT_OPEN_API_SERVER_URL=https://api.upbit.com
 ```
-
-> **참고:** Mock 모드는 별도의 설정 없이 자동으로 가상 환경에서 실행됩니다.
 
 ## 🚀 실행 방법 / Running
 
-### 1. Mock 모드 실행 (테스트용)
+### Dev 모드 실행 (실주문 없음)
 
-가상 거래소와 가상 자산을 사용하여 안전하게 전략을 테스트할 수 있습니다.
+실제 주문 없이 동일한 전략 로직을 가상 체결로 실행합니다.
 
 ```bash
-./run-mock.sh
+npm run dev
 ```
 
-- **Mock Exchange**: http://localhost:5001 (가격 조작 및 가상 계좌 확인)
-- **Dashboard**: http://localhost:5173
+- 권장: `DB_PATH`는 dev 전용으로 분리
+- 권장: `CANDLE_DB_PATH`, `PRICE_DB_PATH`는 real과 공유
 
-### 2. Real 모드 실행 (실전 매매)
+### Real 모드 실행 (실전 매매)
 
 실제 업비트 계좌와 연동하여 매매를 수행합니다. **주의: 실제 자산이 사용됩니다.**
 
 ```bash
-./run-real.sh
+./scripts/run-real.sh
 ```
 
 - **Dashboard**: http://localhost:5173
@@ -133,8 +131,8 @@ docker-compose up -d --force-recreate
 
 ## 📚 문서 / Documentation
 
-- [설치 가이드 / Setup Guide](SETUP.md) - 상세 설치 및 문제 해결
-- [아키텍처 / Architecture](ARCHITECTURE.md) - 시스템 구조 및 구성요소
+- [설치 가이드 / Setup Guide](docs/SETUP.md) - 상세 설치 및 문제 해결
+- [아키텍처 / Architecture](docs/ARCHITECTURE.md) - 시스템 구조 및 구성요소
 
 ## 전략 설정
 
@@ -177,11 +175,8 @@ docker-compose up -d --force-recreate
 ```bash
 cd backend
 
-# 기본 전략 테스트
-python test_new_strategy.py
-
 # 완전 사이클 테스트
-python test_complete_cycle.py
+python -m pytest tests/test_refactoring_baseline.py
 ```
 
 ## 프로젝트 구조
@@ -193,16 +188,18 @@ SevenSplit/
 │   ├── strategy.py          # 매매 전략 로직
 │   ├── main.py             # FastAPI 서버
 │   ├── requirements.txt    # Python 의존성
-│   ├── .env.mock           # Mock 모드 설정 (기본 제공)
 │   ├── .env.real           # Real 모드 설정 (사용자 생성 필요)
+│   ├── tools/              # 유지보수 유틸 스크립트
 │   └── tests/              # 테스트 파일
+├── docs/                   # 문서
 ├── frontend/
 │   ├── src/
 │   │   └── main.jsx        # React 앱
 │   ├── package.json
 │   └── vite.config.js      # Vite 설정
-├── run-mock.sh             # Mock 모드 실행 스크립트
-├── run-real.sh             # Real 모드 실행 스크립트
+├── scripts/
+│   ├── run-real.sh         # Real 모드 실행 스크립트
+│   └── docker-build.sh     # 도커 빌드 스크립트
 └── README.md
 ```
 
@@ -213,10 +210,25 @@ SevenSplit/
 - `POST /stop` - 전략 중지
 - `POST /config` - 설정 업데이트
 - `POST /reset` - 전략 리셋 (주문 취소 및 DB 데이터 삭제)
+- `POST /simulations/backtest` - 캔들 기반 백테스트 실행
+- `POST /simulations/live/start` - 라이브 시뮬 시작 (실주문 없음)
+- `POST /simulations/live/{session_id}/stop` - 라이브 시뮬 중지
+- `GET /simulations/live/{session_id}` - 라이브 시뮬 상태 조회
+- `GET /simulations/live` - 라이브 시뮬 세션 목록
+
+예시 (백테스트):
+```bash
+curl -X POST http://localhost:8000/simulations/backtest \
+  -H "Content-Type: application/json" \
+  -d '{
+    "strategy_id": 1,
+    "exec_interval": "minutes/5",
+    "max_candles": 1500
+  }'
+```
 
 ## 주의사항
 
-⚠️ **실제 거래 전 반드시 Mock 모드로 충분히 테스트하세요!**
+⚠️ **실제 거래 전 반드시 소액으로 충분히 검증하세요.**
 
-- **Mock 모드**: `./run-mock.sh` 실행. 가상 자산 사용.
-- **Real 모드**: `backend/.env.real` 파일 설정 후 `./run-real.sh` 실행. 실제 자산 사용.
+- **Real 모드**: `backend/.env.real` 파일 설정 후 `./scripts/run-real.sh` 실행. 실제 자산 사용.

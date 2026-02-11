@@ -11,14 +11,14 @@ from strategy import SevenSplitStrategy, StrategyConfig
 # Configure logging to capture output during tests
 logging.basicConfig(level=logging.INFO)
 
-class SimpleMockExchange:
+class SimpleExchangeStub:
     def __init__(self):
         self.prices = {}
         self.orders = {}
         self.balances = {"KRW": 100000000.0, "BTC": 0.0}
         self.commission_rate = 0.0005
 
-    def set_mock_price(self, ticker, price):
+    def set_price(self, ticker, price):
         self.prices[ticker] = price
 
     def get_current_price(self, ticker="KRW-BTC"):
@@ -48,7 +48,7 @@ class SimpleMockExchange:
         fee = cost * self.commission_rate
         
         # In a real exchange, balance is locked here. 
-        # For this simple mock, we'll just check if we have enough KRW
+        # For this simple stub, we'll just check if we have enough KRW
         if self.balances["KRW"] < cost + fee:
             return {'uuid': None, 'error': 'Insufficient funds'}
 
@@ -145,7 +145,7 @@ class SimpleMockExchange:
             'price': price, # Executed price
             'volume': volume,
             'executed_volume': volume, # REQUIRED for strategy to recognize fill
-            'state': 'done', # Market orders fill immediately in this mock
+            'state': 'done', # Market orders fill immediately in this stub
             'created_at': datetime.now().isoformat(),
             'trades': [{'price': price, 'volume': volume, 'funds': cost}]
         }
@@ -183,9 +183,9 @@ class SimpleMockExchange:
 
 class TestRefactoringBaseline(unittest.TestCase):
     def setUp(self):
-        self.mock_exchange = SimpleMockExchange()
+        self.exchange_stub = SimpleExchangeStub()
         from services.exchange_service import ExchangeService
-        self.exchange_service = ExchangeService(self.mock_exchange)
+        self.exchange_service = ExchangeService(self.exchange_stub)
         
         # Initialize Strategy with ExchangeService
         self.strategy = SevenSplitStrategy(self.exchange_service, strategy_id=1, ticker="KRW-BTC", budget=1000000.0)
@@ -221,7 +221,7 @@ class TestRefactoringBaseline(unittest.TestCase):
 
     def test_complete_cycle(self):
         initial_price = 100000000.0
-        self.mock_exchange.set_mock_price("KRW-BTC", initial_price)
+        self.exchange_stub.set_price("KRW-BTC", initial_price)
         
         # 1. Start (should create Split 0 buy order)
         self.strategy.start(current_price=initial_price)
@@ -233,7 +233,7 @@ class TestRefactoringBaseline(unittest.TestCase):
         
         # 2. Price Drop (should create Split 1)
         drop_price = initial_price * 0.99 # 1% drop
-        self.mock_exchange.set_mock_price("KRW-BTC", drop_price)
+        self.exchange_stub.set_price("KRW-BTC", drop_price)
         self.strategy.tick(current_price=drop_price)
         
         # Wait for Split 1 to be PENDING_SELL (Limit order might take time to fill and then sell)
@@ -243,7 +243,7 @@ class TestRefactoringBaseline(unittest.TestCase):
         
         # 3. Price Rise (should sell Split 1)
         rise_price = drop_price * 1.01 # 1% rise from drop
-        self.mock_exchange.set_mock_price("KRW-BTC", rise_price)
+        self.exchange_stub.set_price("KRW-BTC", rise_price)
         self.strategy.tick(current_price=rise_price)
         
         # Split 1 should be sold. Status might be SELL_FILLED or removed (if cleanup runs)

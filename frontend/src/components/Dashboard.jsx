@@ -26,7 +26,16 @@ const AddStrategyModal = ({ isOpen, onClose, onAdd }) => {
                 sell_rate: 0.005,
                 fee_rate: 0.0005,
                 tick_interval: 1.0,
-                rebuy_strategy: "reset_on_clear"
+                rebuy_strategy: "reset_on_clear",
+                max_holdings: 20,
+                price_segments: [
+                    {
+                        min_price: 0,
+                        max_price: 1000000000,
+                        investment_per_split: 100000,
+                        max_splits: 20,
+                    },
+                ],
             }
         });
         onClose();
@@ -221,6 +230,65 @@ const StatusPeekModal = ({ isOpen, onClose, statusMsg, ticker }) => {
     );
 };
 
+const StartBotModal = ({ isOpen, onClose, onStart, loading }) => {
+    if (!isOpen) return null;
+
+    const options = [
+        { key: 'live', label: 'Live (Now)', desc: 'Start simulation from latest candle' },
+        { key: '1d', label: 'Replay 1d', desc: 'Replay from 1 day ago to now' },
+        { key: '3d', label: 'Replay 3d', desc: 'Replay from 3 days ago to now' },
+        { key: '7d', label: 'Replay 7d', desc: 'Replay from 7 days ago to now' },
+    ];
+
+    return (
+        <div style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000
+        }}>
+            <div style={{
+                backgroundColor: '#1e293b', padding: '1.5rem', borderRadius: '0.5rem', width: '460px',
+                border: '1px solid #334155', boxShadow: '0 10px 25px rgba(0,0,0,0.5)'
+            }}>
+                <h2 style={{ marginTop: 0, color: '#f8fafc', marginBottom: '0.4rem' }}>Start Dev Bot</h2>
+                <p style={{ marginTop: 0, color: '#94a3b8', fontSize: '0.85rem' }}>
+                    Choose where to start simulation from.
+                </p>
+                <div style={{ display: 'grid', gap: '0.6rem', marginTop: '1rem' }}>
+                    {options.map((opt) => (
+                        <button
+                            key={opt.key}
+                            onClick={() => onStart(opt.key)}
+                            disabled={loading}
+                            style={{
+                                textAlign: 'left',
+                                padding: '0.75rem 0.9rem',
+                                borderRadius: '0.45rem',
+                                border: '1px solid #334155',
+                                backgroundColor: '#0f172a',
+                                color: '#e2e8f0',
+                                cursor: loading ? 'not-allowed' : 'pointer'
+                            }}
+                        >
+                            <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{opt.label}</div>
+                            <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: '0.15rem' }}>{opt.desc}</div>
+                        </button>
+                    ))}
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        disabled={loading}
+                        style={{ padding: '0.5rem 1rem', borderRadius: '0.25rem', border: 'none', backgroundColor: '#475569', color: 'white', cursor: loading ? 'not-allowed' : 'pointer' }}
+                    >
+                        Close
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const formatTime = (t) => {
     if (!t) return '-';
     // Use ko-KR locale and Asia/Seoul timeZone to ensure KST
@@ -253,21 +321,29 @@ const Dashboard = () => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
     const [isManualTargetModalOpen, setIsManualTargetModalOpen] = useState(false);
-    const [isSimulating, setIsSimulating] = useState(false);
     const [isStatusPeekModalOpen, setIsStatusPeekModalOpen] = useState(false);
-    const [simResult, setSimResult] = useState(null);
-    const [showRsiDebugModal, setShowRsiDebugModal] = useState(false);
-    const [debugRsiValue, setDebugRsiValue] = useState(50);
-    const [debugPrevRsiValue, setDebugPrevRsiValue] = useState(50);
+    const [isStartBotModalOpen, setIsStartBotModalOpen] = useState(false);
     const [tradesPage, setTradesPage] = useState(1);
+    const [simActionLoading, setSimActionLoading] = useState(false);
+    const [liveSessionId, setLiveSessionId] = useState(null);
+    const [liveSessionState, setLiveSessionState] = useState(null);
+    const [liveError, setLiveError] = useState('');
+    const [simOverlayState, setSimOverlayState] = useState(null);
+    const [simMeta, setSimMeta] = useState(null);
+    const [simSystemEvents, setSimSystemEvents] = useState([]);
     const TRADES_PER_PAGE = 10;
 
     const selectedStrategyIdRef = useRef(selectedStrategyId);
+    const simOverlayActiveRef = useRef(false);
 
     // Keep ref in sync with state
     useEffect(() => {
         selectedStrategyIdRef.current = selectedStrategyId;
     }, [selectedStrategyId]);
+
+    useEffect(() => {
+        simOverlayActiveRef.current = !!simOverlayState;
+    }, [simOverlayState]);
 
     // If running on Vite dev server (port 5173), point to backend port 8000.
     // Otherwise (Docker/Production), use relative path (same origin).
@@ -375,15 +451,17 @@ const Dashboard = () => {
                             // strategies is an array, find the one with matching id
                             const strategy = data.strategies.find(s => s.id === currentId);
                             if (strategy) {
-                                setStatus(prev => {
-                                    if (!prev || prev.id !== strategy.id) return strategy;
-                                    // Preserve existing config if the incoming update doesn't have it
-                                    return {
-                                        ...prev,
-                                        ...strategy,
-                                        config: strategy.config || prev.config || {} // Ensure config is at least {}
-                                    };
-                                });
+                                if (!simOverlayActiveRef.current) {
+                                    setStatus(prev => {
+                                        if (!prev || prev.id !== strategy.id) return strategy;
+                                        // Preserve existing config if the incoming update doesn't have it
+                                        return {
+                                            ...prev,
+                                            ...strategy,
+                                            config: strategy.config || prev.config || {} // Ensure config is at least {}
+                                        };
+                                    });
+                                }
                                 setLoading(false);
                             }
                         }
@@ -433,6 +511,10 @@ const Dashboard = () => {
     }, [selectedStrategyId]);
 
     const handleStart = async () => {
+        if (portfolio?.mode === 'DEV') {
+            setIsStartBotModalOpen(true);
+            return;
+        }
         try {
             await axios.post(`${API_BASE_URL}/bot/start`, { strategy_id: selectedStrategyId });
             fetchStatus();
@@ -442,6 +524,26 @@ const Dashboard = () => {
     };
 
     const handleStop = async () => {
+        if (portfolio?.mode === 'DEV') {
+            setSimActionLoading(true);
+            try {
+                if (liveSessionId && liveSessionState?.status === 'running') {
+                    await axios.post(`${API_BASE_URL}/simulations/live/${liveSessionId}/stop`);
+                }
+            } catch (error) {
+                console.error('Error stopping live simulation:', error);
+            } finally {
+                setSimOverlayState(null);
+                setSimMeta(null);
+                setSimSystemEvents([]);
+                setLiveSessionId(null);
+                setLiveSessionState(null);
+                setLiveError('');
+                setSimActionLoading(false);
+                fetchStatus();
+            }
+            return;
+        }
         try {
             await axios.post(`${API_BASE_URL}/bot/stop`, { strategy_id: selectedStrategyId });
             fetchStatus();
@@ -522,35 +624,6 @@ const Dashboard = () => {
         }
     };
 
-    const handleChartClick = async (time) => {
-        if (!isSimulating) return;
-
-        const startTime = typeof time === 'number'
-            ? new Date(time * 1000).toISOString()
-            : time;
-
-        try {
-            // Show loading state or toast?
-            // For now, let's just run it.
-            const response = await axios.post(`${API_BASE_URL}/strategies/${selectedStrategyId}/simulate`, {
-                start_time: startTime
-            });
-
-            if (response.data.debug_logs) {
-            }
-
-            if (response.data.trades && response.data.trades.length === 0) {
-                alert(`Simulation finished with 0 trades.\nCheck console for logs.\n\nLogs:\n${response.data.debug_logs ? response.data.debug_logs.join('\n') : 'No logs'}`);
-            }
-
-            setSimResult(response.data);
-            setIsSimulating(false);
-        } catch (error) {
-            console.error("Simulation failed:", error);
-            alert("Simulation failed. Check console for details.");
-        }
-    };
-
     const handleSetManualTarget = async (price) => {
         try {
             await axios.post(`${API_BASE_URL}/strategies/${selectedStrategyId}/manual-target`, {
@@ -563,13 +636,114 @@ const Dashboard = () => {
         }
     };
 
+    const findLiveSessionForStrategy = async (strategyId) => {
+        if (!strategyId) return null;
+        try {
+            const response = await axios.get(`${API_BASE_URL}/simulations/live`);
+            const sessions = response?.data?.sessions || [];
+            const target = sessions.find(s => s.strategy_id === strategyId && s.status === 'running')
+                || sessions.find(s => s.strategy_id === strategyId);
+            return target || null;
+        } catch (error) {
+            console.error('Error listing live simulations:', error);
+            return null;
+        }
+    };
+
+    const fetchLiveSessionStatus = async (sessionId) => {
+        if (!sessionId) return;
+        try {
+            const response = await axios.get(`${API_BASE_URL}/simulations/live/${sessionId}`);
+            setLiveSessionState(response.data);
+            if (response.data?.final_state) {
+                setSimOverlayState({
+                    ...response.data.final_state,
+                    is_running: true,
+                    status: 'Simulation (Live)',
+                });
+                setSimMeta({
+                    mode: 'live',
+                    trades: response.data?.trades ?? 0,
+                    realized_profit: response.data?.realized_profit ?? 0,
+                    source: 'live'
+                });
+                setSimSystemEvents(response.data?.sim_events || []);
+            }
+            setLiveError('');
+        } catch (error) {
+            console.error('Error fetching live simulation status:', error);
+            setLiveSessionState(null);
+            setLiveSessionId(null);
+            setLiveError(error.response?.data?.detail || 'Failed to fetch live simulation status');
+        }
+    };
+
+    const handleStartDevBot = async (startOption) => {
+        if (!selectedStrategyId) return;
+        setSimActionLoading(true);
+        setLiveError('');
+        setIsStartBotModalOpen(false);
+        try {
+            if (startOption === 'live') {
+                const response = await axios.post(`${API_BASE_URL}/simulations/live/start`, {
+                    strategy_id: selectedStrategyId,
+                    poll_seconds: 10
+                });
+                const sessionId = response.data?.session_id;
+                setLiveSessionId(sessionId || null);
+                setSimMeta({
+                    mode: 'live',
+                    trades: 0,
+                    realized_profit: 0,
+                    source: 'live'
+                });
+                setSimSystemEvents([]);
+                if (sessionId) {
+                    await fetchLiveSessionStatus(sessionId);
+                }
+                return;
+            }
+
+            const days = parseInt(startOption.replace('d', ''), 10);
+            const now = new Date();
+            const start = new Date(now.getTime() - (days * 24 * 60 * 60 * 1000));
+            const response = await axios.post(`${API_BASE_URL}/simulations/backtest`, {
+                strategy_id: selectedStrategyId,
+                start_time: start.toISOString(),
+                end_time: now.toISOString(),
+                max_candles: 5000
+            });
+            setLiveSessionId(null);
+            setLiveSessionState(null);
+            setSimOverlayState(response.data?.final_state ? {
+                ...response.data.final_state,
+                is_running: true,
+                status: `Simulation (Replay ${days}d)`,
+            } : null);
+            setSimMeta({
+                mode: `replay-${days}d`,
+                trades: response.data?.trades ?? 0,
+                realized_profit: response.data?.realized_profit ?? 0,
+                candles: response.data?.candles_used ?? 0,
+                source: 'backtest'
+            });
+            setSimSystemEvents(response.data?.sim_events || []);
+        } catch (error) {
+            console.error('Error starting dev bot simulation:', error);
+            const msg = error.response?.data?.detail || 'Failed to start simulation';
+            setLiveError(msg);
+            alert(msg);
+        } finally {
+            setSimActionLoading(false);
+        }
+    };
+
     const getNextBuyTarget = (statusData) => {
         if (!statusData) return null;
 
-        // Manual target has priority
-        if (statusData.manual_target_price !== null && statusData.manual_target_price !== undefined) {
-            const manual = Number(statusData.manual_target_price);
-            if (Number.isFinite(manual) && manual > 0) return Math.floor(manual);
+        const effectiveNext = Number(statusData.next_buy_target_price);
+        if (Number.isFinite(effectiveNext) && effectiveNext > 0) {
+            return Math.floor(effectiveNext);
         }
 
         // Calculate from last_buy_price
@@ -582,78 +756,81 @@ const Dashboard = () => {
         return Math.floor(lastBuy * (1 - resolvedBuyRate));
     };
 
-    const resolvedConfig = simResult?.config ?? strategyConfig ?? status?.config ?? {};
+    const displayedStatus = simOverlayState || status;
+    const resolvedConfig = strategyConfig ?? displayedStatus?.config ?? {};
+    const isDevMode = portfolio?.mode === 'DEV';
+    const isDevSimulationActive = isDevMode && (!!liveSessionId || !!simOverlayState);
 
-    if (!status && strategies.length > 0) return <div style={{ padding: '2rem', color: 'white' }}>Loading Strategy...</div>;
+    useEffect(() => {
+        let mounted = true;
+        const load = async () => {
+            if (!selectedStrategyId) {
+                setLiveSessionId(null);
+                setLiveSessionState(null);
+                setSimOverlayState(null);
+                setSimMeta(null);
+                setSimSystemEvents([]);
+                return;
+            }
+            const session = await findLiveSessionForStrategy(selectedStrategyId);
+            if (!mounted) return;
+            if (session?.session_id) {
+                setLiveSessionId(session.session_id);
+                await fetchLiveSessionStatus(session.session_id);
+            } else {
+                setLiveSessionId(null);
+                setLiveSessionState(null);
+                setSimOverlayState(null);
+                setSimMeta(null);
+                setSimSystemEvents([]);
+            }
+        };
+        load();
+        return () => {
+            mounted = false;
+        };
+    }, [selectedStrategyId]);
+
+    useEffect(() => {
+        if (!liveSessionId) return;
+        const timer = setInterval(() => {
+            fetchLiveSessionStatus(liveSessionId);
+        }, 5000);
+        return () => clearInterval(timer);
+    }, [liveSessionId]);
+
+    if (!displayedStatus && strategies.length > 0) return <div style={{ padding: '2rem', color: 'white' }}>Loading Strategy...</div>;
     if (!portfolio) return <div style={{ padding: '2rem', color: 'white' }}>Loading Portfolio...</div>;
 
     return (
         <div className="dashboard-container" style={{ position: 'relative' }}>
-            {isSimulating && (
-                <div style={{
-                    position: 'fixed',
-                    top: 0, left: 0, right: 0, bottom: 0,
-                    backgroundColor: 'rgba(0,0,0,0.8)',
-                    zIndex: 9999,
-                    pointerEvents: 'auto' // Block clicks on background
-                }}>
-                    <div style={{
-                        position: 'absolute',
-                        top: '10%',
-                        left: '50%',
-                        transform: 'translateX(-50%)',
-                        color: 'white',
-                        fontSize: '1.5rem',
-                        fontWeight: 'bold',
-                        textAlign: 'center'
-                    }}>
-                        <div>🧪 Simulation Mode</div>
-                        <div style={{ fontSize: '1rem', fontWeight: 'normal', marginTop: '0.5rem', color: '#cbd5e1' }}>
-                            Click any point on the chart to start simulation from that date.
-                        </div>
-                        <button
-                            onClick={() => setIsSimulating(false)}
-                            style={{
-                                marginTop: '1.5rem',
-                                padding: '0.75rem 2rem',
-                                fontSize: '1rem',
-                                fontWeight: 'bold',
-                                backgroundColor: '#ef4444',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '0.5rem',
-                                cursor: 'pointer',
-                                pointerEvents: 'auto'
-                            }}
-                        >
-                            Cancel
-                        </button>
-                    </div>
-                </div>
-            )}
-
-
 
             <AddStrategyModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} onAdd={handleAddStrategy} />
             <RenameStrategyModal
                 isOpen={isRenameModalOpen}
                 onClose={() => setIsRenameModalOpen(false)}
                 onRename={performRename}
-                currentName={status?.name}
+                currentName={displayedStatus?.name}
             />
 
             <StatusPeekModal
                 isOpen={isStatusPeekModalOpen}
                 onClose={() => setIsStatusPeekModalOpen(false)}
-                statusMsg={status?.status_msg}
-                ticker={status?.ticker}
+                statusMsg={displayedStatus?.status_msg}
+                ticker={displayedStatus?.ticker}
             />
 
             <ManualTargetModal
                 isOpen={isManualTargetModalOpen}
                 onClose={() => setIsManualTargetModalOpen(false)}
                 onSave={handleSetManualTarget}
-                currentTarget={getNextBuyTarget(status)}
+                currentTarget={getNextBuyTarget(displayedStatus)}
+            />
+            <StartBotModal
+                isOpen={isStartBotModalOpen}
+                onClose={() => setIsStartBotModalOpen(false)}
+                onStart={handleStartDevBot}
+                loading={simActionLoading}
             />
 
             {/* Global Portfolio Header */}
@@ -668,10 +845,10 @@ const Dashboard = () => {
 
                     {/* Mode Indicator */}
                     <div className="mode-indicator" style={{
-                        backgroundColor: portfolio.mode === "MOCK" ? '#f59e0b' : '#ef4444',
+                        backgroundColor: portfolio?.mode === 'REAL' ? '#ef4444' : '#0ea5e9',
                     }}>
                         <div className="mode-dot" />
-                        {portfolio.mode === "MOCK" ? 'MOCK MODE' : 'REAL TRADING'}
+                        {portfolio?.mode === 'REAL' ? 'REAL TRADING' : 'DEV SIMULATION'}
                     </div>
                 </div>
 
@@ -789,7 +966,7 @@ const Dashboard = () => {
                 </button>
             </div>
 
-            {status && (
+            {displayedStatus && (
                 <>
                     {/* Strategy Stats (Top Row) */}
                     <div style={{
@@ -808,7 +985,7 @@ const Dashboard = () => {
                                     <span>Current Price</span>
                                 </div>
                                 <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#3b82f6' }}>
-                                    ₩{status.current_price?.toLocaleString()}
+                                    ₩{displayedStatus?.current_price?.toLocaleString()}
                                 </div>
                                 <div style={{
                                     marginTop: '0.5rem',
@@ -824,14 +1001,14 @@ const Dashboard = () => {
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem' }}>
                                                 <span style={{ color: '#94a3b8' }}>RSI(14)/5m</span>
-                                                <span style={{ fontWeight: 'bold', color: (status.rsi >= 70) ? '#ef4444' : (status.rsi <= 30 && status.rsi != null) ? '#10b981' : '#f59e0b' }}>
-                                                    {(status.rsi !== undefined && status.rsi !== null) ? Math.round(status.rsi) : '-'}
+                                                <span style={{ fontWeight: 'bold', color: (displayedStatus.rsi >= 70) ? '#ef4444' : (displayedStatus.rsi <= 30 && displayedStatus.rsi != null) ? '#10b981' : '#f59e0b' }}>
+                                                    {(displayedStatus.rsi !== undefined && displayedStatus.rsi !== null) ? Math.round(displayedStatus.rsi) : '-'}
                                                 </span>
                                             </div>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem' }}>
                                                 <span style={{ color: '#94a3b8' }}>RSI(5)/5m</span>
-                                                <span style={{ fontWeight: 'bold', color: (status.rsi_short >= 70) ? '#ef4444' : (status.rsi_short <= 30 && status.rsi_short != null) ? '#10b981' : '#f59e0b' }}>
-                                                    {(status.rsi_short !== undefined && status.rsi_short !== null) ? Math.round(status.rsi_short) : '-'}
+                                                <span style={{ fontWeight: 'bold', color: (displayedStatus.rsi_short >= 70) ? '#ef4444' : (displayedStatus.rsi_short <= 30 && displayedStatus.rsi_short != null) ? '#10b981' : '#f59e0b' }}>
+                                                    {(displayedStatus.rsi_short !== undefined && displayedStatus.rsi_short !== null) ? Math.round(displayedStatus.rsi_short) : '-'}
                                                 </span>
                                             </div>
                                         </div>
@@ -840,14 +1017,14 @@ const Dashboard = () => {
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem', borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: '0.5rem' }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem' }}>
                                                 <span style={{ color: '#94a3b8' }}>RSI(14)/D</span>
-                                                <span style={{ fontWeight: 'bold', color: (status.rsi_daily >= 70) ? '#ef4444' : (status.rsi_daily <= 30 && status.rsi_daily != null) ? '#10b981' : '#f59e0b' }}>
-                                                    {(status.rsi_daily !== undefined && status.rsi_daily !== null) ? Math.round(status.rsi_daily) : '-'}
+                                                <span style={{ fontWeight: 'bold', color: (displayedStatus.rsi_daily >= 70) ? '#ef4444' : (displayedStatus.rsi_daily <= 30 && displayedStatus.rsi_daily != null) ? '#10b981' : '#f59e0b' }}>
+                                                    {(displayedStatus.rsi_daily !== undefined && displayedStatus.rsi_daily !== null) ? Math.round(displayedStatus.rsi_daily) : '-'}
                                                 </span>
                                             </div>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem' }}>
                                                 <span style={{ color: '#94a3b8' }}>RSI(4)/D</span>
-                                                <span style={{ fontWeight: 'bold', color: (status.rsi_daily_short >= 70) ? '#ef4444' : (status.rsi_daily_short <= 30 && status.rsi_daily_short != null) ? '#10b981' : '#f59e0b' }}>
-                                                    {(status.rsi_daily_short !== undefined && status.rsi_daily_short !== null) ? Math.round(status.rsi_daily_short) : '-'}
+                                                <span style={{ fontWeight: 'bold', color: (displayedStatus.rsi_daily_short >= 70) ? '#ef4444' : (displayedStatus.rsi_daily_short <= 30 && displayedStatus.rsi_daily_short != null) ? '#10b981' : '#f59e0b' }}>
+                                                    {(displayedStatus.rsi_daily_short !== undefined && displayedStatus.rsi_daily_short !== null) ? Math.round(displayedStatus.rsi_daily_short) : '-'}
                                                 </span>
                                             </div>
                                         </div>
@@ -862,10 +1039,10 @@ const Dashboard = () => {
                             }}>
                                 <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>Coin Holdings</div>
                                 <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#a78bfa' }}>
-                                    {(status.total_coin_volume || 0).toFixed(8)}
+                                    {(displayedStatus.total_coin_volume || 0).toFixed(8)}
                                 </div>
                                 <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '0.25rem' }}>
-                                    {status.ticker?.split('-')[1] || 'Coin'}
+                                    {displayedStatus.ticker?.split('-')[1] || 'Coin'}
                                 </div>
                             </div>
                             {/* Valuation Card */}
@@ -875,83 +1052,45 @@ const Dashboard = () => {
                                 borderRadius: '0.5rem',
                                 border: '1px solid rgba(16, 185, 129, 0.3)'
                             }}>
-                                <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>{simResult ? 'Simulated Equity' : 'Market Value'}</div>
+                                <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>Market Value</div>
                                 <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#10b981' }}>
-                                    ₩{Math.round(simResult ? simResult.final_balance : (status.total_valuation || 0)).toLocaleString()}
+                                    ₩{Math.round(displayedStatus.total_valuation || 0).toLocaleString()}
                                 </div>
                                 <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '0.25rem' }}>
-                                    {simResult ? `Start: ₩${Math.round(simResult.config?.budget || 0).toLocaleString()}` : `Invested Amount: ₩${Math.round(status.total_invested || 0).toLocaleString()}`}
+                                    {`Invested Amount: ₩${Math.round(displayedStatus.total_invested || 0).toLocaleString()}`}
                                 </div>
                             </div>
 
                             {/* Profit Card */}
                             <div style={{
                                 padding: '1rem',
-                                backgroundColor: (simResult ? (simResult.total_profit + simResult.unrealized_profit) : (status.total_profit_amount || 0)) >= 0
+                                backgroundColor: (displayedStatus.total_profit_amount || 0) >= 0
                                     ? 'rgba(16, 185, 129, 0.1)'
                                     : 'rgba(239, 68, 68, 0.1)',
                                 borderRadius: '0.5rem',
-                                border: (simResult ? (simResult.total_profit + simResult.unrealized_profit) : (status.total_profit_amount || 0)) >= 0
+                                border: (displayedStatus.total_profit_amount || 0) >= 0
                                     ? '1px solid rgba(16, 185, 129, 0.3)'
                                     : '1px solid rgba(239, 68, 68, 0.3)'
                             }}>
-                                <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>{simResult ? 'Total Sim P/L' : 'Unrealized P/L'}</div>
+                                <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>Unrealized P/L</div>
                                 <div style={{
                                     fontSize: '1.25rem',
                                     fontWeight: 'bold',
-                                    color: (simResult ? (simResult.total_profit + simResult.unrealized_profit) : (status.total_profit_amount || 0)) >= 0 ? '#10b981' : '#ef4444'
+                                    color: (displayedStatus.total_profit_amount || 0) >= 0 ? '#10b981' : '#ef4444'
                                 }}>
-                                    {(simResult ? (simResult.total_profit + simResult.unrealized_profit) : (status.total_profit_amount || 0)) >= 0 ? '+' : ''}
-                                    ₩{Math.round(simResult ? (simResult.total_profit + simResult.unrealized_profit) : (status.total_profit_amount || 0)).toLocaleString()}
+                                    {(displayedStatus.total_profit_amount || 0) >= 0 ? '+' : ''}
+                                    ₩{Math.round(displayedStatus.total_profit_amount || 0).toLocaleString()}
                                 </div>
                                 <div style={{
                                     fontSize: '0.875rem',
-                                    color: (simResult ? (simResult.total_profit + simResult.unrealized_profit) : (status.total_profit_amount || 0)) >= 0 ? '#10b981' : '#ef4444',
+                                    color: (displayedStatus.total_profit_amount || 0) >= 0 ? '#10b981' : '#ef4444',
                                     marginTop: '0.25rem'
                                 }}>
-                                    ({simResult
-                                        ? (((simResult.total_profit + simResult.unrealized_profit) / (simResult.config?.budget || 1)) * 100).toFixed(2)
-                                        : (status.total_profit_rate || 0).toFixed(2)}%)
+                                    ({(displayedStatus.total_profit_rate || 0).toFixed(2)}%)
                                 </div>
                             </div>
                         </div>
                     </div>
-
-                    {/* Simulation Result Banner */}
-                    {simResult && (
-                        <div style={{
-                            backgroundColor: '#eab308',
-                            color: '#000',
-                            padding: '0.75rem',
-                            textAlign: 'center',
-                            fontWeight: 'bold',
-                            display: 'flex',
-                            justifyContent: 'center',
-                            alignItems: 'center',
-                            gap: '1rem',
-                            marginBottom: '1rem'
-                        }}>
-                            <span>🧪 VIEWING SIMULATION RESULTS</span>
-                            <button
-                                onClick={() => {
-                                    setSimResult(null);
-                                    setIsSimulating(false);
-                                }}
-                                style={{
-                                    padding: '0.25rem 0.75rem',
-                                    backgroundColor: '#000',
-                                    color: '#eab308',
-                                    border: 'none',
-                                    borderRadius: '0.25rem',
-                                    cursor: 'pointer',
-                                    fontWeight: 'bold'
-                                }}
-                            >
-                                Exit Simulation View
-                            </button>
-                        </div>
-                    )}
-
                     <div className="dashboard-layout">
                         {/* Right Content: Controls, Chart, Tables */}
                         <main className="dashboard-main">
@@ -963,7 +1102,7 @@ const Dashboard = () => {
                                         fetchStrategies();
                                     }}
                                     strategyId={selectedStrategyId}
-                                    currentPrice={status?.current_price}
+                                    currentPrice={displayedStatus?.current_price}
                                 />
                             </div>
                             {/* Control Panel */}
@@ -976,12 +1115,12 @@ const Dashboard = () => {
                             }}>
                                 <div className="controls-container" style={{
                                     display: 'grid',
-                                    gridTemplateColumns: portfolio.mode === "MOCK" ? 'repeat(6, 1fr)' : 'repeat(5, 1fr)',
+                                    gridTemplateColumns: 'repeat(4, 1fr)',
                                     gap: '0.75rem',
                                     alignItems: 'stretch'
                                 }}>
                                     {/* 1. Start/Stop Bot */}
-                                    {!status.is_running ? (
+                                    {((isDevMode && !isDevSimulationActive) || (!isDevMode && !displayedStatus.is_running)) ? (
                                         <button className="btn btn-primary" onClick={handleStart} style={{
                                             padding: '0',
                                             height: '60px',
@@ -994,7 +1133,7 @@ const Dashboard = () => {
                                             gap: '0.25rem'
                                         }}>
                                             <span style={{ fontSize: '1.2rem' }}>▶</span>
-                                            <span>Start Bot</span>
+                                            <span>{isDevMode ? 'Start Simulation' : 'Start Bot'}</span>
                                         </button>
                                     ) : (
                                         <button className="btn btn-danger" onClick={handleStop} style={{
@@ -1009,7 +1148,7 @@ const Dashboard = () => {
                                             gap: '0.25rem'
                                         }}>
                                             <span style={{ fontSize: '1.2rem' }}>⏸</span>
-                                            <span>Stop Bot</span>
+                                            <span>{isDevMode ? 'Stop Simulation' : 'Stop Bot'}</span>
                                         </button>
                                     )}
 
@@ -1031,27 +1170,7 @@ const Dashboard = () => {
                                         <span style={{ fontSize: '1.2rem' }}>🔄</span>
                                         <span>Reset</span>
                                     </button>
-
-                                    {/* 3. Simulate */}
-                                    <button className="btn btn-secondary" onClick={() => setIsSimulating(!isSimulating)} style={{
-                                        padding: '0',
-                                        height: '60px',
-                                        fontSize: '0.95rem',
-                                        width: '100%',
-                                        display: 'flex',
-                                        flexDirection: 'column',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        gap: '0.25rem',
-                                        backgroundColor: isSimulating ? '#eab308' : '#6366f1',
-                                        borderColor: isSimulating ? '#eab308' : '#6366f1',
-                                        color: 'white'
-                                    }}>
-                                        <span style={{ fontSize: '1.2rem' }}>{isSimulating ? '❌' : '🧪'}</span>
-                                        <span>{isSimulating ? 'Exit Sim' : 'Simulate'}</span>
-                                    </button>
-
-                                    {/* 4. Export CSV */}
+                                    {/* 3. Export CSV */}
                                     <button className="btn btn-secondary" onClick={handleExport} style={{
                                         padding: '0',
                                         height: '60px',
@@ -1070,42 +1189,7 @@ const Dashboard = () => {
                                         <span>Export CSV</span>
                                     </button>
 
-                                    {/* 5. Delete Strategy (Moved to end if not mock, or before exchange UI? Request said Delete at the END) */}
-                                    {/* Wait, user said "Delete to the very end". So Exchange UI should be before Delete? */}
-                                    {/* Let's check the image. The image shows: Stop | Reset | Simulate | Export | Delete | Exchange UI */}
-                                    {/* BUT the text request says: "Delete를 제일 끝으로 보내." (Send Delete to the very end) */}
-                                    {/* So the order should be: ... | Exchange UI | Delete */}
-
-                                    {/* 5. Exchange UI (Mock Only) */}
-                                    {portfolio.mode === "MOCK" && (
-                                        <a
-                                            href={`http://${window.location.hostname}:5001`}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            style={{
-                                                padding: '0',
-                                                height: '60px',
-                                                fontSize: '0.9rem',
-                                                width: '100%',
-                                                display: 'flex',
-                                                flexDirection: 'column',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                gap: '0.25rem',
-                                                backgroundColor: '#8b5cf6',
-                                                color: 'white',
-                                                borderRadius: '0.375rem',
-                                                textDecoration: 'none',
-                                                fontWeight: '600',
-                                                border: '1px solid #7c3aed'
-                                            }}
-                                        >
-                                            <span style={{ fontSize: '1.2rem' }}>🏦</span>
-                                            <span>Exchange UI</span>
-                                        </a>
-                                    )}
-
-                                    {/* 6. Delete Strategy (Always Last) */}
+                                    {/* 4. Delete Strategy (Always Last) */}
                                     <button onClick={handleDeleteStrategy} style={{
                                         padding: '0',
                                         height: '60px',
@@ -1126,40 +1210,59 @@ const Dashboard = () => {
                                         <span>Delete</span>
                                     </button>
                                 </div>
+                                {(portfolio?.mode === 'DEV' && (simMeta || liveError)) && (
+                                    <div style={{
+                                        marginTop: '0.75rem',
+                                        padding: '0.75rem',
+                                        borderRadius: '0.5rem',
+                                        border: '1px solid #334155',
+                                        backgroundColor: 'rgba(2, 132, 199, 0.08)',
+                                        fontSize: '0.8rem',
+                                        color: '#e2e8f0'
+                                    }}>
+                                        {simMeta && (
+                                            <div style={{ display: 'flex', gap: '0.9rem', flexWrap: 'wrap' }}>
+                                                <span>{`Mode: ${simMeta.mode}`}</span>
+                                                <span>{`Trades: ${simMeta.trades}`}</span>
+                                                <span style={{ color: (simMeta.realized_profit || 0) >= 0 ? '#10b981' : '#ef4444' }}>
+                                                    {`P/L: ${(simMeta.realized_profit || 0) >= 0 ? '+' : ''}₩${Math.round(simMeta.realized_profit || 0).toLocaleString()}`}
+                                                </span>
+                                                {simMeta.candles ? <span>{`Candles: ${simMeta.candles}`}</span> : null}
+                                                {liveSessionState?.status ? <span>{`Live: ${liveSessionState.status}`}</span> : null}
+                                            </div>
+                                        )}
+                                        {liveError && (
+                                            <div style={{ marginTop: simMeta ? '0.35rem' : 0, fontSize: '0.76rem', color: '#f87171' }}>{liveError}</div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
 
                             {/* Price Chart */}
-                            <div style={{ position: 'relative', zIndex: isSimulating ? 10000 : 1 }}>
+                            <div style={{ position: 'relative', zIndex: 1 }}>
                                 <StrategyChart
                                     key={selectedStrategyId}
-                                    ticker={status?.ticker}
-                                    splits={simResult ? simResult.splits : (status?.splits || [])}
+                                    ticker={displayedStatus?.ticker}
+                                    splits={displayedStatus?.splits || []}
                                     config={resolvedConfig}
-                                    tradeHistory={simResult ? simResult.trades : (status?.trade_history || [])}
-                                    isSimulating={isSimulating}
-                                    simResult={simResult}
-                                    onSimulationComplete={(result) => {
-                                        setSimResult(result);
-                                        setIsSimulating(false);
-                                    }}
-                                    onChartClick={handleChartClick}
+                                    tradeHistory={displayedStatus?.trade_history || []}
                                     trailingBuyState={{
-                                        isWatching: simResult ? false : status.is_watching,
-                                        watchLowestPrice: simResult ? null : status.watch_lowest_price,
-                                        pendingBuyUnits: simResult ? 0 : status.pending_buy_units
+                                        isWatching: displayedStatus.is_watching,
+                                        watchLowestPrice: displayedStatus.watch_lowest_price,
+                                        pendingBuyUnits: displayedStatus.pending_buy_units
                                     }}
                                 />
                             </div>
 
                             {/* Segment Summary (if segments are defined) */}
-                            {(simResult ? simResult.config?.price_segments : strategyConfig?.price_segments)?.length > 0 && (
+                            {strategyConfig?.price_segments?.length > 0 && (
                                 <div className="card segment-status-card" style={{ marginBottom: '1rem' }}>
                                     <div className="card-header">
                                         <span className="card-title">Segment Status</span>
                                     </div>
                                     <div style={{ padding: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '0.75rem' }}>
-                                        {(simResult ? simResult.config?.price_segments : strategyConfig?.price_segments)?.map((segment, index) => {
-                                            const splits = (simResult ? simResult.splits : status?.splits || []);
+                                        {strategyConfig?.price_segments?.map((segment, index) => {
+                                            const splits = displayedStatus?.splits || [];
                                             const segmentSplits = splits.filter(s =>
                                                 s.status !== "SELL_FILLED" &&
                                                 s.buy_price >= segment.min_price &&
@@ -1202,8 +1305,8 @@ const Dashboard = () => {
                                             );
                                         })}
                                         {(() => {
-                                            const allSegments = (simResult ? simResult.config?.price_segments : strategyConfig?.price_segments) || [];
-                                            const splits = (simResult ? simResult.splits : status?.splits || []);
+                                            const allSegments = strategyConfig?.price_segments || [];
+                                            const splits = displayedStatus?.splits || [];
                                             const outOfRangeSplits = splits.filter(s =>
                                                 s.status !== "SELL_FILLED" &&
                                                 !allSegments.some(seg => s.buy_price >= seg.min_price && s.buy_price <= seg.max_price)
@@ -1252,64 +1355,57 @@ const Dashboard = () => {
                                 <div className="card" style={{ maxHeight: '600px', overflowY: 'auto', overflowX: 'auto' }}>
                                     <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                         <span className="card-title">
-                                            {simResult ? 'Simulated Grid Status' : 'Grid Status'} ({simResult ? simResult.splits.length : (status?.splits?.length || 0)} Lines)
+                                            Grid Status ({displayedStatus?.splits?.length || 0} Lines)
                                         </span>
-                                        {(simResult || status?.last_buy_price || status?.manual_target_price) && (
+                                        {(displayedStatus?.next_buy_target_price || displayedStatus?.last_buy_price) && (
                                             <span
                                                 style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
                                             >
                                                 <span
-                                                    onClick={() => !simResult && setIsManualTargetModalOpen(true)}
+                                                    onClick={() => setIsManualTargetModalOpen(true)}
                                                     style={{
                                                         fontSize: '0.9rem',
                                                         color: '#94a3b8',
-                                                        cursor: simResult ? 'default' : 'pointer',
+                                                        cursor: 'pointer',
                                                         padding: '0.25rem 0.5rem',
                                                         borderRadius: '0.25rem',
                                                         backgroundColor: 'rgba(59, 130, 246, 0.1)',
                                                         border: '1px dashed rgba(59, 130, 246, 0.3)',
                                                         transition: 'all 0.2s'
                                                     }}
-                                                    className={simResult ? "" : "hover-bright"}
+                                                    className="hover-bright"
                                                 >
-                                                    {simResult ? 'Next Sim Target: ' : 'Next Buy Target: '}
-                                                    <span style={{ color: (!simResult && status?.manual_target_price) ? '#f59e0b' : '#3b82f6', fontWeight: 'bold' }}>
+                                                    Next Buy Target:
+                                                    <span style={{ color: '#3b82f6', fontWeight: 'bold' }}>
                                                         {(() => {
-                                                            if (!simResult) {
-                                                                const nextTarget = getNextBuyTarget(status);
-                                                                return nextTarget !== null ? `₩${nextTarget.toLocaleString()}` : '-';
-                                                            } else {
-                                                                const simLastBuy = simResult.splits.length > 0 ? simResult.splits[simResult.splits.length - 1].buy_price : simResult.final_price;
-                                                                return `₩${Math.floor(simLastBuy * (1 - (simResult.config?.buy_rate || 0.005))).toLocaleString()}`;
-                                                            }
+                                                            const nextTarget = getNextBuyTarget(displayedStatus);
+                                                            return nextTarget !== null ? `₩${nextTarget.toLocaleString()}` : '-';
                                                         })()}
                                                     </span>
-                                                    {!simResult && <span style={{ marginLeft: '0.5rem', fontSize: '0.8rem' }}>✏️</span>}
+                                                    <span style={{ marginLeft: '0.5rem', fontSize: '0.8rem' }}>✏️</span>
                                                 </span>
 
-                                                {!simResult && (
-                                                    <span
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            setIsStatusPeekModalOpen(true);
-                                                        }}
-                                                        style={{
-                                                            backgroundColor: '#3b82f6',
-                                                            color: 'white',
-                                                            padding: '0.2rem 0.5rem',
-                                                            borderRadius: '0.25rem',
-                                                            fontSize: '0.75rem',
-                                                            fontWeight: 'bold',
-                                                            cursor: 'pointer',
-                                                            display: 'flex',
-                                                            alignItems: 'center',
-                                                            gap: '0.25rem'
-                                                        }}
-                                                        className="hover-bright"
-                                                    >
-                                                        🔍 PEEK
-                                                    </span>
-                                                )}
+                                                <span
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setIsStatusPeekModalOpen(true);
+                                                    }}
+                                                    style={{
+                                                        backgroundColor: '#3b82f6',
+                                                        color: 'white',
+                                                        padding: '0.2rem 0.5rem',
+                                                        borderRadius: '0.25rem',
+                                                        fontSize: '0.75rem',
+                                                        fontWeight: 'bold',
+                                                        cursor: 'pointer',
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        gap: '0.25rem'
+                                                    }}
+                                                    className="hover-bright"
+                                                >
+                                                    🔍 PEEK
+                                                </span>
                                             </span>
                                         )}
                                     </div>
@@ -1327,11 +1423,10 @@ const Dashboard = () => {
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {(simResult ? simResult.splits : (status?.splits || [])).map(split => {
+                                            {(displayedStatus?.splits || []).map(split => {
                                                 const isBought = split.status === "BUY_FILLED" || split.status === "PENDING_SELL";
 
-                                                // [CRITICAL] Use final simulation price if in simulation mode
-                                                const effectivePrice = simResult ? simResult.final_price : status?.current_price;
+                                                const effectivePrice = displayedStatus?.current_price;
 
                                                 const profitRate = isBought ? ((effectivePrice - split.buy_price) / split.buy_price * 100) : 0;
 
@@ -1339,7 +1434,7 @@ const Dashboard = () => {
                                                 const buyPriceRate = ((split.buy_price - effectivePrice) / effectivePrice * 100);
                                                 const sellTargetPrice = split.target_sell_price > 0
                                                     ? split.target_sell_price
-                                                    : split.buy_price * (1 + (simResult ? (simResult.config?.sell_rate || 0.005) : (status?.config?.sell_rate || 0.005)));
+                                                    : split.buy_price * (1 + (displayedStatus?.config?.sell_rate || 0.005));
                                                 const sellTargetRate = ((sellTargetPrice - effectivePrice) / effectivePrice * 100);
 
                                                 return (
@@ -1363,7 +1458,7 @@ const Dashboard = () => {
                                                         <td style={{ padding: '1rem' }}>
                                                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
                                                                 {(() => {
-                                                                    const segments = simResult ? simResult.config?.price_segments : strategyConfig?.price_segments;
+                                                                    const segments = strategyConfig?.price_segments;
                                                                     if (segments && segments.length > 0) {
                                                                         const segmentIndex = segments.findIndex(seg =>
                                                                             split.buy_price >= seg.min_price && split.buy_price <= seg.max_price
@@ -1408,7 +1503,7 @@ const Dashboard = () => {
                                                                 )}
                                                                 {!split.is_accumulated && (split.buy_rsi === undefined || split.buy_rsi === null) && (
                                                                     (() => {
-                                                                        const segments = simResult ? simResult.config?.price_segments : strategyConfig?.price_segments;
+                                                                        const segments = strategyConfig?.price_segments;
                                                                         const hasSegmentBadge = segments && segments.length > 0 && segments.some(seg =>
                                                                             split.buy_price >= seg.min_price && split.buy_price <= seg.max_price
                                                                         );
@@ -1450,12 +1545,12 @@ const Dashboard = () => {
                             </div>
 
                             {/* Recent Trades Section */}
-                            {(simResult ? simResult.trades : status?.trade_history) && (simResult ? simResult.trades : status?.trade_history).length > 0 && (
+                            {displayedStatus?.trade_history && displayedStatus?.trade_history.length > 0 && (
                                 <div className="trades-container">
                                     <div className="card">
                                         <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                             <span className="card-title">
-                                                {simResult ? 'Simulated Trades' : `Recent Trades (${status?.name})`}
+                                                {`Recent Trades (${displayedStatus?.name})`}
                                             </span>
                                             <div className="pagination" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                                                 <button
@@ -1470,15 +1565,15 @@ const Dashboard = () => {
                                                     &lt;
                                                 </button>
                                                 <span style={{ fontSize: '0.85rem', color: '#cbd5e1' }}>
-                                                    Page {tradesPage} / {Math.ceil((simResult ? simResult.trades : (status?.trade_history || [])).length / TRADES_PER_PAGE) || 1}
+                                                    Page {tradesPage} / {Math.ceil((displayedStatus?.trade_history || []).length / TRADES_PER_PAGE) || 1}
                                                 </span>
                                                 <button
-                                                    onClick={() => setTradesPage(p => Math.min(Math.ceil((simResult ? simResult.trades : (status?.trade_history || [])).length / TRADES_PER_PAGE), p + 1))}
-                                                    disabled={tradesPage >= Math.ceil((simResult ? simResult.trades : (status?.trade_history || [])).length / TRADES_PER_PAGE)}
+                                                    onClick={() => setTradesPage(p => Math.min(Math.ceil((displayedStatus?.trade_history || []).length / TRADES_PER_PAGE), p + 1))}
+                                                    disabled={tradesPage >= Math.ceil((displayedStatus?.trade_history || []).length / TRADES_PER_PAGE)}
                                                     style={{
                                                         padding: '0.25rem 0.6rem',
-                                                        backgroundColor: tradesPage >= Math.ceil((simResult ? simResult.trades : (status?.trade_history || [])).length / TRADES_PER_PAGE) ? '#334155' : '#3b82f6',
-                                                        color: 'white', border: 'none', borderRadius: '0.25rem', cursor: tradesPage >= Math.ceil((simResult ? simResult.trades : (status?.trade_history || [])).length / TRADES_PER_PAGE) ? 'default' : 'pointer'
+                                                        backgroundColor: tradesPage >= Math.ceil((displayedStatus?.trade_history || []).length / TRADES_PER_PAGE) ? '#334155' : '#3b82f6',
+                                                        color: 'white', border: 'none', borderRadius: '0.25rem', cursor: tradesPage >= Math.ceil((displayedStatus?.trade_history || []).length / TRADES_PER_PAGE) ? 'default' : 'pointer'
                                                     }}
                                                 >
                                                     &gt;
@@ -1502,7 +1597,7 @@ const Dashboard = () => {
                                                     </tr>
                                                 </thead>
                                                 <tbody>
-                                                    {(simResult ? simResult.trades : (status?.trade_history || []))
+                                                    {(displayedStatus?.trade_history || [])
                                                         .slice((tradesPage - 1) * TRADES_PER_PAGE, tradesPage * TRADES_PER_PAGE)
                                                         .map((trade, index) => {
                                                             const buyAmount = trade.buy_amount || 0;
@@ -1524,7 +1619,7 @@ const Dashboard = () => {
                                                                     <td style={{ padding: '1rem' }}>
                                                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', alignItems: 'flex-start' }}>
                                                                             {(() => {
-                                                                                const segments = simResult ? simResult.config?.price_segments : strategyConfig?.price_segments;
+                                                                                const segments = strategyConfig?.price_segments;
                                                                                 if (segments && segments.length > 0 && trade.buy_price) {
                                                                                     const segmentIndex = segments.findIndex(seg =>
                                                                                         trade.buy_price >= seg.min_price && trade.buy_price <= seg.max_price
@@ -1567,7 +1662,7 @@ const Dashboard = () => {
                                                                             )}
                                                                             {!trade.is_accumulated && (trade.buy_rsi === undefined || trade.buy_rsi === null) && (
                                                                                 (() => {
-                                                                                    const segments = simResult ? simResult.config?.price_segments : strategyConfig?.price_segments;
+                                                                                    const segments = strategyConfig?.price_segments;
                                                                                     const hasSegmentBadge = segments && segments.length > 0 && trade.buy_price && segments.some(seg =>
                                                                                         trade.buy_price >= seg.min_price && trade.buy_price <= seg.max_price
                                                                                     );
@@ -1640,8 +1735,8 @@ const Dashboard = () => {
                                 <EventLog
                                     strategyId={selectedStrategyId}
                                     apiBaseUrl={API_BASE_URL}
-                                    status={status?.status}
-                                    simulationEvents={simResult?.events}
+                                    status={displayedStatus?.status}
+                                    simulationEvents={simOverlayState ? simSystemEvents : null}
                                 />
                             </div>
                         </main>

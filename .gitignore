@@ -13,6 +13,7 @@ env/
 .pytest_cache/
 .coverage
 htmlcov/
+.env.real
 
 # Node.js
 node_modules/

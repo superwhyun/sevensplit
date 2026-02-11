@@ -1,149 +1,239 @@
 import logging
 import time
-import math
+from types import SimpleNamespace
 from datetime import datetime, timezone, timedelta
 from models.strategy_state import SplitState
-
-from .logic_watch import WatchModeLogic
 
 class PriceStrategyLogic:
     def __init__(self, strategy):
         self.strategy = strategy
         # self.watch_logic is now accessible via self.strategy.watch_logic
         self._insufficient_funds_until = 0
+        self._last_buy_gate_code = None
 
-    def execute_buy_logic(self, current_price: float, rsi_5m: float, just_exited_watch: bool = False, market_context: dict = None):
-        """
-        Execute core buy logic.
-        Called by WatchModeLogic after passing safety checks.
+    def _set_buy_gate(self, code: str, message: str, level: str = "INFO"):
+        """Record buy gate transitions as system events (only on state change)."""
+        self.strategy.last_status_msg = message
+        if self._last_buy_gate_code != code:
+            self._last_buy_gate_code = code
+            self.strategy.log_event(level, "BUY_GATE", f"{code}: {message}")
 
-        just_exited_watch: If True, buy immediately at current price (WATCH_END trigger)
+    def plan_buy(
+        self,
+        current_price: float,
+        rsi_5m: float,
+        just_exited_watch: bool = False,
+        market_context: dict = None,
+    ):
         """
-        # 1. Guard: Check Budget & Trade Limits
-        if not self.strategy.has_sufficient_budget(market_context=market_context):
-             msg = "Price Logic: Buy skipped due to insufficient budget."
-             logging.info(msg)
-             self.strategy.last_status_msg = msg
-             return
-        if not self.strategy.check_trade_limit():
-             msg = "Price Logic: Buy skipped due to trade limit (24h)."
-             logging.info(msg)
-             self.strategy.last_status_msg = msg
-             return
+        Build a buy execution plan.
+        Returns None when buy should be skipped this tick.
+        """
+        if not self._passes_buy_guards(market_context=market_context):
+            return None
 
         # Check active positions
         active_splits = [s for s in self.strategy.splits if s.status in ["PENDING_BUY", "BUY_FILLED", "PENDING_SELL"]]
         has_active_positions = len(active_splits) > 0
 
-        # Determine the target price for the NEXT buy
-        target_price = None
+        decision = self._resolve_buy_target(
+            current_price=current_price,
+            just_exited_watch=just_exited_watch,
+            has_active_positions=has_active_positions,
+        )
+        if decision is None:
+            return None
+
+        target_price = decision["target_price"]
+        current_price = decision["effective_price"]
+        reference_msg = decision["reference_msg"]
+        is_grid_buy = decision["is_grid_buy"]
+
+        if current_price > target_price:
+            msg = f"Price Logic: Price ({current_price}) is currently ABOVE target ({target_price:.1f}). Waiting for dip."
+            logging.info(msg)
+            self._set_buy_gate("WAIT_PRICE_BELOW_TARGET", msg, level="INFO")
+            return None
+
+        if not self._validate_segment_buy(current_price):
+            msg = f"Price Logic: Buy at {current_price} blocked by segment validation: {self.strategy.last_status_msg}"
+            logging.info(msg)
+            self._set_buy_gate("WAIT_SEGMENT_CONDITION", msg, level="WARNING")
+            return None
+
+        self._set_buy_gate("BUY_READY", "Price strategy buy conditions satisfied.", level="INFO")
+        return {
+            "current_price": current_price,
+            "rsi_5m": rsi_5m,
+            "reference_msg": reference_msg,
+            "is_grid_buy": is_grid_buy,
+        }
+
+    def execute_buy_logic(
+        self,
+        current_price: float,
+        rsi_5m: float,
+        just_exited_watch: bool = False,
+        market_context: dict = None,
+        planned_buy: dict = None,
+    ):
+        """
+        Execute core buy logic after plan/validation.
+        """
+        buy_plan = planned_buy or self.plan_buy(
+            current_price=current_price,
+            rsi_5m=rsi_5m,
+            just_exited_watch=just_exited_watch,
+            market_context=market_context,
+        )
+        if buy_plan is None:
+            return
+
+        current_price = buy_plan["current_price"]
+        rsi_5m = buy_plan["rsi_5m"]
+        reference_msg = buy_plan["reference_msg"]
+        is_grid_buy = buy_plan["is_grid_buy"]
+
+        levels_crossed = self._resolve_levels_crossed(is_grid_buy, current_price)
+        created_count, log_details = self._execute_batch_buys(levels_crossed, current_price, rsi_5m)
+        if created_count <= 0:
+            return
+
+        self.strategy.log_event(
+            "INFO",
+            "BUY_EXEC",
+            self._build_buy_exec_message(is_grid_buy, reference_msg, current_price, log_details),
+        )
+        self.strategy.next_buy_target_price = current_price * (1 - self.strategy.config.buy_rate)
+
+    def _passes_buy_guards(self, market_context: dict = None) -> bool:
+        if not self.strategy.has_sufficient_budget(market_context=market_context):
+            msg = "Price Logic: Buy skipped due to insufficient budget."
+            logging.info(msg)
+            self._set_buy_gate("WAIT_INSUFFICIENT_BUDGET", msg, level="WARNING")
+            return False
+        if not self.strategy.check_trade_limit():
+            msg = "Price Logic: Buy skipped due to trade limit (24h)."
+            logging.info(msg)
+            self._set_buy_gate("WAIT_TRADE_LIMIT", msg, level="WARNING")
+            return False
+        return True
+
+    def _resolve_buy_target(
+        self,
+        current_price: float,
+        just_exited_watch: bool,
+        has_active_positions: bool,
+    ):
+        auto_target_price = None
         reference_msg = ""
         is_grid_buy = False
-        levels_crossed = 1
-
-        # --- PRIORITY: Manual Target Overrides All ---
-        if self.strategy.manual_target_price is not None:
-            target_price = self.strategy.manual_target_price
-            reference_msg = "Manual Override Target"
-        elif just_exited_watch:
-            # WATCH_END: Buy immediately at current price
-            target_price = current_price
+        if just_exited_watch:
+            auto_target_price = current_price
             reference_msg = "Watch Mode Exit - Rebound Confirmed"
-            if has_active_positions and self.strategy.last_buy_price:
-                is_grid_buy = True  # Treat as grid buy for proper next target calculation
+            is_grid_buy = has_active_positions and bool(self.strategy.last_buy_price)
         elif not has_active_positions:
-            # --- CASE A: EMPTY POSITION ---
-            min_price = self.strategy.config.min_price
-            max_price = self.strategy.config.max_price
-
-            if current_price < min_price:
-                msg = f"Price Logic: Current price {current_price} below min_price {min_price}"
-                logging.debug(msg)
-                self.strategy.last_status_msg = msg
-                return
-            if max_price > 0 and current_price > max_price:
-                msg = f"Price Logic: Current price {current_price} above max_price {max_price}"
-                logging.debug(msg)
-                self.strategy.last_status_msg = msg
-                return
-
-            if self.strategy.config.rebuy_strategy == "reset_on_clear":
-                 target_price = current_price
-                 reference_msg = "Initial Entry (Reset on Clear)"
-            elif self.strategy.config.rebuy_strategy == "last_sell_price":
-                 ref_price = self.strategy.last_sell_price if self.strategy.last_sell_price else current_price
-                 target_price = ref_price * (1 - self.strategy.config.buy_rate)
-                 reference_msg = f"Rebuy from Last Sell {ref_price}"
+            initial = self._resolve_initial_target(current_price)
+            if initial is None:
+                return None
+            auto_target_price = initial["target_price"]
+            reference_msg = initial["reference_msg"]
+            is_grid_buy = False
+        elif self.strategy.last_buy_price is None:
+            auto_target_price = current_price
+            reference_msg = "Safety Entry (No last_buy_price)"
+            is_grid_buy = False
         else:
-            # --- CASE B: ACTIVE POSITION ---
-            if self.strategy.last_buy_price is None:
-                 target_price = current_price
-                 reference_msg = "Safety Entry (No last_buy_price)"
-            else:
-                 target_price = self.strategy.last_buy_price * (1 - self.strategy.config.buy_rate)
-                 reference_msg = f"Grid Level from {self.strategy.last_buy_price}"
-                 is_grid_buy = True
+            auto_target_price = self.strategy.last_buy_price * (1 - self.strategy.config.buy_rate)
+            reference_msg = f"Grid Level from {self.strategy.last_buy_price}"
+            is_grid_buy = True
 
-        # Execution check
-        if target_price is not None:
-             # STRICT CHECK: Even if exiting watch mode, price MUST be below target
-             if current_price <= target_price:
-                  if not self.validate_buy(current_price):
-                       msg = f"Price Logic: Buy at {current_price} blocked by validation : {self.strategy.last_status_msg}"
-                       logging.info(msg)
-                       self.strategy.last_status_msg = msg
-                       return
+        if auto_target_price is None:
+            return None
 
-                  if is_grid_buy:
-                      levels_crossed = self._calculate_levels_crossed(self.strategy.last_buy_price, current_price)
-                      # Respect the 'batch buy' configuration
-                      if not self.strategy.config.trailing_buy_batch and levels_crossed > 1:
-                          levels_crossed = 1
+        if self.strategy.next_buy_target_price is None:
+            self.strategy.next_buy_target_price = self._normalize_target_price(auto_target_price)
 
-                  next_target = current_price * (1 - self.strategy.config.buy_rate)
-                  msg = (f"Buy Executed.\n"
-                         f"- Condition: {reference_msg}.\n"
-                         f"- Current Price: {current_price}\n"
-                         f"- Buy Target Was: {target_price:.1f}\n" 
-                         f"- Next Buy Target: {next_target:.1f}")
+        return {
+            "target_price": self.strategy.next_buy_target_price,
+            "effective_price": current_price,
+            "reference_msg": reference_msg,
+            "is_grid_buy": is_grid_buy,
+        }
 
-                  # Batch Buy Logic: Create orders for each level crossed
-                  created_count = 0
-                  log_details = []
-                  
-                  for i in range(levels_crossed):
-                      # Buy at the current market price
-                      split = self._execute_single_buy(current_price, buy_rsi=rsi_5m)
-                      if split:
-                          created_count += 1
-                          log_details.append(f"Split #{split.id}: Entry @ {current_price:.1f}")
-                      else:
-                          break
+    def _resolve_initial_target(self, current_price: float):
+        if self._find_matching_segment(current_price) is None:
+            msg = (
+                f"Price Logic: Current price {current_price} is outside configured segments. "
+                f"Ranges: {self._segment_ranges_text()}"
+            )
+            logging.debug(msg)
+            self._set_buy_gate("WAIT_OUTSIDE_SEGMENT_RANGE", msg, level="WARNING")
+            return None
 
-                  if created_count > 0:
-                      # Next target is Buy Rate below the ACTUAL price we just bought at
-                      final_next_target = current_price * (1 - self.strategy.config.buy_rate)
-                      
-                      msg = (f"Buy Executed ({'Grid' if is_grid_buy else 'Initial'}).\n"
-                             f"- Condition: {reference_msg}\n"
-                             f"- Market Price: {current_price:.1f}\n")
-                      
-                      if log_details:
-                          msg += "- " + "\n- ".join(log_details) + "\n"
-                          
-                      msg += f"- Next Buy Target: {final_next_target:.1f}"
-                      
-                      self.strategy.log_event("INFO", "BUY_EXEC", msg)
-                      # --- CLEAR MANUAL TARGET AFTER EXECUTION ---
-                      if self.strategy.manual_target_price is not None:
-                          self.strategy.set_manual_target(None)
-             else:
-                  # Current price is HIGHER than target
-                  msg = f"Price Logic: Price ({current_price}) is currently ABOVE target ({target_price:.1f}). Waiting for dip."
-                  logging.info(msg)
-                  self.strategy.last_status_msg = msg
-        else:
-             logging.debug("Price Logic: No valid buy target price set.")
+        if self.strategy.config.rebuy_strategy == "last_sell_price":
+            ref_price = self.strategy.last_sell_price if self.strategy.last_sell_price else current_price
+            return {
+                "target_price": ref_price * (1 - self.strategy.config.buy_rate),
+                "reference_msg": f"Rebuy from Last Sell {ref_price}",
+            }
+
+        if self.strategy.config.rebuy_strategy == "last_buy_price":
+            ref_price = self.strategy.last_buy_price if self.strategy.last_buy_price else current_price
+            return {
+                "target_price": ref_price * (1 - self.strategy.config.buy_rate),
+                "reference_msg": f"Rebuy from Last Buy {ref_price}",
+            }
+
+        return {
+            "target_price": current_price,
+            "reference_msg": "Initial Entry (Reset on Clear)",
+        }
+
+    def _normalize_target_price(self, target_price: float) -> float:
+        try:
+            if hasattr(self.strategy.exchange, "normalize_price"):
+                return float(self.strategy.exchange.normalize_price(target_price))
+        except Exception as e:
+            logging.debug(f"Price Logic: Failed to normalize manual target {target_price}: {e}")
+        return target_price
+
+    def _resolve_levels_crossed(self, is_grid_buy: bool, current_price: float) -> int:
+        if not is_grid_buy:
+            return 1
+        levels_crossed = self._calculate_levels_crossed(self.strategy.last_buy_price, current_price)
+        if not self.strategy.config.trailing_buy_batch and levels_crossed > 1:
+            return 1
+        return levels_crossed
+
+    def _execute_batch_buys(self, levels_crossed: int, current_price: float, buy_rsi: float):
+        created_count = 0
+        log_details = []
+        for _ in range(levels_crossed):
+            split = self._execute_single_buy(current_price, buy_rsi=buy_rsi)
+            if not split:
+                break
+            created_count += 1
+            log_details.append(f"Split #{split.id}: Entry @ {current_price:.1f}")
+        return created_count, log_details
+
+    def _build_buy_exec_message(
+        self,
+        is_grid_buy: bool,
+        reference_msg: str,
+        current_price: float,
+        log_details: list,
+    ) -> str:
+        final_next_target = current_price * (1 - self.strategy.config.buy_rate)
+        msg = (
+            f"Buy Executed ({'Grid' if is_grid_buy else 'Initial'}).\n"
+            f"- Condition: {reference_msg}\n"
+            f"- Market Price: {current_price:.1f}\n"
+        )
+        if log_details:
+            msg += "- " + "\n- ".join(log_details) + "\n"
+        msg += f"- Next Buy Target: {final_next_target:.1f}"
+        return msg
 
     def manage_active_positions(self, open_order_uuids: set):
         """
@@ -173,24 +263,25 @@ class PriceStrategyLogic:
             if created_dt.tzinfo is None:
                 created_dt = created_dt.replace(tzinfo=timezone.utc)
             
-            elapsed = (datetime.now(timezone.utc) - created_dt).total_seconds()
+            now_utc = self.strategy.get_now_utc()
+            elapsed = (now_utc - created_dt).total_seconds()
             
             # KST Correction
             if elapsed < 0:
-                 elapsed = (datetime.now(timezone.utc) - (created_dt - timedelta(hours=9))).total_seconds()
+                 elapsed = (now_utc - (created_dt - timedelta(hours=9))).total_seconds()
 
             if elapsed > self.strategy.ORDER_TIMEOUT_SEC:
                 current_price = self.strategy.exchange.get_current_price(self.strategy.ticker)
                 
-                # Check if still within range
-                if current_price and (self.strategy.config.max_price <= 0 or current_price <= self.strategy.config.max_price):
+                # Check if current price is still in configured segment range.
+                if current_price and self._is_price_in_any_segment(current_price):
                     logging.info(f"Price Logic: Buy order {split.buy_order_uuid} timed out ({elapsed:.1f}s). Switching to Market.")
                     try:
                         self.strategy.exchange.cancel_order(split.buy_order_uuid)
                         res = self.strategy.exchange.buy_market_order(self.strategy.ticker, split.buy_amount)
                         if res:
                             split.buy_order_uuid = res.get('uuid')
-                            split.created_at = datetime.now(timezone.utc).isoformat()
+                            split.created_at = self.strategy.get_now_utc().isoformat()
                             self.strategy.save_state()
                             return True
                     except Exception as e:
@@ -227,40 +318,53 @@ class PriceStrategyLogic:
         if not self.strategy.is_running:
             return
 
+        state_changed = False
+
         # 1. Get the lowest price among active splits
         active_ref_price = None
+        has_active_positions = False
         if self.strategy.splits:
             active_buys = [s for s in self.strategy.splits if s.status != "SELL_FILLED"]
             if active_buys:
+                has_active_positions = True
                 def get_ref_price(s):
                     return s.actual_buy_price if s.actual_buy_price and s.actual_buy_price > 0 else s.buy_price
                 lowest_split = min(active_buys, key=get_ref_price)
                 active_ref_price = get_ref_price(lowest_split)
 
-        # 2. Get the anchor price from the last sell to allow 'rebuy' after 0.5% drop
-        # If we just sold at 101,000, we want to be able to rebuy at 101,000 * (1 - 0.5%) = 100,500 approx.
-        # So we set last_buy_price to 101,000.
-        sell_ref_price = self.strategy.last_sell_price
+        # 2. Determine rebuy anchor based on configured strategy.
+        if has_active_positions:
+            # While positions exist, keep anchor synchronized to the lowest active entry.
+            if active_ref_price and self.strategy.last_buy_price != active_ref_price:
+                logging.info(f"Price Logic: Syncing buy anchor to active split {active_ref_price:.1f}.")
+                self.strategy.last_buy_price = active_ref_price
+                state_changed = True
+        else:
+            rebuy = self.strategy.config.rebuy_strategy
+            if rebuy == "reset_on_clear":
+                if self.strategy.last_buy_price is not None:
+                    logging.info("Price Logic: reset_on_clear -> clearing last_buy_price anchor.")
+                    self.strategy.last_buy_price = None
+                    state_changed = True
+            elif rebuy == "last_sell_price":
+                anchor = self.strategy.last_sell_price
+                if anchor is not None and self.strategy.last_buy_price != anchor:
+                    logging.info(f"Price Logic: last_sell_price -> anchoring to last sell {anchor:.1f}.")
+                    self.strategy.last_buy_price = anchor
+                    state_changed = True
+            elif rebuy == "last_buy_price":
+                # Keep previous last_buy_price as-is by design.
+                pass
 
-        # 3. Determine the best anchor for 'last_buy_price'
-        # Rule: To follow the price DOWN and avoid premature buys, we must anchor
-        # to the LOWEST representative price (either an active buy or the last sell).
-        # This prevents a high-priced stuck split (like #12 at 195k) from pulling the anchor back up.
-        candidates = []
-        if active_ref_price: candidates.append(active_ref_price)
-        if sell_ref_price: candidates.append(sell_ref_price)
+        # When all positions are cleared, reset next buy target so initial-entry logic
+        # is recalculated from current market context on the next tick.
+        if not has_active_positions and self.strategy.next_buy_target_price is not None:
+            logging.info("Price Logic: All positions closed. Resetting next_buy_target_price.")
+            self.strategy.next_buy_target_price = None
+            state_changed = True
 
-        new_anchor = min(candidates) if candidates else None
-
-        if new_anchor and self.strategy.last_buy_price != new_anchor:
-            logging.info(f"Price Logic: Adjusting buy anchor to {new_anchor:.1f} (Lowest of Active/Sell).")
-            self.strategy.last_buy_price = new_anchor
+        if state_changed:
             self.strategy.save_state()
-        elif new_anchor is None:
-            if self.strategy.last_buy_price is not None:
-                logging.info("Price Logic: No active positions or sell history. Resetting anchor.")
-                self.strategy.last_buy_price = None
-                self.strategy.save_state()
 
     # _create_buy_orders removed (logic moved to execute_buy_logic for better control over levels)
 
@@ -277,13 +381,13 @@ class PriceStrategyLogic:
         # 2. Determine Investment Amount
         # Use actual market price for segment calculation
         current_invested = sum(s.buy_amount for s in self.strategy.splits)
-        investment_amount = self.strategy.config.investment_per_split
-        
-        if self.strategy.config.price_segments:
-             for segment in self.strategy.config.price_segments:
-                 if segment.min_price <= actual_market_price <= segment.max_price:
-                     investment_amount = segment.investment_per_split
-                     break
+        segment = self._find_matching_segment(actual_market_price)
+        if segment is None:
+            self.strategy.last_status_msg = (
+                f"구매 보류: 현재 가격({actual_market_price:,.0f})에 매칭되는 세그먼트가 없습니다."
+            )
+            return None
+        investment_amount = segment.investment_per_split
         
         if current_invested + investment_amount > self.strategy.budget:
             return None
@@ -308,7 +412,7 @@ class PriceStrategyLogic:
                     buy_amount=investment_amount, 
                     buy_volume=investment_amount / actual_market_price,
                     buy_order_uuid=result.get('uuid'), 
-                    created_at=datetime.now(timezone.utc).isoformat(),
+                    created_at=self.strategy.get_now_utc().isoformat(),
                     buy_rsi=buy_rsi
                 )
                 self.strategy.splits.append(split)
@@ -325,32 +429,68 @@ class PriceStrategyLogic:
             return None
         return None
 
-    def validate_buy(self, price: float) -> bool:
-        if self.strategy.config.price_segments:
-            match_found = False
-            for segment in self.strategy.config.price_segments:
-                if segment.min_price <= price <= segment.max_price:
-                    match_found = True
-                    active_count = sum(1 for s in self.strategy.splits if s.status != "SELL_FILLED" and segment.min_price <= s.buy_price <= segment.max_price)
-                    if active_count >= segment.max_splits:
-                        self.strategy.last_status_msg = f"구매 보류: 세그먼트 한도 초과 ({active_count}/{segment.max_splits})"
-                        return False
-                    return True
-            if not match_found:
-                self.strategy.last_status_msg = f"구매 보류: 현재 가격({price:,.0f})에 매칭되는 세그먼트가 없습니다."
-                return False
-            return True
-        
-        # Classic Mode Validation
-        if price < self.strategy.config.min_price:
-            self.strategy.last_status_msg = f"구매 보류: 현재 가격({price:,.0f})이 최소 설정가({self.strategy.config.min_price:,.0f})보다 낮습니다."
+    def _validate_segment_buy(self, price: float) -> bool:
+        segment = self._find_matching_segment(price)
+        if segment is None:
+            segment_ranges = self._segment_ranges_text()
+            logging.warning(
+                f"Strategy {self.strategy.strategy_id} [{self.strategy.ticker}]: "
+                f"No segment matching {price:,.0f}. Ranges: {segment_ranges}"
+            )
+            self._set_buy_gate("WAIT_OUTSIDE_SEGMENT_RANGE", (
+                f"구매 보류: 현재 가격({price:,.0f})에 매칭되는 세그먼트가 없습니다. "
+                f"(범위: {segment_ranges})"
+            ), level="WARNING")
             return False
-            
-        if self.strategy.config.max_price > 0 and price > self.strategy.config.max_price:
-            self.strategy.last_status_msg = f"구매 보류: 현재 가격({price:,.0f})이 최대 설정가({self.strategy.config.max_price:,.0f})보다 높습니다."
+
+        active_count = sum(
+            1
+            for s in self.strategy.splits
+            if s.status != "SELL_FILLED" and segment.min_price <= s.buy_price <= segment.max_price
+        )
+        if active_count >= segment.max_splits:
+            self._set_buy_gate(
+                "WAIT_SEGMENT_MAX_SPLITS",
+                f"구매 보류: 세그먼트 한도 초과 ({active_count}/{segment.max_splits})",
+                level="WARNING",
+            )
             return False
-            
         return True
+
+    def _effective_segments(self):
+        segments = self.strategy.config.price_segments or []
+        if segments:
+            return segments
+
+        min_price = float(self.strategy.config.min_price or 0.0)
+        max_price = float(self.strategy.config.max_price or 0.0)
+        if max_price <= min_price:
+            max_price = float("inf")
+
+        return [
+            SimpleNamespace(
+                min_price=min_price,
+                max_price=max_price,
+                investment_per_split=float(self.strategy.config.investment_per_split),
+                max_splits=int(self.strategy.config.max_holdings),
+            )
+        ]
+
+    def _find_matching_segment(self, price: float):
+        for segment in self._effective_segments():
+            if segment.min_price <= price <= segment.max_price:
+                return segment
+        return None
+
+    def _is_price_in_any_segment(self, price: float) -> bool:
+        return self._find_matching_segment(price) is not None
+
+    def _segment_ranges_text(self) -> str:
+        ranges = []
+        for segment in self._effective_segments():
+            upper = "∞" if segment.max_price == float("inf") else f"{segment.max_price:,.0f}"
+            ranges.append(f"{segment.min_price:,.0f}~{upper}")
+        return ", ".join(ranges)
 
     def _calculate_levels_crossed(self, reference_price: float, current_price: float) -> int:
         levels_crossed = 0
