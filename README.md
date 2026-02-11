@@ -116,7 +116,7 @@ docker-compose up -d --force-recreate
 
 ```yaml
   bot-user2:
-    image: sevensplit-bot:latest
+    image: sevensplit-v2:latest
     ports:
       - "8002:8000"  # 다른 포트 사용
     environment:

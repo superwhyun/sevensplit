@@ -27,8 +27,8 @@ export IMAGE_TAG="$IMAGE_VERSION"
 docker compose build
 
 # latest 태깅
-docker tag "sevensplit-bot:$IMAGE_VERSION" "sevensplit-bot:latest"
+docker tag "sevensplit-v2:$IMAGE_VERSION" "sevensplit-v2:latest"
 
 echo "✅ Tagged:"
-echo " - sevensplit-bot:$IMAGE_VERSION"
-echo " - sevensplit-bot:latest"
+echo " - sevensplit-v2:$IMAGE_VERSION"
+echo " - sevensplit-v2:latest"
