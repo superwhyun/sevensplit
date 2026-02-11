@@ -472,7 +472,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                         </label>
                     </div>
                     <small style={{ color: '#94a3b8', fontSize: '0.75rem', display: 'block', marginTop: '0.25rem' }}>
-                        If enabled, buys multiple splits at once if price dropped significantly. If disabled, buys only one split.
+                        Applied only when Watch Mode ends on rebound. If enabled, catch-up buys multiple splits at once; if disabled, buys one split.
                     </small>
                 </div>
             )}

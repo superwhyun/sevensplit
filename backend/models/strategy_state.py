@@ -45,7 +45,7 @@ class StrategyConfig(BaseModel):
     # Trailing Buy Configuration
     use_trailing_buy: bool = False
     trailing_buy_rebound_percent: float = 0.2 # 0.2% Rebound threshold (default)
-    trailing_buy_batch: bool = True # If True, buy all accumulated splits on rebound. If False, buy only one.
+    trailing_buy_batch: bool = True # Applies on Watch-mode rebound exit: if True, catch-up buy multiple splits; else buy one.
 
     # Segmented Price Strategy
     price_segments: List[PriceSegment] = []

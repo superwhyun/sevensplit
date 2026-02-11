@@ -331,6 +331,7 @@ const Dashboard = () => {
     const [simOverlayState, setSimOverlayState] = useState(null);
     const [simMeta, setSimMeta] = useState(null);
     const [simSystemEvents, setSimSystemEvents] = useState([]);
+    const [strategyEvents, setStrategyEvents] = useState([]);
     const TRADES_PER_PAGE = 10;
 
     const selectedStrategyIdRef = useRef(selectedStrategyId);
@@ -350,6 +351,39 @@ const Dashboard = () => {
     const API_BASE_URL = window.location.port === '5173'
         ? `http://${window.location.hostname}:8000`
         : '';
+    const getReplaySnapshotKey = (strategyId) => `devReplaySnapshot:${strategyId}`;
+
+    const saveReplaySnapshot = (strategyId, payload) => {
+        try {
+            if (!strategyId || !payload) return;
+            localStorage.setItem(getReplaySnapshotKey(strategyId), JSON.stringify(payload));
+        } catch (e) {
+            console.warn('Failed to persist replay snapshot:', e);
+        }
+    };
+
+    const loadReplaySnapshot = (strategyId) => {
+        try {
+            if (!strategyId) return null;
+            const raw = localStorage.getItem(getReplaySnapshotKey(strategyId));
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object') return null;
+            return parsed;
+        } catch (e) {
+            console.warn('Failed to load replay snapshot:', e);
+            return null;
+        }
+    };
+
+    const clearReplaySnapshot = (strategyId) => {
+        try {
+            if (!strategyId) return;
+            localStorage.removeItem(getReplaySnapshotKey(strategyId));
+        } catch (e) {
+            console.warn('Failed to clear replay snapshot:', e);
+        }
+    };
 
     const fetchStrategies = async () => {
         try {
@@ -387,6 +421,17 @@ const Dashboard = () => {
         } catch (error) {
             console.error('Error fetching status:', error);
             setLoading(false);
+        }
+    };
+
+    const fetchStrategyEvents = async (strategyId = null) => {
+        const id = strategyId || selectedStrategyIdRef.current;
+        if (!id) return;
+        try {
+            const response = await axios.get(`${API_BASE_URL}/strategies/${id}/events?page=1&limit=200`);
+            setStrategyEvents(response.data?.events || []);
+        } catch (error) {
+            console.error('Error fetching strategy events:', error);
         }
     };
 
@@ -539,6 +584,7 @@ const Dashboard = () => {
                 setLiveSessionId(null);
                 setLiveSessionState(null);
                 setLiveError('');
+                clearReplaySnapshot(selectedStrategyId);
                 setSimActionLoading(false);
                 fetchStatus();
             }
@@ -597,7 +643,62 @@ const Dashboard = () => {
     };
 
     const handleExport = () => {
-        window.open(`${API_BASE_URL}/strategies/${selectedStrategyId}/export`, '_blank');
+        const isSimulationView = isDevMode && (!!simOverlayState || !!liveSessionId);
+        if (!isSimulationView) {
+            window.open(`${API_BASE_URL}/strategies/${selectedStrategyId}/export`, '_blank');
+            return;
+        }
+
+        const trades = displayedStatus?.trade_history || [];
+        if (!trades.length) {
+            alert('No simulation trades to export.');
+            return;
+        }
+
+        const escapeCsv = (value) => {
+            if (value === null || value === undefined) return '';
+            const str = String(value);
+            if (str.includes('"') || str.includes(',') || str.includes('\n')) {
+                return `"${str.replace(/"/g, '""')}"`;
+            }
+            return str;
+        };
+
+        const header = [
+            'Split ID', 'Ticker', 'Buy Price', 'Sell Price', 'Volume',
+            'Buy Amount', 'Sell Amount', 'Gross Profit', 'Net Profit', 'Fee',
+            'Profit Rate', 'Bought At', 'Closed At'
+        ];
+        const rows = trades.map((t) => ([
+            t.split_id ?? '',
+            displayedStatus?.ticker ?? '',
+            t.buy_price ?? '',
+            t.sell_price ?? '',
+            t.volume ?? '',
+            t.buy_amount ?? '',
+            t.sell_amount ?? '',
+            t.gross_profit ?? '',
+            t.net_profit ?? '',
+            t.total_fee ?? '',
+            t.profit_rate ?? '',
+            t.bought_at ?? '',
+            t.timestamp ?? '',
+        ]));
+
+        const csv = [header, ...rows]
+            .map((row) => row.map(escapeCsv).join(','))
+            .join('\n');
+
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        link.href = url;
+        link.download = `simulation_trades_strategy_${selectedStrategyId}_${stamp}.csv`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
     };
 
 
@@ -685,6 +786,7 @@ const Dashboard = () => {
         setIsStartBotModalOpen(false);
         try {
             if (startOption === 'live') {
+                clearReplaySnapshot(selectedStrategyId);
                 const response = await axios.post(`${API_BASE_URL}/simulations/live/start`, {
                     strategy_id: selectedStrategyId,
                     poll_seconds: 10
@@ -728,6 +830,22 @@ const Dashboard = () => {
                 source: 'backtest'
             });
             setSimSystemEvents(response.data?.sim_events || []);
+            saveReplaySnapshot(selectedStrategyId, {
+                at: Date.now(),
+                overlay_state: response.data?.final_state ? {
+                    ...response.data.final_state,
+                    is_running: true,
+                    status: `Simulation (Replay ${days}d)`,
+                } : null,
+                meta: {
+                    mode: `replay-${days}d`,
+                    trades: response.data?.trades ?? 0,
+                    realized_profit: response.data?.realized_profit ?? 0,
+                    candles: response.data?.candles_used ?? 0,
+                    source: 'backtest'
+                },
+                sim_events: response.data?.sim_events || [],
+            });
         } catch (error) {
             console.error('Error starting dev bot simulation:', error);
             const msg = error.response?.data?.detail || 'Failed to start simulation';
@@ -770,8 +888,10 @@ const Dashboard = () => {
                 setSimOverlayState(null);
                 setSimMeta(null);
                 setSimSystemEvents([]);
+                setStrategyEvents([]);
                 return;
             }
+            await fetchStrategyEvents(selectedStrategyId);
             const session = await findLiveSessionForStrategy(selectedStrategyId);
             if (!mounted) return;
             if (session?.session_id) {
@@ -780,9 +900,16 @@ const Dashboard = () => {
             } else {
                 setLiveSessionId(null);
                 setLiveSessionState(null);
-                setSimOverlayState(null);
-                setSimMeta(null);
-                setSimSystemEvents([]);
+                const replay = loadReplaySnapshot(selectedStrategyId);
+                if (replay?.overlay_state) {
+                    setSimOverlayState(replay.overlay_state);
+                    setSimMeta(replay.meta || null);
+                    setSimSystemEvents(replay.sim_events || []);
+                } else {
+                    setSimOverlayState(null);
+                    setSimMeta(null);
+                    setSimSystemEvents([]);
+                }
             }
         };
         load();
@@ -798,6 +925,16 @@ const Dashboard = () => {
         }, 5000);
         return () => clearInterval(timer);
     }, [liveSessionId]);
+
+    useEffect(() => {
+        if (!selectedStrategyId) return;
+        const timer = setInterval(() => {
+            if (!simOverlayState) {
+                fetchStrategyEvents(selectedStrategyId);
+            }
+        }, 10000);
+        return () => clearInterval(timer);
+    }, [selectedStrategyId, simOverlayState]);
 
     if (!displayedStatus && strategies.length > 0) return <div style={{ padding: '2rem', color: 'white' }}>Loading Strategy...</div>;
     if (!portfolio) return <div style={{ padding: '2rem', color: 'white' }}>Loading Portfolio...</div>;
@@ -1251,6 +1388,8 @@ const Dashboard = () => {
                                         watchLowestPrice: displayedStatus.watch_lowest_price,
                                         pendingBuyUnits: displayedStatus.pending_buy_units
                                     }}
+                                    systemEvents={simOverlayState ? simSystemEvents : strategyEvents}
+                                    nextBuyTargetPrice={getNextBuyTarget(displayedStatus)}
                                 />
                             </div>
 

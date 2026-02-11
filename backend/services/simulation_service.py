@@ -65,6 +65,19 @@ class _ReplayPaperExchange(PaperExchange):
     def set_price(self, ticker: str, price: float):
         self._price_map[ticker] = float(price)
 
+    def set_tick(self, ticker: str, close_price: float, high_price: Optional[float] = None, low_price: Optional[float] = None):
+        close_v = float(close_price)
+        self._price_map[ticker] = close_v
+        hi = float(high_price) if high_price is not None else close_v
+        lo = float(low_price) if low_price is not None else close_v
+        if hi <= 0:
+            hi = close_v
+        if lo <= 0:
+            lo = close_v
+        if lo > hi:
+            lo, hi = hi, lo
+        self._tick_bounds[ticker] = {"high": hi, "low": lo}
+
     def get_current_price(self, ticker="KRW-BTC"):
         if ticker in self._price_map:
             return float(self._price_map[ticker])
@@ -230,16 +243,20 @@ class SimulationService:
 
         if first_ts > 0:
             sim_strategy._sim_now_utc = datetime.fromtimestamp(first_ts, tz=timezone.utc)
-        sim_exchange.set_price(strategy_rec.ticker, first_price)
+        first_high = float(candles[0].get("high_price") or candles[0].get("high") or first_price)
+        first_low = float(candles[0].get("low_price") or candles[0].get("low") or first_price)
+        sim_exchange.set_tick(strategy_rec.ticker, first_price, high_price=first_high, low_price=first_low)
         sim_strategy.start(current_price=first_price)
 
         for candle in candles:
             ts = float(candle.get("timestamp") or 0.0)
             price = float(candle.get("trade_price") or candle.get("close") or 0.0)
+            high = float(candle.get("high_price") or candle.get("high") or price)
+            low = float(candle.get("low_price") or candle.get("low") or price)
             if ts <= 0 or price <= 0:
                 continue
             sim_strategy._sim_now_utc = datetime.fromtimestamp(ts, tz=timezone.utc)
-            sim_exchange.set_price(strategy_rec.ticker, price)
+            sim_exchange.set_tick(strategy_rec.ticker, price, high_price=high, low_price=low)
             market_context = self._get_market_context(strategy_rec.ticker, ts)
             sim_strategy.tick(current_price=price, market_context=market_context)
 
@@ -336,12 +353,14 @@ class SimulationService:
         latest = candles[-1]
         latest_ts = float(latest.get("timestamp") or 0.0)
         latest_price = float(latest.get("trade_price") or latest.get("close") or 0.0)
+        latest_high = float(latest.get("high_price") or latest.get("high") or latest_price)
+        latest_low = float(latest.get("low_price") or latest.get("low") or latest_price)
         if latest_ts <= 0 or latest_price <= 0:
             return
         if latest_ts <= session.last_candle_ts:
             return
 
-        exchange.set_price(ticker, latest_price)
+        exchange.set_tick(ticker, latest_price, high_price=latest_high, low_price=latest_low)
         strategy._sim_now_utc = datetime.fromtimestamp(latest_ts, tz=timezone.utc)
         if not runtime["bootstrapped"]:
             strategy.start(current_price=latest_price)

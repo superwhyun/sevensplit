@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { createChart, ColorType, CrosshairMode } from 'lightweight-charts';
 import axios from 'axios';
 
-const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], trailingBuyState }) => {
+const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], trailingBuyState, systemEvents = [], nextBuyTargetPrice = null }) => {
     const chartContainerRef = useRef();
     const chartRef = useRef();
     const candlestickSeriesRef = useRef();
     const volumeSeriesRef = useRef();
+    const gateSeriesRef = useRef();
+    const nextTargetSeriesRef = useRef();
     const rsiSeries14Ref = useRef();
     const rsiSeries4Ref = useRef();
     const rsiCursorLineRef = useRef();
@@ -453,6 +455,35 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], tr
             },
         });
 
+        // Buy-gate state strip (top band): colors blocked/watching intervals by time.
+        const gateSeries = chart.addHistogramSeries({
+            color: 'rgba(0,0,0,0)',
+            priceFormat: { type: 'price', precision: 0, minMove: 1 },
+            priceScaleId: 'gate',
+            lastValueVisible: false,
+            priceLineVisible: false,
+            base: 0,
+        });
+        gateSeriesRef.current = gateSeries;
+        chart.priceScale('gate').applyOptions({
+            visible: false,
+            autoScale: true,
+            scaleMargins: {
+                top: 0.0,
+                bottom: 0.985, // ultra-thin ribbon at chart top
+            },
+        });
+
+        const nextTargetSeries = chart.addLineSeries({
+            color: '#22d3ee',
+            lineWidth: 2,
+            priceScaleId: 'right',
+            lineStyle: 2, // dashed
+            lastValueVisible: false,
+            priceLineVisible: false,
+        });
+        nextTargetSeriesRef.current = nextTargetSeries;
+
         // Add RSI Series (Dual)
         const rsiSeries14 = chart.addLineSeries({
             color: '#8b5cf6', // Purple
@@ -613,6 +644,127 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], tr
         }
     }, [splits, tradeHistory, candleData]);
 
+    // Paint buy-gate intervals from system events (WATCH / BUY_GATE transitions)
+    useEffect(() => {
+        if (!gateSeriesRef.current || !candleData || candleData.length === 0) return;
+
+        const eventToTs = (ev) => {
+            const val = ev?.timestamp;
+            if (!val) return null;
+            if (typeof val === 'number') return val;
+            return parseUTC(val);
+        };
+
+        const sortedEvents = [...(systemEvents || [])]
+            .map((e) => ({ ...e, _ts: eventToTs(e) }))
+            .filter((e) => e._ts !== null)
+            .sort((a, b) => a._ts - b._ts);
+
+        const colorByReason = (reason) => {
+            if (!reason) return 'rgba(0,0,0,0)';
+            if (reason === 'WATCH') return 'rgba(234, 179, 8, 0.75)'; // yellow
+            if (reason === 'WAIT_TRADE_LIMIT') return 'rgba(239, 68, 68, 0.75)'; // red
+            if (reason === 'WAIT_INSUFFICIENT_BUDGET') return 'rgba(249, 115, 22, 0.75)'; // orange
+            if (reason === 'BUY_READY') return 'rgba(148, 163, 184, 0.42)'; // neutral-ready
+            if (reason === 'WAIT_SEGMENT_MAX_SPLITS' || reason === 'WAIT_OUTSIDE_SEGMENT_RANGE' || reason === 'WAIT_SEGMENT_CONDITION') {
+                return 'rgba(168, 85, 247, 0.78)'; // purple
+            }
+            if (reason === 'WAIT_PRICE_BELOW_TARGET') return 'rgba(14, 165, 233, 0.72)'; // blue
+            return 'rgba(148, 163, 184, 0.7)'; // slate fallback
+        };
+
+        let watchActive = false;
+        let gateCode = null;
+        let eventIdx = 0;
+        const stripData = [];
+
+        for (const c of candleData) {
+            while (eventIdx < sortedEvents.length && sortedEvents[eventIdx]._ts <= c.time) {
+                const ev = sortedEvents[eventIdx];
+                if (ev.event_type === 'WATCH_START') {
+                    watchActive = true;
+                } else if (ev.event_type === 'WATCH_END') {
+                    watchActive = false;
+                } else if (ev.event_type === 'BUY_GATE') {
+                    const msg = String(ev.message || '');
+                    const code = msg.split(':')[0]?.trim();
+                    if (code === 'BUY_READY') {
+                        gateCode = 'BUY_READY';
+                    } else if (code && code.startsWith('WAIT_')) {
+                        gateCode = code;
+                    }
+                }
+                eventIdx += 1;
+            }
+
+            const reason = watchActive ? 'WATCH' : gateCode;
+            stripData.push({
+                time: c.time,
+                value: reason ? 1 : 0,
+                color: colorByReason(reason),
+            });
+        }
+
+        gateSeriesRef.current.setData(stripData);
+    }, [candleData, systemEvents]);
+
+    // Draw next buy target as a time-series line using BUY_EXEC/TARGET_UPDATE event history.
+    useEffect(() => {
+        if (!nextTargetSeriesRef.current || !candleData || candleData.length === 0) return;
+
+        const eventToTs = (ev) => {
+            const val = ev?.timestamp;
+            if (!val) return null;
+            if (typeof val === 'number') return val;
+            return parseUTC(val);
+        };
+
+        const parseTargetFromMessage = (msg) => {
+            if (!msg) return null;
+            const m = String(msg).match(/Next Buy Target:\s*([0-9]+(?:\.[0-9]+)?)/i);
+            if (!m) return null;
+            const parsed = Number(m[1]);
+            return Number.isFinite(parsed) ? parsed : null;
+        };
+
+        const sortedEvents = [...(systemEvents || [])]
+            .map((e) => ({ ...e, _ts: eventToTs(e) }))
+            .filter((e) => e._ts !== null && (e.event_type === 'BUY_EXEC' || e.event_type === 'TARGET_UPDATE'))
+            .sort((a, b) => a._ts - b._ts);
+
+        let eventIdx = 0;
+        let currentTarget = null;
+        const targetLine = [];
+
+        for (const c of candleData) {
+            while (eventIdx < sortedEvents.length && sortedEvents[eventIdx]._ts <= c.time) {
+                const t = parseTargetFromMessage(sortedEvents[eventIdx].message);
+                if (String(sortedEvents[eventIdx].message || '').includes('Next Buy Target: NONE')) {
+                    currentTarget = null;
+                } else if (t !== null) {
+                    currentTarget = t;
+                }
+                eventIdx += 1;
+            }
+            if (currentTarget !== null) {
+                targetLine.push({ time: c.time, value: currentTarget });
+            }
+        }
+
+        const latestTarget = Number(nextBuyTargetPrice);
+        if (Number.isFinite(latestTarget) && latestTarget > 0 && targetLine.length > 0) {
+            targetLine[targetLine.length - 1] = {
+                time: targetLine[targetLine.length - 1].time,
+                value: latestTarget,
+            };
+        } else if (Number.isFinite(latestTarget) && latestTarget > 0 && candleData.length > 0) {
+            // Fallback when no BUY_EXEC event exists in the loaded window.
+            targetLine.push({ time: candleData[candleData.length - 1].time, value: latestTarget });
+        }
+
+        nextTargetSeriesRef.current.setData(targetLine);
+    }, [candleData, systemEvents, nextBuyTargetPrice]);
+
     // Draw Trailing Buy Lines
     useEffect(() => {
         if (!candlestickSeriesRef.current || !config) return;
@@ -690,6 +842,16 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], tr
             border: '1px solid #334155'
         }}>
             <h3 style={{ margin: '0 0 1rem 0', color: '#f8fafc' }}>Price Chart</h3>
+            <div style={{ marginBottom: '0.5rem', display: 'flex', gap: '0.4rem', flexWrap: 'wrap', fontSize: '0.72rem' }}>
+                <span style={{ color: '#94a3b8' }}>Buy Gate:</span>
+                <span style={{ background: 'rgba(234, 179, 8, 0.55)', color: '#f8fafc', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>WATCH</span>
+                <span style={{ background: 'rgba(14, 165, 233, 0.5)', color: '#f8fafc', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>Price Wait</span>
+                <span style={{ background: 'rgba(168, 85, 247, 0.6)', color: '#f8fafc', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>Segment Wait</span>
+                <span style={{ background: 'rgba(249, 115, 22, 0.6)', color: '#f8fafc', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>Budget Wait</span>
+                <span style={{ background: 'rgba(239, 68, 68, 0.6)', color: '#f8fafc', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>Trade Limit</span>
+                <span style={{ background: 'rgba(148, 163, 184, 0.42)', color: '#f8fafc', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>Buy Ready</span>
+                <span style={{ background: 'rgba(34, 211, 238, 0.25)', color: '#67e8f9', border: '1px solid rgba(34, 211, 238, 0.65)', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>Next Target</span>
+            </div>
             <div ref={chartContainerRef} style={{ position: 'relative', height: '400px', width: '100%', touchAction: 'none' }}>
                 {/* Scale Lock Toggle Button */}
                 <button

@@ -340,6 +340,7 @@ class PaperExchange(Exchange):
         self.public_client = public_client
         self.orders: Dict[str, dict] = {}
         self.order_seq = 0
+        self._tick_bounds: Dict[str, dict] = {}
         self.balances: Dict[str, dict] = {
             "KRW": {"balance": float(initial_krw), "locked": 0.0, "avg_buy_price": 1.0}
         }
@@ -436,7 +437,8 @@ class PaperExchange(Exchange):
         if not current:
             return
 
-        should_fill = (side == "bid" and current <= price) or (side == "ask" and current >= price)
+        low_price, high_price = self._get_match_bounds(ticker, current)
+        should_fill = (side == "bid" and low_price <= price) or (side == "ask" and high_price >= price)
         if not should_fill:
             return
 
@@ -462,6 +464,16 @@ class PaperExchange(Exchange):
             self._ensure_currency(base_currency)
             self.balances[base_currency]["locked"] = max(0.0, self.balances[base_currency]["locked"] - volume)
             self.balances["KRW"]["balance"] += proceeds
+
+    def _get_match_bounds(self, ticker: str, current_price: float) -> tuple[float, float]:
+        bounds = self._tick_bounds.get(ticker) if hasattr(self, "_tick_bounds") else None
+        if not bounds:
+            return (float(current_price), float(current_price))
+        low = float(bounds.get("low") or current_price)
+        high = float(bounds.get("high") or current_price)
+        if low > high:
+            low, high = high, low
+        return (low, high)
 
     def buy_limit_order(self, ticker, price, volume):
         price = float(price)

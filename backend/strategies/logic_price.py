@@ -48,6 +48,7 @@ class PriceStrategyLogic:
         current_price = decision["effective_price"]
         reference_msg = decision["reference_msg"]
         is_grid_buy = decision["is_grid_buy"]
+        allow_batch_buy = bool(decision.get("allow_batch_buy", False))
 
         if current_price > target_price:
             msg = f"Price Logic: Price ({current_price}) is currently ABOVE target ({target_price:.1f}). Waiting for dip."
@@ -67,6 +68,7 @@ class PriceStrategyLogic:
             "rsi_5m": rsi_5m,
             "reference_msg": reference_msg,
             "is_grid_buy": is_grid_buy,
+            "allow_batch_buy": allow_batch_buy,
         }
 
     def execute_buy_logic(
@@ -93,8 +95,9 @@ class PriceStrategyLogic:
         rsi_5m = buy_plan["rsi_5m"]
         reference_msg = buy_plan["reference_msg"]
         is_grid_buy = buy_plan["is_grid_buy"]
+        allow_batch_buy = bool(buy_plan.get("allow_batch_buy", False))
 
-        levels_crossed = self._resolve_levels_crossed(is_grid_buy, current_price)
+        levels_crossed = self._resolve_levels_crossed(is_grid_buy, current_price, allow_batch_buy=allow_batch_buy)
         created_count, log_details = self._execute_batch_buys(levels_crossed, current_price, rsi_5m)
         if created_count <= 0:
             return
@@ -159,6 +162,12 @@ class PriceStrategyLogic:
             "effective_price": current_price,
             "reference_msg": reference_msg,
             "is_grid_buy": is_grid_buy,
+            # Batch catch-up buy is only allowed right after watch-mode rebound confirmation.
+            "allow_batch_buy": (
+                bool(just_exited_watch)
+                and bool(self.strategy.config.use_trailing_buy)
+                and bool(self.strategy.config.trailing_buy_batch)
+            ),
         }
 
     def _resolve_initial_target(self, current_price: float):
@@ -198,11 +207,11 @@ class PriceStrategyLogic:
             logging.debug(f"Price Logic: Failed to normalize manual target {target_price}: {e}")
         return target_price
 
-    def _resolve_levels_crossed(self, is_grid_buy: bool, current_price: float) -> int:
+    def _resolve_levels_crossed(self, is_grid_buy: bool, current_price: float, allow_batch_buy: bool = False) -> int:
         if not is_grid_buy:
             return 1
         levels_crossed = self._calculate_levels_crossed(self.strategy.last_buy_price, current_price)
-        if not self.strategy.config.trailing_buy_batch and levels_crossed > 1:
+        if not allow_batch_buy and levels_crossed > 1:
             return 1
         return levels_crossed
 
@@ -319,6 +328,7 @@ class PriceStrategyLogic:
             return
 
         state_changed = False
+        prev_target = self.strategy.next_buy_target_price
 
         # 1. Get the lowest price among active splits
         active_ref_price = None
@@ -356,12 +366,41 @@ class PriceStrategyLogic:
                 # Keep previous last_buy_price as-is by design.
                 pass
 
-        # When all positions are cleared, reset next buy target so initial-entry logic
-        # is recalculated from current market context on the next tick.
-        if not has_active_positions and self.strategy.next_buy_target_price is not None:
-            logging.info("Price Logic: All positions closed. Resetting next_buy_target_price.")
-            self.strategy.next_buy_target_price = None
-            state_changed = True
+        # Recalculate next buy target immediately after split state changes (e.g. sell fill).
+        # This keeps UI/logic in sync without waiting for the next plan_buy cycle.
+        desired_target = None
+        if self.strategy.last_buy_price is not None:
+            desired_target = self._normalize_target_price(
+                self.strategy.last_buy_price * (1 - self.strategy.config.buy_rate)
+            )
+
+        if has_active_positions:
+            if self.strategy.next_buy_target_price != desired_target:
+                self.strategy.next_buy_target_price = desired_target
+                state_changed = True
+        else:
+            rebuy = self.strategy.config.rebuy_strategy
+            if rebuy == "reset_on_clear":
+                if self.strategy.next_buy_target_price is not None:
+                    logging.info("Price Logic: All positions closed. Resetting next_buy_target_price.")
+                    self.strategy.next_buy_target_price = None
+                    state_changed = True
+            else:
+                # For last_sell_price / last_buy_price, maintain immediate rebuy target from anchor.
+                if desired_target is not None and self.strategy.next_buy_target_price != desired_target:
+                    self.strategy.next_buy_target_price = desired_target
+                    state_changed = True
+
+        target_changed = prev_target != self.strategy.next_buy_target_price
+        if target_changed:
+            if self.strategy.next_buy_target_price is None:
+                self.strategy.log_event("INFO", "TARGET_UPDATE", "Next Buy Target: NONE")
+            else:
+                self.strategy.log_event(
+                    "INFO",
+                    "TARGET_UPDATE",
+                    f"Next Buy Target: {float(self.strategy.next_buy_target_price):.1f}",
+                )
 
         if state_changed:
             self.strategy.save_state()
