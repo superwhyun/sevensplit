@@ -93,11 +93,19 @@ class StrategyService:
     def update_config(self, strategy_id: int, config: StrategyConfig, budget: float = None):
         if strategy_id not in self.strategies:
             raise ValueError("Strategy not found")
-        
+
+        strategy = self.strategies[strategy_id]
+
         if budget is not None:
-            self.strategies[strategy_id].budget = budget
-            
-        self.strategies[strategy_id].update_config(config)
+            strategy.budget = budget
+
+        strategy.update_config(config)
+        if hasattr(strategy, "price_logic") and hasattr(strategy.price_logic, "_last_buy_gate_code"):
+            strategy.price_logic._last_buy_gate_code = None
+
+        # Re-evaluate immediately so config changes (e.g. segment max_splits) are reflected
+        # without waiting for the next scheduler/websocket cycle.
+        # NOTE: Real strategy loop will pick up changes on the next regular tick.
 
     def set_manual_target(self, strategy_id: int, price: Optional[float]):
         if strategy_id not in self.strategies:

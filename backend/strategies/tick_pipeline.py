@@ -79,7 +79,7 @@ class TickPipeline:
         )
 
         mode = strategy.config.strategy_mode
-        if mode in ["PRICE", "ALL"]:
+        if mode == "PRICE":
             rsi_5m = ctx.indicators.get("rsi_5m") if ctx.indicators else None
             proceed, just_exited_watch = strategy.watch_logic.check_proceed_to_buy(
                 ctx.current_price,

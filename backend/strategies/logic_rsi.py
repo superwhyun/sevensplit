@@ -30,7 +30,7 @@ class RSIStrategyLogic:
             self._update_daily_rsi(current_price, market_context=market_context)
 
         # 2) Mode guard
-        if self.strategy.config.strategy_mode not in ["RSI", "ALL"]:
+        if self.strategy.config.strategy_mode != "RSI":
             return
 
         # 3) Data readiness guard

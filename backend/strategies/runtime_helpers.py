@@ -90,6 +90,10 @@ class StrategyStateManager:
         }
 
     def _build_config_from_state(self, state) -> StrategyConfig:
+        raw_mode = getattr(state, "strategy_mode", "PRICE")
+        normalized_mode = str(raw_mode).upper().strip()
+        if normalized_mode not in ("PRICE", "RSI"):
+            normalized_mode = "PRICE"
         return StrategyConfig(
             investment_per_split=state.investment_per_split,
             min_price=state.min_price,
@@ -100,7 +104,7 @@ class StrategyStateManager:
             tick_interval=state.tick_interval,
             rebuy_strategy=state.rebuy_strategy,
             max_trades_per_day=getattr(state, "max_trades_per_day", 100),
-            strategy_mode=getattr(state, "strategy_mode", "PRICE"),
+            strategy_mode=normalized_mode,
             rsi_period=getattr(state, "rsi_period", 14),
             rsi_timeframe=getattr(state, "rsi_timeframe", "minutes/60"),
             rsi_buy_max=getattr(state, "rsi_buy_max", 30.0),
@@ -222,7 +226,7 @@ class StrategyOrderManager:
             strategy.save_state()
 
         if strategy.config.strategy_mode != "RSI":
-            strategy.price_logic.handle_split_cleanup()
+            strategy.price_logic.handle_split_cleanup(target_refresh_requested=bool(splits_to_remove))
 
     def check_buy_order(self, strategy, split: SplitState) -> None:
         if not split.buy_order_uuid:

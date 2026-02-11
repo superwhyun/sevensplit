@@ -52,7 +52,7 @@ npm run dev
 ```
 
 - 권장: `DB_PATH`는 dev 전용으로 분리
-- 권장: `CANDLE_DB_PATH`, `PRICE_DB_PATH`는 real과 공유
+- 권장: `CANDLE_DB_PATH`는 real과 공유
 
 ### Real 모드 실행 (실전 매매)
 

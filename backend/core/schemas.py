@@ -42,5 +42,6 @@ class BacktestRequest(BaseModel):
 class LiveSimulationStartRequest(BaseModel):
     strategy_id: int
     exec_interval: Optional[str] = None  # default by strategy mode
-    poll_seconds: float = 10.0
+    replay_days: Optional[int] = None  # warm-up replay window before live start (1/3/7...)
+    poll_seconds: float = 1.0
     initial_krw: float = 10000000.0

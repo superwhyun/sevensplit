@@ -128,7 +128,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                 ...rawConfigData,
                 price_segments: ensureSegments(rawConfigData),
             };
-            await axios.post(`${API_BASE_URL}/strategies/config`, {
+            const response = await axios.post(`${API_BASE_URL}/strategies/config`, {
                 strategy_id: strategyId,
                 config: configData,
                 budget: newBudget

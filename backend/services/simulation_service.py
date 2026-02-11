@@ -11,6 +11,8 @@ from exchange import PaperExchange, UpbitExchange
 from models.strategy_state import StrategyConfig
 from strategy import SevenSplitStrategy
 
+MAX_SIM_EVENTS = 200
+
 
 def _parse_iso_to_ts(value: Optional[str]) -> Optional[float]:
     if not value:
@@ -126,6 +128,8 @@ class _SimulationStrategy(SevenSplitStrategy):
                 "timestamp": self.get_now_utc().isoformat(),
             },
         )
+        if len(self.sim_events) > MAX_SIM_EVENTS:
+            self.sim_events = self.sim_events[:MAX_SIM_EVENTS]
         self._sim_event_seq += 1
 
 
@@ -136,6 +140,7 @@ class LiveSession:
     ticker: str
     exec_interval: str
     started_at: float
+    replay_days: int = 0
     status: str = "running"
     last_candle_ts: float = 0.0
     last_tick_price: float = 0.0
@@ -203,6 +208,71 @@ class SimulationService:
                 }
             }
         }
+
+    def update_live_config(self, strategy_id: int, config: StrategyConfig, budget: Optional[float] = None) -> int:
+        """Apply updated config to running live simulation sessions for the same strategy."""
+        updated = 0
+        with self._lock:
+            targets = []
+            for session_id, session in self.live_sessions.items():
+                if session.strategy_id != strategy_id:
+                    continue
+                runtime = self._live_runtime.get(session_id)
+                if not runtime:
+                    continue
+                targets.append((session, runtime))
+
+        for session, runtime in targets:
+            strategy = runtime.get("strategy")
+            if not strategy:
+                continue
+            try:
+                if budget is not None:
+                    strategy.budget = float(budget)
+                strategy.update_config(config)
+                if hasattr(strategy, "price_logic") and hasattr(strategy.price_logic, "_last_buy_gate_code"):
+                    strategy.price_logic._last_buy_gate_code = None
+                runtime["force_recalc"] = True
+                strategy.log_event(
+                    "INFO",
+                    "CONFIG_UPDATE",
+                    "Live simulation config synced.",
+                )
+                updated += 1
+            except Exception as e:
+                logging.warning(f"[SIM] Failed to sync live config for session {session.id}: {e}")
+        return updated
+
+    def update_live_manual_target(self, strategy_id: int, target_price: Optional[float]) -> int:
+        """Apply manual next-buy target to running live simulation sessions for the same strategy."""
+        updated = 0
+        with self._lock:
+            targets = []
+            for session_id, session in self.live_sessions.items():
+                if session.strategy_id != strategy_id:
+                    continue
+                runtime = self._live_runtime.get(session_id)
+                if not runtime:
+                    continue
+                targets.append((session, runtime))
+
+        for session, runtime in targets:
+            strategy = runtime.get("strategy")
+            if not strategy:
+                continue
+            try:
+                strategy.set_manual_target(target_price)
+                if hasattr(strategy, "price_logic") and hasattr(strategy.price_logic, "_last_buy_gate_code"):
+                    strategy.price_logic._last_buy_gate_code = None
+                runtime["force_recalc"] = True
+                if target_price is None:
+                    strategy.log_event("INFO", "TARGET_UPDATE", "Manual target cleared (live sync).")
+                else:
+                    strategy.log_event("INFO", "TARGET_UPDATE", f"Manual target set (live sync): {float(target_price):.1f}")
+                updated += 1
+            except Exception as e:
+                logging.warning(f"[SIM] Failed to sync manual target for session {session.id}: {e}")
+        return updated
 
     def run_backtest(
         self,
@@ -275,14 +345,15 @@ class SimulationService:
             "realized_profit": realized,
             "final_state": sim_strategy.get_state(current_price=sim_exchange.get_current_price(strategy_rec.ticker)),
             "trade_history": sim_strategy.trade_history[:200],
-            "sim_events": sim_strategy.sim_events[:200],
+            "sim_events": sim_strategy.sim_events[:MAX_SIM_EVENTS],
         }
 
     def start_live(
         self,
         strategy_id: int,
         exec_interval: Optional[str] = None,
-        poll_seconds: float = 10.0,
+        replay_days: Optional[int] = None,
+        poll_seconds: float = 1.0,
         initial_krw: float = 10_000_000.0,
     ) -> dict:
         strategy_rec = self._get_strategy_record_or_raise(strategy_id)
@@ -306,6 +377,7 @@ class SimulationService:
             ticker=strategy_rec.ticker,
             exec_interval=exec_interval,
             started_at=time.time(),
+            replay_days=max(0, int(replay_days or 0)),
         )
 
         with self._lock:
@@ -315,11 +387,67 @@ class SimulationService:
                 "exchange": sim_exchange,
                 "poll_seconds": max(1.0, float(poll_seconds)),
                 "bootstrapped": False,
+                "force_recalc": False,
+                "last_market_context_ts": 0.0,
+                "last_market_context": None,
             }
+
+        # Optional warm-up replay: run past candles first, then continue realtime.
+        if replay_days and int(replay_days) > 0:
+            days = max(1, int(replay_days))
+            end_ts = time.time()
+            start_ts = end_ts - (days * 86400)
+            candles = self.candle_db.get_candles(strategy_rec.ticker, exec_interval, start_ts, end_ts)
+            if candles:
+                first = candles[0]
+                first_price = float(first.get("trade_price") or first.get("close") or 0.0)
+                first_high = float(first.get("high_price") or first.get("high") or first_price)
+                first_low = float(first.get("low_price") or first.get("low") or first_price)
+                first_ts = float(first.get("timestamp") or 0.0)
+                if first_price > 0:
+                    if first_ts > 0:
+                        sim_strategy._sim_now_utc = datetime.fromtimestamp(first_ts, tz=timezone.utc)
+                    sim_exchange.set_tick(strategy_rec.ticker, first_price, high_price=first_high, low_price=first_low)
+                    sim_strategy.start(current_price=first_price)
+
+                    for candle in candles:
+                        ts = float(candle.get("timestamp") or 0.0)
+                        price = float(candle.get("trade_price") or candle.get("close") or 0.0)
+                        high = float(candle.get("high_price") or candle.get("high") or price)
+                        low = float(candle.get("low_price") or candle.get("low") or price)
+                        if ts <= 0 or price <= 0:
+                            continue
+                        sim_strategy._sim_now_utc = datetime.fromtimestamp(ts, tz=timezone.utc)
+                        sim_exchange.set_tick(strategy_rec.ticker, price, high_price=high, low_price=low)
+                        market_context = self._get_market_context(strategy_rec.ticker, ts)
+                        sim_strategy.tick(current_price=price, market_context=market_context)
+
+                    with self._lock:
+                        runtime = self._live_runtime.get(session_id)
+                        if runtime:
+                            runtime["bootstrapped"] = True
+                            runtime["last_market_context_ts"] = float(candles[-1].get("timestamp") or 0.0)
+                            runtime["last_market_context"] = self._get_market_context(
+                                strategy_rec.ticker,
+                                runtime["last_market_context_ts"] or end_ts,
+                            )
+                    session.last_candle_ts = float(candles[-1].get("timestamp") or 0.0)
+                    session.last_tick_price = float(candles[-1].get("trade_price") or candles[-1].get("close") or first_price)
+                    sim_strategy.log_event(
+                        "INFO",
+                        "SIM_REPLAY",
+                        f"Warm-up replay completed ({days}d, candles={len(candles)}). Continuing live simulation.",
+                    )
 
         thread = threading.Thread(target=self._run_live_session, args=(session_id,), daemon=True)
         thread.start()
-        return {"session_id": session_id, "status": "running", "strategy_id": strategy_id, "ticker": strategy_rec.ticker}
+        return {
+            "session_id": session_id,
+            "status": "running",
+            "strategy_id": strategy_id,
+            "ticker": strategy_rec.ticker,
+            "replay_days": int(replay_days) if replay_days else 0,
+        }
 
     def _run_live_session(self, session_id: str):
         while True:
@@ -352,25 +480,41 @@ class SimulationService:
 
         latest = candles[-1]
         latest_ts = float(latest.get("timestamp") or 0.0)
-        latest_price = float(latest.get("trade_price") or latest.get("close") or 0.0)
-        latest_high = float(latest.get("high_price") or latest.get("high") or latest_price)
-        latest_low = float(latest.get("low_price") or latest.get("low") or latest_price)
-        if latest_ts <= 0 or latest_price <= 0:
-            return
-        if latest_ts <= session.last_candle_ts:
+        latest_close = float(latest.get("trade_price") or latest.get("close") or 0.0)
+        latest_high = float(latest.get("high_price") or latest.get("high") or latest_close)
+        latest_low = float(latest.get("low_price") or latest.get("low") or latest_close)
+        if latest_ts <= 0 or latest_close <= 0:
             return
 
-        exchange.set_tick(ticker, latest_price, high_price=latest_high, low_price=latest_low)
-        strategy._sim_now_utc = datetime.fromtimestamp(latest_ts, tz=timezone.utc)
+        # Live mode must react to realtime price, not only closed candle updates.
+        # Use current market price each poll, with candle bounds as soft context.
+        try:
+            live_price = float(self.public_exchange.get_current_price(ticker))
+        except Exception:
+            live_price = latest_close
+        if live_price <= 0:
+            live_price = latest_close
+
+        eff_high = max(latest_high, live_price)
+        eff_low = min(latest_low, live_price)
+        exchange.set_tick(ticker, live_price, high_price=eff_high, low_price=eff_low)
+        strategy._sim_now_utc = datetime.fromtimestamp(now, tz=timezone.utc)
         if not runtime["bootstrapped"]:
-            strategy.start(current_price=latest_price)
+            strategy.start(current_price=live_price)
             runtime["bootstrapped"] = True
 
-        market_context = self._get_market_context(ticker, latest_ts)
-        strategy.tick(current_price=latest_price, market_context=market_context)
+        market_context = runtime.get("last_market_context")
+        if market_context is None or runtime.get("last_market_context_ts") != latest_ts:
+            market_context = self._get_market_context(ticker, latest_ts)
+            runtime["last_market_context"] = market_context
+            runtime["last_market_context_ts"] = latest_ts
 
-        session.last_candle_ts = latest_ts
-        session.last_tick_price = latest_price
+        strategy.tick(current_price=live_price, market_context=market_context)
+        runtime["force_recalc"] = False
+
+        if latest_ts > session.last_candle_ts:
+            session.last_candle_ts = latest_ts
+        session.last_tick_price = live_price
 
     def stop_live(self, session_id: str):
         with self._lock:
@@ -406,6 +550,7 @@ class SimulationService:
             "ticker": session.ticker,
             "exec_interval": session.exec_interval,
             "started_at": session.started_at,
+            "replay_days": session.replay_days,
             "last_candle_ts": session.last_candle_ts,
             "last_tick_price": session.last_tick_price,
             "last_error": session.last_error,
@@ -413,7 +558,7 @@ class SimulationService:
             "realized_profit": realized,
             "final_state": strategy.get_state(current_price=current_price),
             "trade_history": strategy.trade_history[:200],
-            "sim_events": strategy.sim_events[:200],
+            "sim_events": strategy.sim_events[:MAX_SIM_EVENTS],
         }
 
     def list_live(self) -> list:
@@ -427,6 +572,7 @@ class SimulationService:
                 "status": s.status,
                 "exec_interval": s.exec_interval,
                 "started_at": s.started_at,
+                "replay_days": s.replay_days,
                 "last_candle_ts": s.last_candle_ts,
                 "last_tick_price": s.last_tick_price,
             }

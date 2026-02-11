@@ -59,7 +59,6 @@ class PriceStrategyLogic:
         if not self._validate_segment_buy(current_price):
             msg = f"Price Logic: Buy at {current_price} blocked by segment validation: {self.strategy.last_status_msg}"
             logging.info(msg)
-            self._set_buy_gate("WAIT_SEGMENT_CONDITION", msg, level="WARNING")
             return None
 
         self._set_buy_gate("BUY_READY", "Price strategy buy conditions satisfied.", level="INFO")
@@ -319,7 +318,7 @@ class PriceStrategyLogic:
         except Exception as e:
             logging.warning(f"Price Logic: Failed to create sell order: {e}")
 
-    def handle_split_cleanup(self):
+    def handle_split_cleanup(self, target_refresh_requested: bool = False):
         """
         Recalculate last_buy_price based on remaining splits AND last sell price.
         This ensures we can 'follow' the price back down 0.5% after a sell.
@@ -366,30 +365,31 @@ class PriceStrategyLogic:
                 # Keep previous last_buy_price as-is by design.
                 pass
 
-        # Recalculate next buy target immediately after split state changes (e.g. sell fill).
-        # This keeps UI/logic in sync without waiting for the next plan_buy cycle.
-        desired_target = None
-        if self.strategy.last_buy_price is not None:
-            desired_target = self._normalize_target_price(
-                self.strategy.last_buy_price * (1 - self.strategy.config.buy_rate)
-            )
+        # Next target should be recalculated only when split lifecycle changes
+        # (e.g. sell-filled split cleanup), not on every tick.
+        if target_refresh_requested:
+            desired_target = None
+            if self.strategy.last_buy_price is not None:
+                desired_target = self._normalize_target_price(
+                    self.strategy.last_buy_price * (1 - self.strategy.config.buy_rate)
+                )
 
-        if has_active_positions:
-            if self.strategy.next_buy_target_price != desired_target:
-                self.strategy.next_buy_target_price = desired_target
-                state_changed = True
-        else:
-            rebuy = self.strategy.config.rebuy_strategy
-            if rebuy == "reset_on_clear":
-                if self.strategy.next_buy_target_price is not None:
-                    logging.info("Price Logic: All positions closed. Resetting next_buy_target_price.")
-                    self.strategy.next_buy_target_price = None
-                    state_changed = True
-            else:
-                # For last_sell_price / last_buy_price, maintain immediate rebuy target from anchor.
-                if desired_target is not None and self.strategy.next_buy_target_price != desired_target:
+            if has_active_positions:
+                if self.strategy.next_buy_target_price != desired_target:
                     self.strategy.next_buy_target_price = desired_target
                     state_changed = True
+            else:
+                rebuy = self.strategy.config.rebuy_strategy
+                if rebuy == "reset_on_clear":
+                    if self.strategy.next_buy_target_price is not None:
+                        logging.info("Price Logic: All positions closed. Resetting next_buy_target_price.")
+                        self.strategy.next_buy_target_price = None
+                        state_changed = True
+                else:
+                    # For last_sell_price / last_buy_price, maintain immediate rebuy target from anchor.
+                    if desired_target is not None and self.strategy.next_buy_target_price != desired_target:
+                        self.strategy.next_buy_target_price = desired_target
+                        state_changed = True
 
         target_changed = prev_target != self.strategy.next_buy_target_price
         if target_changed:

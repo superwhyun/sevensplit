@@ -7,7 +7,6 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
 Base = declarative_base()
-PriceBase = declarative_base()
 
 
 class Strategy(Base):
@@ -31,7 +30,7 @@ class Strategy(Base):
     max_trades_per_day = Column(Integer, nullable=False, default=100)
 
     # RSI Strategy Configuration
-    strategy_mode = Column(String(20), nullable=False, default="PRICE") # PRICE or RSI
+    strategy_mode = Column(String(20), nullable=False, default="PRICE") # PRICE or RSI (ALL removed)
     rsi_period = Column(Integer, nullable=False, default=14)
     rsi_timeframe = Column(String(20), nullable=False, default="minutes/60")
     
@@ -215,14 +214,3 @@ class CandleDays(Base):
     volume = Column(Float, nullable=False)
     kst_time = Column(String(30), nullable=True)
     utc_time = Column(String(30), nullable=True)
-
-
-class PriceTick(PriceBase):
-    """Realtime price ticks (separate DB)"""
-    __tablename__ = 'price_ticks'
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    ticker = Column(String(20), nullable=False, index=True)
-    price = Column(Float, nullable=False)
-    source = Column(String(20), nullable=False, default="upbit")
-    captured_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)

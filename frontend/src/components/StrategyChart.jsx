@@ -100,7 +100,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], tr
 
     const isRsiMode = (mode) => {
         const normalized = (mode || '').toString().toUpperCase();
-        return normalized === 'RSI' || normalized === 'ALL';
+        return normalized === 'RSI';
     };
 
     const fetchCandles = async (to = null, isHistory = false) => {

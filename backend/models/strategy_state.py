@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Literal
 
 
 class PriceSegment(BaseModel):
@@ -20,7 +20,7 @@ class StrategyConfig(BaseModel):
     max_trades_per_day: int = 100 # Max trades allowed per 24 hours
 
     # RSI Strategy Configuration
-    strategy_mode: str = "PRICE" # PRICE or RSI
+    strategy_mode: Literal["PRICE", "RSI"] = "PRICE"
     rsi_period: int = 14
     rsi_timeframe: str = "minutes/60"
     

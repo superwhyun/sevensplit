@@ -30,9 +30,16 @@ const EventLog = ({ strategyId, apiBaseUrl, status, simulationEvents = null }) =
     const fetchEvents = async () => {
         if (useSimulationEvents) return;
         try {
+            const gateTypes = ['BUY_GATE', 'WATCH_START', 'WATCH_END'];
             // Don't set loading on poll to avoid flickering
             // setLoading(true); 
-            const response = await axios.get(`${apiBaseUrl}/strategies/${strategyId}/events?page=${page}&limit=10`);
+            const response = await axios.get(`${apiBaseUrl}/strategies/${strategyId}/events`, {
+                params: {
+                    page,
+                    limit: 10,
+                    event_types: gateTypes.join(','),
+                }
+            });
             setEvents(response.data.events);
             setTotalPages(response.data.total_pages);
             // setLoading(false);

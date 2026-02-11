@@ -67,10 +67,13 @@ def delete_strategy(strategy_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/strategies/{strategy_id}/events")
-def get_strategy_events(strategy_id: int, page: int = 1, limit: int = 10):
+def get_strategy_events(strategy_id: int, page: int = 1, limit: int = 10, event_types: Optional[str] = None):
     """Get system events for a strategy"""
     try:
-        return db.get_events(strategy_id, page=page, limit=limit)
+        types = None
+        if event_types:
+            types = [t.strip() for t in event_types.split(",") if t.strip()]
+        return db.get_events(strategy_id, page=page, limit=limit, event_types=types)
     except Exception as e:
         logging.error(f"Failed to fetch events: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch events")
@@ -255,7 +258,14 @@ def update_config(req: ConfigRequest):
         logging.info(f"[update_config] Config: {req.config.model_dump()}")
         logging.info(f"[update_config] Budget: {req.budget}")
         strategy_service.update_config(req.strategy_id, req.config, req.budget)
-        return {"status": "success", "message": "Configuration updated"}
+        synced = simulation_service.update_live_config(req.strategy_id, req.config, req.budget)
+        if synced > 0:
+            logging.info(f"[update_config] Synced config to {synced} live simulation session(s)")
+        return {
+            "status": "success",
+            "message": "Configuration updated",
+            "synced_live_sessions": synced,
+        }
     except Exception as e:
         logging.error(f"[update_config] Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -264,7 +274,14 @@ def update_config(req: ConfigRequest):
 def set_manual_target(strategy_id: int, req: ManualTargetRequest):
     try:
         strategy_service.set_manual_target(strategy_id, req.target_price)
-        return {"status": "success", "message": "Next buy target updated"}
+        synced = simulation_service.update_live_manual_target(strategy_id, req.target_price)
+        if synced > 0:
+            logging.info(f"[manual_target] Synced manual target to {synced} live simulation session(s)")
+        return {
+            "status": "success",
+            "message": "Next buy target updated",
+            "synced_live_sessions": synced,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -348,6 +365,7 @@ def start_live_simulation(req: LiveSimulationStartRequest):
         return simulation_service.start_live(
             strategy_id=req.strategy_id,
             exec_interval=req.exec_interval,
+            replay_days=req.replay_days,
             poll_seconds=req.poll_seconds,
             initial_krw=req.initial_krw,
         )

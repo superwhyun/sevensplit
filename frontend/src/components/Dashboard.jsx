@@ -234,7 +234,7 @@ const StartBotModal = ({ isOpen, onClose, onStart, loading }) => {
     if (!isOpen) return null;
 
     const options = [
-        { key: 'live', label: 'Live (Now)', desc: 'Start simulation from latest candle' },
+        { key: 'live', label: 'Live (Now)', desc: 'Start from current market and run continuously' },
         { key: '1d', label: 'Replay 1d', desc: 'Replay from 1 day ago to now' },
         { key: '3d', label: 'Replay 3d', desc: 'Replay from 3 days ago to now' },
         { key: '7d', label: 'Replay 7d', desc: 'Replay from 7 days ago to now' },
@@ -251,7 +251,7 @@ const StartBotModal = ({ isOpen, onClose, onStart, loading }) => {
             }}>
                 <h2 style={{ marginTop: 0, color: '#f8fafc', marginBottom: '0.4rem' }}>Start Dev Bot</h2>
                 <p style={{ marginTop: 0, color: '#94a3b8', fontSize: '0.85rem' }}>
-                    Choose where to start simulation from.
+                    Choose where to start from. Replay starts from past candles, then continues with live ticks.
                 </p>
                 <div style={{ display: 'grid', gap: '0.6rem', marginTop: '1rem' }}>
                     {options.map((opt) => (
@@ -574,17 +574,14 @@ const Dashboard = () => {
             try {
                 if (liveSessionId && liveSessionState?.status === 'running') {
                     await axios.post(`${API_BASE_URL}/simulations/live/${liveSessionId}/stop`);
+                    await fetchLiveSessionStatus(liveSessionId);
                 }
             } catch (error) {
                 console.error('Error stopping live simulation:', error);
             } finally {
-                setSimOverlayState(null);
-                setSimMeta(null);
-                setSimSystemEvents([]);
-                setLiveSessionId(null);
-                setLiveSessionState(null);
+                // Keep current simulated state/markers visible (pause-like behavior),
+                // only live runtime status is switched to "stopped".
                 setLiveError('');
-                clearReplaySnapshot(selectedStrategyId);
                 setSimActionLoading(false);
                 fetchStatus();
             }
@@ -730,7 +727,10 @@ const Dashboard = () => {
             await axios.post(`${API_BASE_URL}/strategies/${selectedStrategyId}/manual-target`, {
                 target_price: price
             });
-            fetchStatus(); // Refresh UI
+            fetchStatus(); // Refresh base status UI
+            if (liveSessionId) {
+                await fetchLiveSessionStatus(liveSessionId);
+            }
         } catch (error) {
             console.error('Error setting manual target:', error);
             alert('Failed to set manual target price');
@@ -763,7 +763,7 @@ const Dashboard = () => {
                     status: 'Simulation (Live)',
                 });
                 setSimMeta({
-                    mode: 'live',
+                    mode: response.data?.replay_days ? `replay+live-${response.data.replay_days}d` : 'live',
                     trades: response.data?.trades ?? 0,
                     realized_profit: response.data?.realized_profit ?? 0,
                     source: 'live'
@@ -772,10 +772,20 @@ const Dashboard = () => {
             }
             setLiveError('');
         } catch (error) {
-            console.error('Error fetching live simulation status:', error);
+            const detail = error.response?.data?.detail || '';
+            const notFound = String(detail).toLowerCase().includes('not found');
+            if (!notFound) {
+                console.error('Error fetching live simulation status:', error);
+            }
             setLiveSessionState(null);
             setLiveSessionId(null);
-            setLiveError(error.response?.data?.detail || 'Failed to fetch live simulation status');
+            // Session can disappear after backend restart or stale client state.
+            // Clear it silently to avoid noisy UX.
+            if (notFound) {
+                setLiveError('');
+                return;
+            }
+            setLiveError(detail || 'Failed to fetch live simulation status');
         }
     };
 
@@ -785,67 +795,25 @@ const Dashboard = () => {
         setLiveError('');
         setIsStartBotModalOpen(false);
         try {
-            if (startOption === 'live') {
-                clearReplaySnapshot(selectedStrategyId);
-                const response = await axios.post(`${API_BASE_URL}/simulations/live/start`, {
-                    strategy_id: selectedStrategyId,
-                    poll_seconds: 10
-                });
-                const sessionId = response.data?.session_id;
-                setLiveSessionId(sessionId || null);
-                setSimMeta({
-                    mode: 'live',
-                    trades: 0,
-                    realized_profit: 0,
-                    source: 'live'
-                });
-                setSimSystemEvents([]);
-                if (sessionId) {
-                    await fetchLiveSessionStatus(sessionId);
-                }
-                return;
-            }
-
-            const days = parseInt(startOption.replace('d', ''), 10);
-            const now = new Date();
-            const start = new Date(now.getTime() - (days * 24 * 60 * 60 * 1000));
-            const response = await axios.post(`${API_BASE_URL}/simulations/backtest`, {
+            clearReplaySnapshot(selectedStrategyId);
+            const replayDays = startOption === 'live' ? 0 : parseInt(startOption.replace('d', ''), 10);
+            const response = await axios.post(`${API_BASE_URL}/simulations/live/start`, {
                 strategy_id: selectedStrategyId,
-                start_time: start.toISOString(),
-                end_time: now.toISOString(),
-                max_candles: 5000
+                replay_days: replayDays > 0 ? replayDays : null,
+                poll_seconds: 1
             });
-            setLiveSessionId(null);
-            setLiveSessionState(null);
-            setSimOverlayState(response.data?.final_state ? {
-                ...response.data.final_state,
-                is_running: true,
-                status: `Simulation (Replay ${days}d)`,
-            } : null);
+            const sessionId = response.data?.session_id;
+            setLiveSessionId(sessionId || null);
             setSimMeta({
-                mode: `replay-${days}d`,
-                trades: response.data?.trades ?? 0,
-                realized_profit: response.data?.realized_profit ?? 0,
-                candles: response.data?.candles_used ?? 0,
-                source: 'backtest'
+                mode: replayDays > 0 ? `replay+live-${replayDays}d` : 'live',
+                trades: 0,
+                realized_profit: 0,
+                source: 'live'
             });
-            setSimSystemEvents(response.data?.sim_events || []);
-            saveReplaySnapshot(selectedStrategyId, {
-                at: Date.now(),
-                overlay_state: response.data?.final_state ? {
-                    ...response.data.final_state,
-                    is_running: true,
-                    status: `Simulation (Replay ${days}d)`,
-                } : null,
-                meta: {
-                    mode: `replay-${days}d`,
-                    trades: response.data?.trades ?? 0,
-                    realized_profit: response.data?.realized_profit ?? 0,
-                    candles: response.data?.candles_used ?? 0,
-                    source: 'backtest'
-                },
-                sim_events: response.data?.sim_events || [],
-            });
+            setSimSystemEvents([]);
+            if (sessionId) {
+                await fetchLiveSessionStatus(sessionId);
+            }
         } catch (error) {
             console.error('Error starting dev bot simulation:', error);
             const msg = error.response?.data?.detail || 'Failed to start simulation';
@@ -877,7 +845,9 @@ const Dashboard = () => {
     const displayedStatus = simOverlayState || status;
     const resolvedConfig = strategyConfig ?? displayedStatus?.config ?? {};
     const isDevMode = portfolio?.mode === 'DEV';
-    const isDevSimulationActive = isDevMode && (!!liveSessionId || !!simOverlayState);
+    const isDevSimulationActive = isDevMode && (liveSessionState?.status === 'running');
+    const gateEventTypes = new Set(['BUY_GATE', 'WATCH_START', 'WATCH_END']);
+    const simEventsForLog = (simSystemEvents || []).filter((e) => gateEventTypes.has(e?.event_type));
 
     useEffect(() => {
         let mounted = true;
@@ -1875,7 +1845,7 @@ const Dashboard = () => {
                                     strategyId={selectedStrategyId}
                                     apiBaseUrl={API_BASE_URL}
                                     status={displayedStatus?.status}
-                                    simulationEvents={simOverlayState ? simSystemEvents : null}
+                                    simulationEvents={simOverlayState ? simEventsForLog : null}
                                 />
                             </div>
                         </main>

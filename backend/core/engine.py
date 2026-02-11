@@ -3,7 +3,7 @@ import threading
 import time
 from typing import Dict, Iterable, List, Optional, Set
 
-from database import get_candle_db, get_price_db
+from database import get_candle_db
 from core.config import (
     accounts_cache,
     candle_cache,
@@ -163,7 +163,6 @@ class StrategyEngine:
         self.loop_interval = loop_interval
         self.last_tick_time: Dict[int, float] = {}
         self.candle_db = get_candle_db()
-        self.price_db = get_price_db()
 
     def run_forever(self):
         while True:
@@ -184,7 +183,6 @@ class StrategyEngine:
 
         prices = self._fetch_prices(tickers)
         self.shared_prices.update(prices)
-        self._persist_prices(prices)
 
         open_orders = self._fetch_open_orders()
         now = time.time()
@@ -228,12 +226,6 @@ class StrategyEngine:
             except Exception as e:
                 logging.error(f"Failed to fetch price for {ticker}: {e}")
         return prices
-
-    def _persist_prices(self, prices: Dict[str, float]):
-        try:
-            self.price_db.save_prices(prices, source="upbit")
-        except Exception as e:
-            logging.error(f"Failed to persist realtime prices: {e}")
 
     def _fetch_open_orders(self):
         if not hasattr(self.exchange, "get_orders"):

@@ -2,23 +2,23 @@
 
 import logging
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from .models import (
     Base,
-    PriceBase,
     CandleDays,
     CandleMinutes5,
     CandleMinutes60,
-    PriceTick,
     Split,
     Strategy,
     SystemEvent,
     Trade,
 )
+
+MAX_SYSTEM_EVENTS_PER_STRATEGY = 200
 
 
 class DatabaseManager:
@@ -107,7 +107,17 @@ class DatabaseManager:
                     if col_name not in columns:
                         print(f"Migrating: Adding {col_name} to strategies table")
                         conn.execute(text(f"ALTER TABLE strategies ADD COLUMN {col_name} {col_def}"))
-                
+
+                # Normalize deprecated/invalid strategy modes to PRICE.
+                conn.execute(
+                    text(
+                        "UPDATE strategies "
+                        "SET strategy_mode = 'PRICE' "
+                        "WHERE strategy_mode IS NULL "
+                        "OR UPPER(TRIM(strategy_mode)) NOT IN ('PRICE', 'RSI')"
+                    )
+                )
+
                 conn.commit()
             except Exception as e:
                 print(f"Migration warning (strategies RSI): {e}")
@@ -448,7 +458,7 @@ class DatabaseManager:
 
     # System Event Operations
     def add_event(self, strategy_id: int, level: str, event_type: str, message: str):
-        """Add a system event with log rotation (max 200)"""
+        """Add a system event with log rotation (max 200)."""
         session = self.get_session()
         try:
             # 1. Insert new event
@@ -462,13 +472,10 @@ class DatabaseManager:
             )
             session.add(event)
             
-            # 2. Check and rotate (Keep max 200 per strategy)
-            # Optimization: Only check occasionally or check every time? 200 is small.
+            # 2. Check and rotate (keep only latest N events per strategy)
             count = session.query(SystemEvent).filter_by(strategy_id=strategy_id).count()
-            if count > 200:
-                # Delete oldest (count - 200 + buffer)
-                # Let's delete excess
-                num_to_delete = count - 200
+            if count > MAX_SYSTEM_EVENTS_PER_STRATEGY:
+                num_to_delete = count - MAX_SYSTEM_EVENTS_PER_STRATEGY
                 if num_to_delete > 0:
                     subq = session.query(SystemEvent.id).\
                         filter_by(strategy_id=strategy_id).\
@@ -485,11 +492,13 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def get_events(self, strategy_id: int, page: int = 1, limit: int = 10):
+    def get_events(self, strategy_id: int, page: int = 1, limit: int = 10, event_types=None):
         """Get events with pagination"""
         session = self.get_session()
         try:
             query = session.query(SystemEvent).filter_by(strategy_id=strategy_id).order_by(SystemEvent.timestamp.desc())
+            if event_types:
+                query = query.filter(SystemEvent.event_type.in_(event_types))
             
             total = query.count()
             
@@ -656,96 +665,5 @@ class DatabaseManager:
                     'candle_date_time_utc': utc_val
                 })
             return results
-        finally:
-            session.close()
-
-
-class PriceDatabaseManager:
-    """Dedicated database manager for realtime price ticks."""
-
-    def __init__(self, db_path: str = None):
-        if db_path is None:
-            backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            db_path = os.getenv("PRICE_DB_PATH") or os.path.join(backend_dir, "database", "price_data.db")
-
-        self.db_path = db_path
-        db_dir = os.path.dirname(os.path.abspath(self.db_path))
-        os.makedirs(db_dir, exist_ok=True)
-        print(f"Using Price Database: {self.db_path}")
-        self.engine = create_engine(f"sqlite:///{db_path}", echo=False)
-
-        from sqlalchemy import text
-        with self.engine.connect() as conn:
-            conn.execute(text("PRAGMA journal_mode=WAL"))
-            conn.commit()
-
-        PriceBase.metadata.create_all(self.engine)
-        self.SessionLocal = sessionmaker(bind=self.engine)
-        self.ttl_days = int(os.getenv("PRICE_TICK_TTL_DAYS", "7"))
-        self._last_prune_ts = 0.0
-
-    def get_session(self) -> Session:
-        return self.SessionLocal()
-
-    def save_prices(self, prices: dict, source: str = "upbit"):
-        """Persist current ticker prices as tick rows."""
-        if not prices:
-            return
-
-        session = self.get_session()
-        try:
-            now = datetime.now(timezone.utc)
-            rows = []
-            for ticker, price in prices.items():
-                if price is None:
-                    continue
-                try:
-                    rows.append(
-                        PriceTick(
-                            ticker=str(ticker),
-                            price=float(price),
-                            source=source,
-                            captured_at=now,
-                        )
-                    )
-                except Exception:
-                    continue
-
-            if rows:
-                session.add_all(rows)
-                session.commit()
-                self._prune_old_ticks_if_needed()
-        except Exception as e:
-            logging.error(f"❌ [PRICE_DB] Failed to save prices: {e}")
-            session.rollback()
-        finally:
-            session.close()
-
-    def _prune_old_ticks_if_needed(self):
-        """Prune old price ticks periodically based on TTL days."""
-        if self.ttl_days <= 0:
-            return
-
-        import time
-        now_ts = time.time()
-        # Run prune at most once per 10 minutes.
-        if now_ts - self._last_prune_ts < 600:
-            return
-
-        cutoff = datetime.now(timezone.utc) - timedelta(days=self.ttl_days)
-        session = self.get_session()
-        try:
-            deleted = (
-                session.query(PriceTick)
-                .filter(PriceTick.captured_at < cutoff)
-                .delete(synchronize_session=False)
-            )
-            session.commit()
-            self._last_prune_ts = now_ts
-            if deleted > 0:
-                logging.info(f"[PRICE_DB] Pruned {deleted} old ticks (TTL={self.ttl_days}d)")
-        except Exception as e:
-            logging.error(f"[PRICE_DB] Failed to prune old ticks: {e}")
-            session.rollback()
         finally:
             session.close()
