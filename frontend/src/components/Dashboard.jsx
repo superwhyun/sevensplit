@@ -576,8 +576,11 @@ const Dashboard = () => {
                     await axios.post(`${API_BASE_URL}/simulations/live/${liveSessionId}/stop`);
                     await fetchLiveSessionStatus(liveSessionId);
                 }
+                // In DEV mode, make sure the real strategy loop is also paused.
+                // Otherwise buys can continue in backend even after stopping simulation.
+                await axios.post(`${API_BASE_URL}/bot/stop`, { strategy_id: selectedStrategyId });
             } catch (error) {
-                console.error('Error stopping live simulation:', error);
+                console.error('Error stopping dev runtime:', error);
             } finally {
                 // Keep current simulated state/markers visible (pause-like behavior),
                 // only live runtime status is switched to "stopped".
@@ -795,6 +798,8 @@ const Dashboard = () => {
         setLiveError('');
         setIsStartBotModalOpen(false);
         try {
+            // Ensure real strategy loop is not running in parallel with live simulation.
+            await axios.post(`${API_BASE_URL}/bot/stop`, { strategy_id: selectedStrategyId });
             clearReplaySnapshot(selectedStrategyId);
             const replayDays = startOption === 'live' ? 0 : parseInt(startOption.replace('d', ''), 10);
             const response = await axios.post(`${API_BASE_URL}/simulations/live/start`, {
@@ -846,6 +851,8 @@ const Dashboard = () => {
     const resolvedConfig = strategyConfig ?? displayedStatus?.config ?? {};
     const isDevMode = portfolio?.mode === 'DEV';
     const isDevSimulationActive = isDevMode && (liveSessionState?.status === 'running');
+    const isDevBotRunning = isDevMode && !!displayedStatus?.is_running;
+    const canStartInDev = isDevMode && !isDevSimulationActive && !isDevBotRunning;
     const gateEventTypes = new Set(['BUY_GATE', 'WATCH_START', 'WATCH_END']);
     const simEventsForLog = (simSystemEvents || []).filter((e) => gateEventTypes.has(e?.event_type));
 
@@ -1227,7 +1234,7 @@ const Dashboard = () => {
                                     alignItems: 'stretch'
                                 }}>
                                     {/* 1. Start/Stop Bot */}
-                                    {((isDevMode && !isDevSimulationActive) || (!isDevMode && !displayedStatus.is_running)) ? (
+                                    {((isDevMode && canStartInDev) || (!isDevMode && !displayedStatus.is_running)) ? (
                                         <button className="btn btn-primary" onClick={handleStart} style={{
                                             padding: '0',
                                             height: '60px',
@@ -1255,7 +1262,7 @@ const Dashboard = () => {
                                             gap: '0.25rem'
                                         }}>
                                             <span style={{ fontSize: '1.2rem' }}>⏸</span>
-                                            <span>{isDevMode ? 'Stop Simulation' : 'Stop Bot'}</span>
+                                            <span>{isDevMode ? (isDevSimulationActive ? 'Stop Simulation' : 'Stop Bot') : 'Stop Bot'}</span>
                                         </button>
                                     )}
 
