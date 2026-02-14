@@ -57,9 +57,9 @@ class StrategyService:
             raise ValueError("Strategy not found")
         
         try:
-            # Stop if running
-            if self.strategies[strategy_id].is_running:
-                self.strategies[strategy_id].stop()
+            strategy = self.strategies[strategy_id]
+            # Delete must be a full teardown regardless of running state.
+            strategy.hard_stop()
                 
             # Remove from memory
             del self.strategies[strategy_id]
@@ -89,6 +89,11 @@ class StrategyService:
         if strategy_id not in self.strategies:
             raise ValueError("Strategy not found")
         self.strategies[strategy_id].stop()
+
+    def hard_stop_strategy(self, strategy_id: int):
+        if strategy_id not in self.strategies:
+            raise ValueError("Strategy not found")
+        self.strategies[strategy_id].hard_stop()
 
     def update_config(self, strategy_id: int, config: StrategyConfig, budget: float = None):
         if strategy_id not in self.strategies:

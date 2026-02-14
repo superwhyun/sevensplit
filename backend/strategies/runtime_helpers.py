@@ -482,7 +482,7 @@ class StrategyLifecycleManager:
         strategy.is_running = True
         strategy.save_state()
 
-    def stop(self, strategy) -> None:
+    def stop(self, strategy, cancel_sells: bool = False) -> None:
         strategy.is_running = False
         for split in strategy.splits:
             if split.status == "PENDING_BUY" and split.buy_order_uuid:
@@ -492,7 +492,7 @@ class StrategyLifecycleManager:
                 except Exception as e:
                     logging.error(f"Failed to cancel buy order {split.buy_order_uuid}: {e}")
                 split.buy_order_uuid = None
-            elif split.status == "PENDING_SELL" and split.sell_order_uuid:
+            elif cancel_sells and split.status == "PENDING_SELL" and split.sell_order_uuid:
                 try:
                     strategy.exchange.cancel_order(split.sell_order_uuid)
                     logging.info(f"Cancelled sell order {split.sell_order_uuid} for split {split.id}")

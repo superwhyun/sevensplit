@@ -116,6 +116,11 @@ class SevenSplitStrategy(BaseStrategy):
         with self.lock:
             self.lifecycle_manager.stop(self)
 
+    def hard_stop(self):
+        """Hard stop: cancel both pending buy and pending sell orders."""
+        with self.lock:
+            self.lifecycle_manager.stop(self, cancel_sells=True)
+
     # update_config is inherited from BaseStrategy
 
     def has_sufficient_budget(self, market_context: dict = None) -> bool:

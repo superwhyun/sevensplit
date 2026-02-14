@@ -598,6 +598,37 @@ const Dashboard = () => {
         }
     };
 
+    const handleHardStop = async () => {
+        if (!window.confirm('Stop Trading will cancel both pending BUY and SELL orders. Continue?')) {
+            return;
+        }
+
+        if (portfolio?.mode === 'DEV') {
+            setSimActionLoading(true);
+            try {
+                if (liveSessionId && liveSessionState?.status === 'running') {
+                    await axios.post(`${API_BASE_URL}/simulations/live/${liveSessionId}/stop`);
+                    await fetchLiveSessionStatus(liveSessionId);
+                }
+                await axios.post(`${API_BASE_URL}/bot/hard-stop`, { strategy_id: selectedStrategyId });
+            } catch (error) {
+                console.error('Error hard-stopping dev runtime:', error);
+            } finally {
+                setLiveError('');
+                setSimActionLoading(false);
+                fetchStatus();
+            }
+            return;
+        }
+
+        try {
+            await axios.post(`${API_BASE_URL}/bot/hard-stop`, { strategy_id: selectedStrategyId });
+            fetchStatus();
+        } catch (error) {
+            console.error('Error hard-stopping bot:', error);
+        }
+    };
+
     const handleReset = async () => {
         if (!window.confirm(`Are you sure you want to reset this strategy?\n\nThis will:\n- Cancel all active orders for this strategy\n- Clear active splits (positions)\n- DELETE all trade history\n\n(Your wallet balance will NOT be reset)`)) {
             return;
@@ -1229,7 +1260,7 @@ const Dashboard = () => {
                             }}>
                                 <div className="controls-container" style={{
                                     display: 'grid',
-                                    gridTemplateColumns: 'repeat(4, 1fr)',
+                                    gridTemplateColumns: 'repeat(5, 1fr)',
                                     gap: '0.75rem',
                                     alignItems: 'stretch'
                                 }}>
@@ -1262,11 +1293,30 @@ const Dashboard = () => {
                                             gap: '0.25rem'
                                         }}>
                                             <span style={{ fontSize: '1.2rem' }}>⏸</span>
-                                            <span>{isDevMode ? (isDevSimulationActive ? 'Stop Simulation' : 'Stop Bot') : 'Stop Bot'}</span>
+                                            <span>{isDevMode ? (isDevSimulationActive ? 'Stop Simulation' : 'Stop Buying') : 'Stop Buying'}</span>
                                         </button>
                                     )}
 
-                                    {/* 2. Reset */}
+                                    {/* 2. Hard Stop */}
+                                    <button className="btn btn-danger" onClick={handleHardStop} style={{
+                                        padding: '0',
+                                        height: '60px',
+                                        fontSize: '0.95rem',
+                                        width: '100%',
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        gap: '0.25rem',
+                                        backgroundColor: '#b91c1c',
+                                        borderColor: '#b91c1c',
+                                        color: 'white'
+                                    }}>
+                                        <span style={{ fontSize: '1.2rem' }}>⛔</span>
+                                        <span>Stop Trading</span>
+                                    </button>
+
+                                    {/* 3. Reset */}
                                     <button className="btn btn-secondary" onClick={handleReset} style={{
                                         padding: '0',
                                         height: '60px',
@@ -1284,7 +1334,7 @@ const Dashboard = () => {
                                         <span style={{ fontSize: '1.2rem' }}>🔄</span>
                                         <span>Reset</span>
                                     </button>
-                                    {/* 3. Export CSV */}
+                                    {/* 4. Export CSV */}
                                     <button className="btn btn-secondary" onClick={handleExport} style={{
                                         padding: '0',
                                         height: '60px',
@@ -1303,7 +1353,7 @@ const Dashboard = () => {
                                         <span>Export CSV</span>
                                     </button>
 
-                                    {/* 4. Delete Strategy (Always Last) */}
+                                    {/* 5. Delete Strategy (Always Last) */}
                                     <button onClick={handleDeleteStrategy} style={{
                                         padding: '0',
                                         height: '60px',

@@ -251,6 +251,14 @@ def stop_bot(cmd: CommandRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/bot/hard-stop")
+def hard_stop_bot(cmd: CommandRequest):
+    try:
+        strategy_service.hard_stop_strategy(cmd.strategy_id)
+        return {"status": "success", "message": "Bot hard-stopped"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/strategies/config")
 def update_config(req: ConfigRequest):
     try:
