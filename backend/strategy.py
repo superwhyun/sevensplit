@@ -25,6 +25,7 @@ class SevenSplitStrategy(BaseStrategy):
         self.next_split_id = 1
         self.last_buy_price = None # Track the last buy price for creating next split
         self.last_sell_price = None # Track the last sell price for rebuy strategy
+        self.last_buy_date = None # Track the last buy date for RSI daily limits
         self.last_sell_date = None # Track the last sell date for daily limits
         self.next_buy_target_price = None # Single source of truth for next buy target
         self.budget = budget

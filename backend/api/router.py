@@ -310,7 +310,15 @@ def update_strategy_name(strategy_id: int, req: UpdateNameRequest):
 def reset_strategy(cmd: CommandRequest):
     """Reset a specific strategy"""
     try:
+        # 1. Stop any active simulations for this strategy
+        try:
+            simulation_service.stop_all_live_by_strategy(cmd.strategy_id)
+        except Exception as sim_err:
+            logging.warning(f"Failed to stop simulation during reset: {sim_err}")
+
+        # 2. Reset strategy data (splits, trades, state)
         strategy_service.reset_strategy(cmd.strategy_id)
+        
         return {"status": "success", "message": "Strategy reset"}
     except Exception as e:
         logging.error(f"Failed to reset strategy: {e}")

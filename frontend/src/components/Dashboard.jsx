@@ -3,6 +3,7 @@ import axios from 'axios';
 import StrategyChart from './StrategyChart';
 import Config from './Config';
 import EventLog from './EventLog';
+import StrategyStatusPanel from './StrategyStatusPanel';
 import './Dashboard.css';
 
 const AddStrategyModal = ({ isOpen, onClose, onAdd }) => {
@@ -230,15 +231,31 @@ const StatusPeekModal = ({ isOpen, onClose, statusMsg, ticker }) => {
     );
 };
 
-const StartBotModal = ({ isOpen, onClose, onStart, loading }) => {
+const StartBotModal = ({ isOpen, onClose, onStart, loading, strategyMode }) => {
     if (!isOpen) return null;
 
-    const options = [
+    const isRSI = strategyMode === 'RSI';
+
+    const priceOptions = [
         { key: 'live', label: 'Live (Now)', desc: 'Start from current market and run continuously' },
         { key: '1d', label: 'Replay 1d', desc: 'Replay from 1 day ago to now' },
         { key: '3d', label: 'Replay 3d', desc: 'Replay from 3 days ago to now' },
         { key: '7d', label: 'Replay 7d', desc: 'Replay from 7 days ago to now' },
     ];
+
+    const rsiOptions = [
+        { key: 'live', label: 'Live (Now)', desc: 'Start from current market and run continuously' },
+        { key: '1m', label: 'Replay 1 Month', desc: 'Replay ~30 daily candles, then continue live' },
+        { key: '3m', label: 'Replay 3 Months', desc: 'Replay ~90 daily candles, then continue live' },
+        { key: '6m', label: 'Replay 6 Months', desc: 'Replay ~180 daily candles, then continue live' },
+        { key: '9m', label: 'Replay 9 Months', desc: 'Replay ~270 daily candles, then continue live' },
+        { key: '12m', label: 'Replay 12 Months', desc: 'Replay ~365 daily candles, then continue live' },
+        { key: '15m', label: 'Replay 15 Months', desc: 'Replay ~455 daily candles, then continue live' },
+        { key: '18m', label: 'Replay 18 Months', desc: 'Replay ~548 daily candles, then continue live' },
+        { key: '21m', label: 'Replay 21 Months', desc: 'Replay ~638 daily candles, then continue live' },
+    ];
+
+    const options = isRSI ? rsiOptions : priceOptions;
 
     return (
         <div style={{
@@ -247,11 +264,14 @@ const StartBotModal = ({ isOpen, onClose, onStart, loading }) => {
         }}>
             <div style={{
                 backgroundColor: '#1e293b', padding: '1.5rem', borderRadius: '0.5rem', width: '460px',
+                maxHeight: '85vh', overflowY: 'auto',
                 border: '1px solid #334155', boxShadow: '0 10px 25px rgba(0,0,0,0.5)'
             }}>
                 <h2 style={{ marginTop: 0, color: '#f8fafc', marginBottom: '0.4rem' }}>Start Dev Bot</h2>
                 <p style={{ marginTop: 0, color: '#94a3b8', fontSize: '0.85rem' }}>
-                    Choose where to start from. Replay starts from past candles, then continues with live ticks.
+                    {isRSI
+                        ? 'RSI Mode: Choose a replay window. Longer periods provide more signal history.'
+                        : 'Choose where to start from. Replay starts from past candles, then continues with live ticks.'}
                 </p>
                 <div style={{ display: 'grid', gap: '0.6rem', marginTop: '1rem' }}>
                     {options.map((opt) => (
@@ -572,18 +592,20 @@ const Dashboard = () => {
         if (portfolio?.mode === 'DEV') {
             setSimActionLoading(true);
             try {
-                if (liveSessionId && liveSessionState?.status === 'running') {
-                    await axios.post(`${API_BASE_URL}/simulations/live/${liveSessionId}/stop`);
-                    await fetchLiveSessionStatus(liveSessionId);
+                if (liveSessionId) {
+                    try {
+                        console.log("[SIM] Force stopping simulation session:", liveSessionId);
+                        await axios.post(`${API_BASE_URL}/simulations/live/${liveSessionId}/stop`);
+                        await fetchLiveSessionStatus(liveSessionId);
+                    } catch (simErr) {
+                        console.warn('Simulation stop failed (continuing with bot stop):', simErr);
+                    }
                 }
-                // In DEV mode, make sure the real strategy loop is also paused.
-                // Otherwise buys can continue in backend even after stopping simulation.
                 await axios.post(`${API_BASE_URL}/bot/stop`, { strategy_id: selectedStrategyId });
             } catch (error) {
                 console.error('Error stopping dev runtime:', error);
+                alert(`Stop failed: ${error.response?.data?.detail || error.message}`);
             } finally {
-                // Keep current simulated state/markers visible (pause-like behavior),
-                // only live runtime status is switched to "stopped".
                 setLiveError('');
                 setSimActionLoading(false);
                 fetchStatus();
@@ -595,6 +617,7 @@ const Dashboard = () => {
             fetchStatus();
         } catch (error) {
             console.error('Error stopping bot:', error);
+            alert(`Stop failed: ${error.response?.data?.detail || error.message}`);
         }
     };
 
@@ -606,13 +629,19 @@ const Dashboard = () => {
         if (portfolio?.mode === 'DEV') {
             setSimActionLoading(true);
             try {
-                if (liveSessionId && liveSessionState?.status === 'running') {
-                    await axios.post(`${API_BASE_URL}/simulations/live/${liveSessionId}/stop`);
-                    await fetchLiveSessionStatus(liveSessionId);
+                if (liveSessionId) {
+                    try {
+                        console.log("[SIM] Force stopping simulation session:", liveSessionId);
+                        await axios.post(`${API_BASE_URL}/simulations/live/${liveSessionId}/stop`);
+                        await fetchLiveSessionStatus(liveSessionId);
+                    } catch (simErr) {
+                        console.warn('Simulation stop failed (continuing with hard stop):', simErr);
+                    }
                 }
                 await axios.post(`${API_BASE_URL}/bot/hard-stop`, { strategy_id: selectedStrategyId });
             } catch (error) {
                 console.error('Error hard-stopping dev runtime:', error);
+                alert(`Stop Trading failed: ${error.response?.data?.detail || error.message}`);
             } finally {
                 setLiveError('');
                 setSimActionLoading(false);
@@ -626,6 +655,7 @@ const Dashboard = () => {
             fetchStatus();
         } catch (error) {
             console.error('Error hard-stopping bot:', error);
+            alert(`Stop Trading failed: ${error.response?.data?.detail || error.message}`);
         }
     };
 
@@ -634,11 +664,30 @@ const Dashboard = () => {
             return;
         }
         try {
+            // Stop simulation if active in DEV mode
+            if (portfolio?.mode === 'DEV' && liveSessionId) {
+                try {
+                    await axios.post(`${API_BASE_URL}/simulations/live/${liveSessionId}/stop`);
+                } catch (e) {
+                    console.warn('Failed to stop simulation session on reset:', e);
+                }
+            }
+
             await axios.post(`${API_BASE_URL}/bot/reset`, { strategy_id: selectedStrategyId });
+
+            // Clear Simulation UI State
+            if (portfolio?.mode === 'DEV') {
+                setLiveError('');
+                setSimOverlayState(null);
+                setLiveSessionId(null);
+                setLiveSessionState(null);
+            }
+
             fetchStatus();
             fetchPortfolio();
         } catch (error) {
             console.error('Error resetting bot:', error);
+            alert(`Reset failed: ${error.response?.data?.detail || error.message}`);
         }
     };
 
@@ -800,6 +849,9 @@ const Dashboard = () => {
                     mode: response.data?.replay_days ? `replay+live-${response.data.replay_days}d` : 'live',
                     trades: response.data?.trades ?? 0,
                     realized_profit: response.data?.realized_profit ?? 0,
+                    cumulative_buy_amount: response.data?.cumulative_buy_amount ?? 0,
+                    cumulative_sell_amount: response.data?.cumulative_sell_amount ?? 0,
+                    max_invested_amount: response.data?.max_invested_amount ?? 0,
                     source: 'live'
                 });
                 setSimSystemEvents(response.data?.sim_events || []);
@@ -832,7 +884,9 @@ const Dashboard = () => {
             // Ensure real strategy loop is not running in parallel with live simulation.
             await axios.post(`${API_BASE_URL}/bot/stop`, { strategy_id: selectedStrategyId });
             clearReplaySnapshot(selectedStrategyId);
-            const replayDays = startOption === 'live' ? 0 : parseInt(startOption.replace('d', ''), 10);
+            const replayDays = startOption === 'live' ? 0
+                : startOption.endsWith('m') ? parseInt(startOption) * 30
+                    : parseInt(startOption.replace('d', ''), 10);
             const response = await axios.post(`${API_BASE_URL}/simulations/live/start`, {
                 strategy_id: selectedStrategyId,
                 replay_days: replayDays > 0 ? replayDays : null,
@@ -844,6 +898,9 @@ const Dashboard = () => {
                 mode: replayDays > 0 ? `replay+live-${replayDays}d` : 'live',
                 trades: 0,
                 realized_profit: 0,
+                cumulative_buy_amount: 0,
+                cumulative_sell_amount: 0,
+                max_invested_amount: 0,
                 source: 'live'
             });
             setSimSystemEvents([]);
@@ -976,6 +1033,7 @@ const Dashboard = () => {
                 onClose={() => setIsStartBotModalOpen(false)}
                 onStart={handleStartDevBot}
                 loading={simActionLoading}
+                strategyMode={resolvedConfig?.strategy_mode || 'PRICE'}
             />
 
             {/* Global Portfolio Header */}
@@ -1161,7 +1219,7 @@ const Dashboard = () => {
                                         {/* Daily RSI */}
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem', borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: '0.5rem' }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem' }}>
-                                                <span style={{ color: '#94a3b8' }}>RSI(14)/D</span>
+                                                <span style={{ color: '#94a3b8' }}>RSI({displayedStatus?.config?.rsi_period ?? 14})/D</span>
                                                 <span style={{ fontWeight: 'bold', color: (displayedStatus.rsi_daily >= 70) ? '#ef4444' : (displayedStatus.rsi_daily <= 30 && displayedStatus.rsi_daily != null) ? '#10b981' : '#f59e0b' }}>
                                                     {(displayedStatus.rsi_daily !== undefined && displayedStatus.rsi_daily !== null) ? Math.round(displayedStatus.rsi_daily) : '-'}
                                                 </span>
@@ -1391,6 +1449,9 @@ const Dashboard = () => {
                                                 <span style={{ color: (simMeta.realized_profit || 0) >= 0 ? '#10b981' : '#ef4444' }}>
                                                     {`P/L: ${(simMeta.realized_profit || 0) >= 0 ? '+' : ''}₩${Math.round(simMeta.realized_profit || 0).toLocaleString()}`}
                                                 </span>
+                                                <span>{`누적 매수: ₩${Math.round(simMeta.cumulative_buy_amount || 0).toLocaleString()}`}</span>
+                                                <span>{`누적 매도: ₩${Math.round(simMeta.cumulative_sell_amount || 0).toLocaleString()}`}</span>
+                                                <span>{`최대 투자금액: ₩${Math.round(simMeta.max_invested_amount || 0).toLocaleString()}`}</span>
                                                 {simMeta.candles ? <span>{`Candles: ${simMeta.candles}`}</span> : null}
                                                 {liveSessionState?.status ? <span>{`Live: ${liveSessionState.status}`}</span> : null}
                                             </div>
@@ -1420,8 +1481,8 @@ const Dashboard = () => {
                                 />
                             </div>
 
-                            {/* Segment Summary (if segments are defined) */}
-                            {strategyConfig?.price_segments?.length > 0 && (
+                            {/* Segment Summary (PRICE mode only) */}
+                            {(resolvedConfig?.strategy_mode || 'PRICE') !== 'RSI' && strategyConfig?.price_segments?.length > 0 && (
                                 <div className="card segment-status-card" style={{ marginBottom: '1rem' }}>
                                     <div className="card-header">
                                         <span className="card-title">Segment Status</span>
@@ -1516,199 +1577,13 @@ const Dashboard = () => {
                                 </div>
                             )}
 
-                            {/* Grid Status List */}
-                            <div className="grid-status-container">
-                                <div className="card" style={{ maxHeight: '600px', overflowY: 'auto', overflowX: 'auto' }}>
-                                    <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                        <span className="card-title">
-                                            Grid Status ({displayedStatus?.splits?.length || 0} Lines)
-                                        </span>
-                                        {(displayedStatus?.next_buy_target_price || displayedStatus?.last_buy_price) && (
-                                            <span
-                                                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
-                                            >
-                                                <span
-                                                    onClick={() => setIsManualTargetModalOpen(true)}
-                                                    style={{
-                                                        fontSize: '0.9rem',
-                                                        color: '#94a3b8',
-                                                        cursor: 'pointer',
-                                                        padding: '0.25rem 0.5rem',
-                                                        borderRadius: '0.25rem',
-                                                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                                                        border: '1px dashed rgba(59, 130, 246, 0.3)',
-                                                        transition: 'all 0.2s'
-                                                    }}
-                                                    className="hover-bright"
-                                                >
-                                                    Next Buy Target:
-                                                    <span style={{ color: '#3b82f6', fontWeight: 'bold' }}>
-                                                        {(() => {
-                                                            const nextTarget = getNextBuyTarget(displayedStatus);
-                                                            return nextTarget !== null ? `₩${nextTarget.toLocaleString()}` : '-';
-                                                        })()}
-                                                    </span>
-                                                    <span style={{ marginLeft: '0.5rem', fontSize: '0.8rem' }}>✏️</span>
-                                                </span>
-
-                                                <span
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        setIsStatusPeekModalOpen(true);
-                                                    }}
-                                                    style={{
-                                                        backgroundColor: '#3b82f6',
-                                                        color: 'white',
-                                                        padding: '0.2rem 0.5rem',
-                                                        borderRadius: '0.25rem',
-                                                        fontSize: '0.75rem',
-                                                        fontWeight: 'bold',
-                                                        cursor: 'pointer',
-                                                        display: 'flex',
-                                                        alignItems: 'center',
-                                                        gap: '0.25rem'
-                                                    }}
-                                                    className="hover-bright"
-                                                >
-                                                    🔍 PEEK
-                                                </span>
-                                            </span>
-                                        )}
-                                    </div>
-                                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-                                        <thead style={{ position: 'sticky', top: 0, backgroundColor: '#1e293b', zIndex: 10 }}>
-                                            <tr style={{ borderBottom: '1px solid #334155', color: '#94a3b8' }}>
-                                                <th style={{ padding: '1rem' }}>ID</th>
-                                                <th style={{ padding: '1rem' }}>Status</th>
-                                                <th style={{ padding: '1rem' }}>Buy Time</th>
-                                                <th style={{ padding: '1rem' }}>Info</th>
-                                                <th style={{ padding: '1rem' }}>Buy Price (vs Current)</th>
-                                                <th style={{ padding: '1rem' }}>Invested</th>
-                                                <th style={{ padding: '1rem' }}>Sell Target (vs Current)</th>
-                                                <th style={{ padding: '1rem' }}>Current P/L</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {(displayedStatus?.splits || []).map(split => {
-                                                const isBought = split.status === "BUY_FILLED" || split.status === "PENDING_SELL";
-
-                                                const effectivePrice = displayedStatus?.current_price;
-
-                                                const profitRate = isBought ? ((effectivePrice - split.buy_price) / split.buy_price * 100) : 0;
-
-                                                // Calculate rate vs current price
-                                                const buyPriceRate = ((split.buy_price - effectivePrice) / effectivePrice * 100);
-                                                const sellTargetPrice = split.target_sell_price > 0
-                                                    ? split.target_sell_price
-                                                    : split.buy_price * (1 + (displayedStatus?.config?.sell_rate || 0.005));
-                                                const sellTargetRate = ((sellTargetPrice - effectivePrice) / effectivePrice * 100);
-
-                                                return (
-                                                    <tr key={split.id} style={{ borderBottom: '1px solid #1e293b', backgroundColor: isBought ? 'rgba(16, 185, 129, 0.1)' : 'transparent' }}>
-                                                        <td style={{ padding: '1rem' }}>#{split.id}</td>
-                                                        <td style={{ padding: '1rem' }}>
-                                                            <span style={{
-                                                                padding: '0.25rem 0.5rem',
-                                                                borderRadius: '0.25rem',
-                                                                fontSize: '0.75rem',
-                                                                fontWeight: 'bold',
-                                                                backgroundColor: isBought ? '#10b981' : '#64748b',
-                                                                color: 'white'
-                                                            }}>
-                                                                {split.status}
-                                                            </span>
-                                                        </td>
-                                                        <td style={{ padding: '1rem', fontSize: '0.85rem', color: '#cbd5e1' }}>
-                                                            {formatTime(split.bought_at)}
-                                                        </td>
-                                                        <td style={{ padding: '1rem' }}>
-                                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                                                                {(() => {
-                                                                    const segments = strategyConfig?.price_segments;
-                                                                    if (segments && segments.length > 0) {
-                                                                        const segmentIndex = segments.findIndex(seg =>
-                                                                            split.buy_price >= seg.min_price && split.buy_price <= seg.max_price
-                                                                        );
-                                                                        if (segmentIndex !== -1) {
-                                                                            const colors = [
-                                                                                '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
-                                                                                '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#84cc16'
-                                                                            ];
-                                                                            return (
-                                                                                <span style={{
-                                                                                    fontSize: '0.7rem',
-                                                                                    backgroundColor: colors[segmentIndex % colors.length],
-                                                                                    color: 'white',
-                                                                                    padding: '0.1rem 0.4rem',
-                                                                                    borderRadius: '0.2rem',
-                                                                                    width: 'fit-content'
-                                                                                }}>
-                                                                                    Seg {segmentIndex + 1}
-                                                                                </span>
-                                                                            );
-                                                                        }
-                                                                    }
-                                                                    return null;
-                                                                })()}
-                                                                {split.is_accumulated && (
-                                                                    <span style={{
-                                                                        fontSize: '0.7rem',
-                                                                        backgroundColor: '#8b5cf6',
-                                                                        color: 'white',
-                                                                        padding: '0.1rem 0.4rem',
-                                                                        borderRadius: '0.2rem',
-                                                                        width: 'fit-content'
-                                                                    }}>
-                                                                        Accumulated
-                                                                    </span>
-                                                                )}
-                                                                {split.buy_rsi !== undefined && split.buy_rsi !== null && (
-                                                                    <span style={{ fontSize: '0.75rem', color: '#cbd5e1' }}>
-                                                                        RSI: {split.buy_rsi.toFixed(1)}
-                                                                    </span>
-                                                                )}
-                                                                {!split.is_accumulated && (split.buy_rsi === undefined || split.buy_rsi === null) && (
-                                                                    (() => {
-                                                                        const segments = strategyConfig?.price_segments;
-                                                                        const hasSegmentBadge = segments && segments.length > 0 && segments.some(seg =>
-                                                                            split.buy_price >= seg.min_price && split.buy_price <= seg.max_price
-                                                                        );
-                                                                        return hasSegmentBadge ? null : <span style={{ fontSize: '0.75rem', color: '#64748b' }}>-</span>;
-                                                                    })()
-                                                                )}
-                                                            </div>
-                                                        </td>
-                                                        <td style={{ padding: '1rem' }}>
-                                                            <div>₩{split.buy_price.toLocaleString()}</div>
-                                                            <div style={{
-                                                                fontSize: '0.75rem',
-                                                                color: buyPriceRate < 0 ? '#10b981' : buyPriceRate > 0 ? '#ef4444' : '#94a3b8'
-                                                            }}>
-                                                                {buyPriceRate > 0 ? '+' : ''}{buyPriceRate.toFixed(2)}%
-                                                            </div>
-                                                        </td>
-                                                        <td style={{ padding: '1rem' }}>
-                                                            ₩{(split.buy_amount || 0).toLocaleString()}
-                                                        </td>
-                                                        <td style={{ padding: '1rem' }}>
-                                                            <div>₩{sellTargetPrice.toLocaleString()}</div>
-                                                            <div style={{
-                                                                fontSize: '0.75rem',
-                                                                color: sellTargetRate < 0 ? '#ef4444' : sellTargetRate > 0 ? '#10b981' : '#94a3b8'
-                                                            }}>
-                                                                {sellTargetRate > 0 ? '+' : ''}{sellTargetRate.toFixed(2)}%
-                                                            </div>
-                                                        </td>
-                                                        <td style={{ padding: '1rem', color: profitRate > 0 ? '#10b981' : profitRate < 0 ? '#ef4444' : '#94a3b8' }}>
-                                                            {isBought ? `${profitRate.toFixed(2)}%` : '-'}
-                                                        </td>
-                                                    </tr>
-                                                );
-                                            })}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
+                            <StrategyStatusPanel
+                                strategyMode={resolvedConfig?.strategy_mode || 'PRICE'}
+                                status={displayedStatus}
+                                strategyConfig={strategyConfig}
+                                onManualTargetClick={() => setIsManualTargetModalOpen(true)}
+                                onPeekClick={() => setIsStatusPeekModalOpen(true)}
+                            />
 
                             {/* Recent Trades Section */}
                             {displayedStatus?.trade_history && displayedStatus?.trade_history.length > 0 && (

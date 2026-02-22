@@ -66,9 +66,9 @@ class TickPipeline:
         return True
 
     def evaluate_guards(self, strategy, ctx: TickContext) -> bool:
+        strategy.order_manager.manage_orders(strategy, ctx.open_order_uuids)
         if not strategy.is_running:
             return False
-        strategy.order_manager.manage_orders(strategy, ctx.open_order_uuids)
         return True
 
     def decide_actions(self, strategy, ctx: TickContext) -> bool:
@@ -86,11 +86,13 @@ class TickPipeline:
                 rsi_5m,
             )
             if proceed:
+                rsi_daily = ctx.indicators.get("rsi_daily")
                 buy_plan = strategy.price_logic.plan_buy(
                     ctx.current_price,
                     rsi_5m,
                     just_exited_watch=just_exited_watch,
                     market_context=ctx.market_context,
+                    rsi_daily=rsi_daily,
                 )
                 if buy_plan is None:
                     return True
@@ -117,6 +119,7 @@ class TickPipeline:
                     action.get("plan", {}).get("rsi_5m"),
                     market_context=ctx.market_context,
                     planned_buy=action.get("plan"),
+                    rsi_daily=ctx.indicators.get("rsi_daily"),
                 )
 
     def post_tick(self, strategy, ctx: TickContext) -> None:

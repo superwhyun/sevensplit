@@ -52,50 +52,36 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], tr
         setLastCandleTime(null);
     }, [ticker]);
 
-    // Calculate RSI (Dual: 14 and 4)
-    const calculateDualRSI = (data) => {
-        const calcRSI = (period) => {
-            if (data.length < period + 1) return [];
+    // Calculate RSI using the same Wilder smoothing rules as backend.
+    const calculateRSI = (data, period) => {
+        if (!Array.isArray(data) || data.length < period + 1) return [];
 
-            const results = [];
-            let gains = [];
-            let losses = [];
+        const closes = data.map(d => Number(d.close)).filter(v => Number.isFinite(v));
+        if (closes.length < period + 1) return [];
 
-            // 1. Calculate Deltas
-            for (let i = 1; i < data.length; i++) {
-                const change = data[i].close - data[i - 1].close;
-                gains.push(change > 0 ? change : 0);
-                losses.push(change < 0 ? Math.abs(change) : 0);
-            }
+        const gains = [];
+        const losses = [];
+        for (let i = 1; i < closes.length; i++) {
+            const change = closes[i] - closes[i - 1];
+            gains.push(change > 0 ? change : 0);
+            losses.push(change < 0 ? Math.abs(change) : 0);
+        }
 
-            // 2. Initial Average
-            let avgGain = gains.slice(0, period).reduce((a, b) => a + b, 0) / period;
-            let avgLoss = losses.slice(0, period).reduce((a, b) => a + b, 0) / period;
+        let avgGain = gains.slice(0, period).reduce((a, b) => a + b, 0) / period;
+        let avgLoss = losses.slice(0, period).reduce((a, b) => a + b, 0) / period;
 
-            // First RSI point
-            let rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-            let rsi = 100 - (100 / (1 + rs));
+        const result = [];
+        const firstRsi = avgLoss === 0 ? 100 : 100 - (100 / (1 + (avgGain / avgLoss)));
+        result.push({ time: data[period].time, value: firstRsi });
 
-            results.push({ time: data[period].time, value: rsi });
+        for (let i = period; i < gains.length; i++) {
+            avgGain = (avgGain * (period - 1) + gains[i]) / period;
+            avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
+            const rsi = avgLoss === 0 ? 100 : 100 - (100 / (1 + (avgGain / avgLoss)));
+            result.push({ time: data[i + 1].time, value: rsi });
+        }
 
-            // 3. Wilder's Smoothing
-            for (let i = period; i < gains.length; i++) {
-                avgGain = (avgGain * (period - 1) + gains[i]) / period;
-                avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
-
-                rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-                rsi = 100 - (100 / (1 + rs));
-
-                results.push({ time: data[i + 1].time, value: rsi });
-            }
-
-            return results;
-        };
-
-        return {
-            rsi14: calcRSI(14),
-            rsi4: calcRSI(4)
-        };
+        return result;
     };
 
     const isRsiMode = (mode) => {
@@ -248,11 +234,20 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], tr
                 const showRSI = isRsiMode(config?.strategy_mode) || config?.use_trailing_buy === true;
 
                 if (showRSI && rsiSeries14Ref.current) {
-                    const { rsi14, rsi4 } = calculateDualRSI(candleData);
-                    rsiSeries14Ref.current.setData(rsi14);
-
-                    // RSI(4) Removed as per user request
-                    // rsiSeries4Ref.current.setData(rsi4);
+                    const selectedPeriod = Number(config?.rsi_period) || 14;
+                    // RSI mode: align chart RSI with trade signal (D-1/D-2 based on closed candles).
+                    // Exclude the latest candle only when it belongs to today's KST date (in-progress).
+                    let rsiInput = candleData;
+                    if (isRsiMode(config?.strategy_mode) && candleData.length > 0) {
+                        const last = candleData[candleData.length - 1];
+                        const lastKstDate = new Date(last.time * 1000).toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
+                        const nowKstDate = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
+                        if (lastKstDate === nowKstDate) {
+                            rsiInput = candleData.slice(0, -1);
+                        }
+                    }
+                    const rsiSeriesData = calculateRSI(rsiInput, selectedPeriod);
+                    rsiSeries14Ref.current.setData(rsiSeriesData);
 
                     chartRef.current.priceScale('rsi').applyOptions({
                         autoScale: false,
@@ -276,7 +271,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], tr
                 console.error("[Chart] Error setting data:", error);
             }
         }
-    }, [candleData, volumeData, config?.strategy_mode, config?.use_trailing_buy]);
+    }, [candleData, volumeData, config?.strategy_mode, config?.use_trailing_buy, config?.rsi_period]);
 
     // Handle AutoScaling Toggle
     useEffect(() => {
@@ -514,7 +509,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], tr
             lineWidth: 2,
             lineStyle: 2,
             axisLabelVisible: true,
-            title: '80',
+            title: `${configRef.current?.rsi_sell_min ?? 70}`,
         });
         rsiSellLineRef.current = rsiSellLine;
 
@@ -524,7 +519,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], tr
             lineWidth: 2,
             lineStyle: 2,
             axisLabelVisible: true,
-            title: '30',
+            title: `${configRef.current?.rsi_buy_max ?? 30}`,
         });
         rsiBuyLineRef.current = rsiBuyLine;
 
@@ -823,12 +818,14 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], tr
         if (rsiBuyLineRef.current) {
             rsiBuyLineRef.current.applyOptions({
                 price: Number(buyMax),
+                title: `${Number(buyMax)}`,
             });
         }
 
         if (rsiSellLineRef.current) {
             rsiSellLineRef.current.applyOptions({
                 price: Number(sellMin),
+                title: `${Number(sellMin)}`,
             });
         }
     }, [config]);

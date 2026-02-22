@@ -333,9 +333,28 @@
   }
 
   .controls-container {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 0.75rem;
+    display: grid !important;
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+    align-items: stretch !important;
+    gap: 0.4rem !important;
+  }
+
+  .controls-container>button {
+    height: 66px !important;
+    min-height: 66px !important;
+    font-size: 0.72rem !important;
+    gap: 0.1rem !important;
+  }
+
+  .controls-container>button>span:first-child {
+    font-size: 0.95rem !important;
+  }
+
+  .controls-container>button>span:last-child {
+    font-size: 0.58rem !important;
+    line-height: 1.05 !important;
+    text-align: center;
+    word-break: keep-all;
   }
 
   .bot-controls {

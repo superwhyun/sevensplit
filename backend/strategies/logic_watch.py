@@ -1,42 +1,53 @@
 import logging
+import time
 from utils.indicators import calculate_rsi
 
 class WatchModeLogic:
     def __init__(self, strategy):
         self.strategy = strategy
+        self._cached_candles = None
+        self._last_candle_fetch_time = 0
+        self._candle_fetch_interval = 30 # Fetch 5m candles every 30 seconds
+        self.last_rsi_value = None
 
     def get_rsi_5m(self, current_price: float, market_context: dict = None) -> float:
-        """
-        Calculate Real-time 5-minute RSI(14) and RSI(5).
-        Uses cached candles and injects current_price for live accuracy.
-        """
+        """Calculate 5m RSI with caching and live price injection for real-time responsiveness."""
         try:
+            now = time.time()
             candles = None
-            if market_context and 'candles' in market_context:
-                ticker_candles = market_context['candles'].get(self.strategy.ticker, {})
-                candles = ticker_candles.get("minutes/5")
             
-            if not candles:
-                candles = self.strategy.exchange.get_candles(self.strategy.ticker, interval="minutes/5", count=100)
-                
-            if not candles or len(candles) < 15:
-                return None
-            
-            # --- CRITICAL FIX: Robust Chronological Sorting ---
-            # Create a copy and sort by timestamp (integer) to avoid TypeError in Python 3
-            sorted_candles = sorted(candles, key=lambda x: x.get('timestamp') or 0)
+            # 1. Fetch or use cached candles
+            if market_context and "candles" in market_context:
+                candles = market_context["candles"].get(self.strategy.ticker, {}).get("minutes/5")
 
-            # Extract closes safely using multiple possible keys
+            if not candles:
+                # Use cache if within interval
+                if self._cached_candles and (now - self._last_candle_fetch_time < self._candle_fetch_interval):
+                    candles = self._cached_candles
+                else:
+                    logging.info(f"Watch Logic: Fetching 5m candles from exchange for {self.strategy.ticker}...")
+                    candles = self.strategy.exchange.get_candles(self.strategy.ticker, count=200, interval="minutes/5")
+                    if candles:
+                        self._cached_candles = candles
+                        self._last_candle_fetch_time = now
+
+            if not candles:
+                return None
+
+            # 2. Extract closes and inject live price
+            sorted_candles = sorted(candles, key=lambda x: x.get("timestamp") or 0)
             closes = []
             for c in sorted_candles:
-                price = c.get('trade_price') or c.get('close') or c.get('close_price')
+                price = c.get("trade_price") or c.get("close")
                 if price is not None:
                     closes.append(float(price))
-
-            # --- LIVE UPDATE: Inject current price ---
-            if closes:
-                closes[-1] = current_price
-
+            
+            if not closes:
+                return None
+            
+            # Inject current live price into the latest candle for real-time RSI
+            closes[-1] = current_price
+            
             # Calculate RSI (14) - Logic Use
             rsi_14 = calculate_rsi(closes, 14)
 

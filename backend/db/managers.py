@@ -90,14 +90,12 @@ class DatabaseManager:
                     ('rsi_period', "INTEGER DEFAULT 14 NOT NULL"),
                     ('rsi_timeframe', "VARCHAR(20) DEFAULT 'minutes/60' NOT NULL"),
                     ('rsi_buy_max', "FLOAT DEFAULT 30.0 NOT NULL"),
-                    ('rsi_buy_first_threshold', "FLOAT DEFAULT 5.0 NOT NULL"),
+                    ('rsi_buy_cross_threshold', "FLOAT DEFAULT 0.0 NOT NULL"),
                     ('rsi_buy_first_amount', "INTEGER DEFAULT 1 NOT NULL"),
-                    ('rsi_buy_next_threshold', "FLOAT DEFAULT 1.0 NOT NULL"),
                     ('rsi_buy_next_amount', "INTEGER DEFAULT 1 NOT NULL"),
                     ('rsi_sell_min', "FLOAT DEFAULT 70.0 NOT NULL"),
-                    ('rsi_sell_first_threshold', "FLOAT DEFAULT 5.0 NOT NULL"),
+                    ('rsi_sell_cross_threshold', "FLOAT DEFAULT 0.0 NOT NULL"),
                     ('rsi_sell_first_amount', "INTEGER DEFAULT 1 NOT NULL"),
-                    ('rsi_sell_next_threshold', "FLOAT DEFAULT 1.0 NOT NULL"),
                     ('rsi_sell_next_amount', "INTEGER DEFAULT 1 NOT NULL"),
                     ('stop_loss', "FLOAT DEFAULT -10.0 NOT NULL"),
                     ('max_holdings', "INTEGER DEFAULT 20 NOT NULL")
@@ -121,6 +119,132 @@ class DatabaseManager:
                 conn.commit()
             except Exception as e:
                 print(f"Migration warning (strategies RSI): {e}")
+
+            # 3.1 Merge legacy RSI threshold columns into cross_threshold and drop legacy columns.
+            try:
+                result = conn.execute(text("PRAGMA table_info(strategies)"))
+                columns = [row[1] for row in result.fetchall()]
+                legacy_threshold_cols = {
+                    "rsi_buy_first_threshold",
+                    "rsi_buy_next_threshold",
+                    "rsi_sell_first_threshold",
+                    "rsi_sell_next_threshold",
+                }
+                if legacy_threshold_cols.intersection(columns):
+                    print("Migrating: Consolidating legacy RSI threshold columns into cross_threshold")
+                    manual_target_price_expr = "manual_target_price" if "manual_target_price" in columns else "NULL"
+                    next_buy_target_price_expr = "next_buy_target_price" if "next_buy_target_price" in columns else "NULL"
+                    manual_target_active_expr = "COALESCE(manual_target_active, 0)" if "manual_target_active" in columns else "0"
+                    buy_cross_source = "rsi_buy_cross_threshold" if "rsi_buy_cross_threshold" in columns else "NULL"
+                    sell_cross_source = "rsi_sell_cross_threshold" if "rsi_sell_cross_threshold" in columns else "NULL"
+                    buy_legacy_sources = [c for c in ("rsi_buy_first_threshold", "rsi_buy_next_threshold") if c in columns]
+                    sell_legacy_sources = [c for c in ("rsi_sell_first_threshold", "rsi_sell_next_threshold") if c in columns]
+                    buy_cross_expr = (
+                        f"COALESCE(NULLIF({buy_cross_source}, 0.0)"
+                        f"{''.join(', ' + c for c in buy_legacy_sources)}, 0.0)"
+                    )
+                    sell_cross_expr = (
+                        f"COALESCE(NULLIF({sell_cross_source}, 0.0)"
+                        f"{''.join(', ' + c for c in sell_legacy_sources)}, 0.0)"
+                    )
+                    conn.execute(text("PRAGMA foreign_keys=OFF"))
+                    conn.execute(text("BEGIN"))
+                    conn.execute(
+                        text(
+                            """
+                            CREATE TABLE strategies_new (
+                                id INTEGER NOT NULL,
+                                name VARCHAR(50) NOT NULL,
+                                ticker VARCHAR(20) NOT NULL,
+                                budget FLOAT NOT NULL,
+                                investment_per_split FLOAT NOT NULL,
+                                min_price FLOAT NOT NULL,
+                                max_price FLOAT NOT NULL,
+                                buy_rate FLOAT NOT NULL,
+                                sell_rate FLOAT NOT NULL,
+                                fee_rate FLOAT NOT NULL,
+                                tick_interval FLOAT NOT NULL,
+                                rebuy_strategy VARCHAR(50) NOT NULL,
+                                max_trades_per_day INTEGER NOT NULL,
+                                strategy_mode VARCHAR(20) NOT NULL,
+                                rsi_period INTEGER NOT NULL,
+                                rsi_timeframe VARCHAR(20) NOT NULL,
+                                rsi_buy_max FLOAT NOT NULL,
+                                rsi_buy_cross_threshold FLOAT NOT NULL DEFAULT 0.0,
+                                rsi_buy_first_amount INTEGER NOT NULL,
+                                rsi_buy_next_amount INTEGER NOT NULL,
+                                rsi_sell_min FLOAT NOT NULL,
+                                rsi_sell_cross_threshold FLOAT NOT NULL DEFAULT 0.0,
+                                rsi_sell_first_amount INTEGER NOT NULL,
+                                rsi_sell_next_amount INTEGER NOT NULL,
+                                stop_loss FLOAT NOT NULL,
+                                is_running BOOLEAN,
+                                next_split_id INTEGER,
+                                last_buy_price FLOAT,
+                                last_sell_price FLOAT,
+                                max_holdings INTEGER NOT NULL,
+                                use_trailing_buy BOOLEAN NOT NULL,
+                                trailing_buy_rebound_percent FLOAT NOT NULL,
+                                trailing_buy_batch BOOLEAN NOT NULL,
+                                price_segments JSON,
+                                is_watching BOOLEAN NOT NULL,
+                                watch_lowest_price FLOAT,
+                                pending_buy_units INTEGER NOT NULL,
+                                manual_target_price FLOAT,
+                                created_at DATETIME,
+                                updated_at DATETIME,
+                                next_buy_target_price FLOAT,
+                                manual_target_active BOOLEAN NOT NULL DEFAULT 0,
+                                PRIMARY KEY (id)
+                            )
+                            """
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            f"""
+                            INSERT INTO strategies_new (
+                                id, name, ticker, budget, investment_per_split, min_price, max_price,
+                                buy_rate, sell_rate, fee_rate, tick_interval, rebuy_strategy, max_trades_per_day,
+                                strategy_mode, rsi_period, rsi_timeframe, rsi_buy_max, rsi_buy_cross_threshold,
+                                rsi_buy_first_amount, rsi_buy_next_amount, rsi_sell_min, rsi_sell_cross_threshold,
+                                rsi_sell_first_amount, rsi_sell_next_amount, stop_loss, is_running, next_split_id,
+                                last_buy_price, last_sell_price, max_holdings, use_trailing_buy,
+                                trailing_buy_rebound_percent, trailing_buy_batch, price_segments, is_watching,
+                                watch_lowest_price, pending_buy_units, manual_target_price, created_at, updated_at,
+                                next_buy_target_price, manual_target_active
+                            )
+                            SELECT
+                                id, name, ticker, budget, investment_per_split, min_price, max_price,
+                                buy_rate, sell_rate, fee_rate, tick_interval, rebuy_strategy, max_trades_per_day,
+                                strategy_mode, rsi_period, rsi_timeframe, rsi_buy_max,
+                                {buy_cross_expr},
+                                rsi_buy_first_amount, rsi_buy_next_amount, rsi_sell_min,
+                                {sell_cross_expr},
+                                rsi_sell_first_amount, rsi_sell_next_amount, stop_loss, is_running, next_split_id,
+                                last_buy_price, last_sell_price, max_holdings, use_trailing_buy,
+                                trailing_buy_rebound_percent, trailing_buy_batch, price_segments, is_watching,
+                                watch_lowest_price, pending_buy_units, {manual_target_price_expr}, created_at, updated_at,
+                                {next_buy_target_price_expr}, {manual_target_active_expr}
+                            FROM strategies
+                            """
+                        )
+                    )
+                    conn.execute(text("DROP TABLE strategies"))
+                    conn.execute(text("ALTER TABLE strategies_new RENAME TO strategies"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_strategies_ticker ON strategies (ticker)"))
+                    conn.execute(text("COMMIT"))
+                    conn.execute(text("PRAGMA foreign_keys=ON"))
+            except Exception as e:
+                print(f"Migration warning (legacy RSI threshold consolidation): {e}")
+                try:
+                    conn.execute(text("ROLLBACK"))
+                except Exception:
+                    pass
+                try:
+                    conn.execute(text("PRAGMA foreign_keys=ON"))
+                except Exception:
+                    pass
 
             # 4. Check strategies.is_watching (Trailing Buy State Migration)
             try:

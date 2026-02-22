@@ -36,16 +36,14 @@ class Strategy(Base):
     
     # RSI Buying (Accumulation)
     rsi_buy_max = Column(Float, nullable=False, default=30.0)
-    rsi_buy_first_threshold = Column(Float, nullable=False, default=5.0)
+    rsi_buy_cross_threshold = Column(Float, nullable=False, default=0.0)
     rsi_buy_first_amount = Column(Integer, nullable=False, default=1)
-    rsi_buy_next_threshold = Column(Float, nullable=False, default=1.0)
     rsi_buy_next_amount = Column(Integer, nullable=False, default=1)
 
     # RSI Selling (Distribution)
     rsi_sell_min = Column(Float, nullable=False, default=70.0)
-    rsi_sell_first_threshold = Column(Float, nullable=False, default=5.0)
+    rsi_sell_cross_threshold = Column(Float, nullable=False, default=0.0)
     rsi_sell_first_amount = Column(Integer, nullable=False, default=1)
-    rsi_sell_next_threshold = Column(Float, nullable=False, default=1.0)
     rsi_sell_next_amount = Column(Integer, nullable=False, default=1)
 
     # Risk Management

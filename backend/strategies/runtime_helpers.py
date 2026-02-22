@@ -108,14 +108,12 @@ class StrategyStateManager:
             rsi_period=getattr(state, "rsi_period", 14),
             rsi_timeframe=getattr(state, "rsi_timeframe", "minutes/60"),
             rsi_buy_max=getattr(state, "rsi_buy_max", 30.0),
-            rsi_buy_first_threshold=getattr(state, "rsi_buy_first_threshold", 5.0),
+            rsi_buy_cross_threshold=getattr(state, "rsi_buy_cross_threshold", 0.0),
             rsi_buy_first_amount=getattr(state, "rsi_buy_first_amount", 1),
-            rsi_buy_next_threshold=getattr(state, "rsi_buy_next_threshold", 1.0),
             rsi_buy_next_amount=getattr(state, "rsi_buy_next_amount", 1),
             rsi_sell_min=getattr(state, "rsi_sell_min", 70.0),
-            rsi_sell_first_threshold=getattr(state, "rsi_sell_first_threshold", 5.0),
+            rsi_sell_cross_threshold=getattr(state, "rsi_sell_cross_threshold", 0.0),
             rsi_sell_first_amount=getattr(state, "rsi_sell_first_amount", 1),
-            rsi_sell_next_threshold=getattr(state, "rsi_sell_next_threshold", 1.0),
             rsi_sell_next_amount=getattr(state, "rsi_sell_next_amount", 1),
             stop_loss=getattr(state, "stop_loss", -10.0),
             max_holdings=getattr(state, "max_holdings", 20),
@@ -647,43 +645,40 @@ class StrategyGuardService:
 
         now = strategy.get_now_utc()
         one_day_ago = now.timestamp() - 86400
-        recent_count = 0
+        recent_events = set()
+
+        def _to_ts(val):
+            if not val:
+                return None
+            try:
+                if isinstance(val, str):
+                    return datetime.fromisoformat(val).timestamp()
+                return float(val)
+            except Exception:
+                return None
 
         for t in strategy.trade_history:
+            split_id = t.get("split_id")
             ts = t.get("timestamp")
-            if ts:
-                try:
-                    ts_val = datetime.fromisoformat(ts).timestamp() if isinstance(ts, str) else float(ts)
-                    if ts_val > one_day_ago:
-                        recent_count += 1
-                except Exception:
-                    pass
+            ts_val = _to_ts(ts)
+            if ts_val and ts_val > one_day_ago:
+                # One sell-side action per closed trade record.
+                recent_events.add(("SELL", split_id, int(ts_val)))
 
             bought_at = t.get("bought_at")
-            if bought_at:
-                try:
-                    ba_val = (
-                        datetime.fromisoformat(bought_at).timestamp()
-                        if isinstance(bought_at, str)
-                        else float(bought_at)
-                    )
-                    if ba_val > one_day_ago:
-                        recent_count += 1
-                except Exception:
-                    pass
+            ba_val = _to_ts(bought_at)
+            if ba_val and ba_val > one_day_ago:
+                # One buy-side action per trade record.
+                recent_events.add(("BUY", split_id, int(ba_val)))
 
         for split in strategy.splits:
             if split.status in ["BUY_FILLED", "PENDING_SELL"] and split.bought_at:
-                try:
-                    ba_val = (
-                        datetime.fromisoformat(split.bought_at).timestamp()
-                        if isinstance(split.bought_at, str)
-                        else float(split.bought_at)
-                    )
-                    if ba_val > one_day_ago:
-                        recent_count += 1
-                except Exception:
-                    pass
+                ba_val = _to_ts(split.bought_at)
+                if ba_val and ba_val > one_day_ago:
+                    # Open positions may not exist in trade_history yet; key by split id.
+                    recent_events.add(("BUY_OPEN", split.id, int(ba_val)))
+
+        recent_count = len(recent_events)
 
         if recent_count >= strategy.config.max_trades_per_day:
             logging.warning(
@@ -715,11 +710,12 @@ class StrategyTickCoordinator:
         return current_price
 
     def update_indicators(self, strategy, current_price: float, market_context: dict = None) -> Dict[str, Any]:
-        indicators: Dict[str, Any] = {"rsi_5m": None}
+        indicators: Dict[str, Any] = {"rsi_5m": None, "rsi_daily": None}
         try:
             indicators["rsi_5m"] = strategy.watch_logic.get_rsi_5m(current_price, market_context=market_context)
             if hasattr(strategy.rsi_logic, "_update_daily_rsi"):
                 strategy.rsi_logic._update_daily_rsi(current_price, market_context=market_context)
+                indicators["rsi_daily"] = getattr(strategy.rsi_logic, "current_rsi_daily", None)
         except Exception as e:
             logging.debug(f"RSI indicator update failed: {e}")
         return indicators

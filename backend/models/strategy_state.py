@@ -26,16 +26,14 @@ class StrategyConfig(BaseModel):
     
     # RSI Buying (Accumulation)
     rsi_buy_max: float = 30.0
-    rsi_buy_first_threshold: float = 5.0
+    rsi_buy_cross_threshold: float = 0.0
     rsi_buy_first_amount: int = 1
-    rsi_buy_next_threshold: float = 1.0
     rsi_buy_next_amount: int = 1
 
     # RSI Selling (Distribution)
     rsi_sell_min: float = 70.0
-    rsi_sell_first_threshold: float = 5.0
+    rsi_sell_cross_threshold: float = 0.0
     rsi_sell_first_amount: int = 1
-    rsi_sell_next_threshold: float = 1.0
     rsi_sell_next_amount: int = 1
 
     # Risk Management

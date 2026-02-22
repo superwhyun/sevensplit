@@ -60,9 +60,11 @@ class _InMemorySimDB:
 
 
 class _ReplayPaperExchange(PaperExchange):
-    def __init__(self, public_client: UpbitExchange, initial_krw: float):
+    def __init__(self, public_client: UpbitExchange, initial_krw: float, candle_db=None):
         super().__init__(public_client=public_client, initial_krw=initial_krw)
         self._price_map: Dict[str, float] = {}
+        self._candle_db = candle_db
+        self._current_sim_ts: Optional[float] = None
 
     def set_price(self, ticker: str, price: float):
         self._price_map[ticker] = float(price)
@@ -90,6 +92,22 @@ class _ReplayPaperExchange(PaperExchange):
         for t in tickers:
             result[t] = self.get_current_price(t)
         return result
+
+    def get_candles(self, ticker, count=200, interval="minutes/5", to=None):
+        """Read from candle DB using simulation timestamp. Never calls real API."""
+        if self._candle_db is not None:
+            ref_ts = self._current_sim_ts or time.time()
+            if to:
+                try:
+                    from datetime import datetime
+                    ref_ts = datetime.fromisoformat(str(to).replace("Z", "+00:00")).timestamp()
+                except Exception:
+                    pass
+            unit_secs = 86400 if interval == "days" else int(interval.split("/")[-1]) * 60
+            start_ts = ref_ts - (unit_secs * count * 2)
+            candles = self._candle_db.get_candles(ticker, interval, start_ts, ref_ts)
+            return candles[-count:] if candles else []
+        return super().get_candles(ticker, count=count, interval=interval, to=to)
 
 
 class _SimulationStrategy(SevenSplitStrategy):
@@ -171,14 +189,12 @@ class SimulationService:
             rsi_period=getattr(strategy_rec, "rsi_period", 14),
             rsi_timeframe=getattr(strategy_rec, "rsi_timeframe", "minutes/60"),
             rsi_buy_max=getattr(strategy_rec, "rsi_buy_max", 30.0),
-            rsi_buy_first_threshold=getattr(strategy_rec, "rsi_buy_first_threshold", 5.0),
+            rsi_buy_cross_threshold=getattr(strategy_rec, "rsi_buy_cross_threshold", 0.0),
             rsi_buy_first_amount=getattr(strategy_rec, "rsi_buy_first_amount", 1),
-            rsi_buy_next_threshold=getattr(strategy_rec, "rsi_buy_next_threshold", 1.0),
             rsi_buy_next_amount=getattr(strategy_rec, "rsi_buy_next_amount", 1),
             rsi_sell_min=getattr(strategy_rec, "rsi_sell_min", 70.0),
-            rsi_sell_first_threshold=getattr(strategy_rec, "rsi_sell_first_threshold", 5.0),
+            rsi_sell_cross_threshold=getattr(strategy_rec, "rsi_sell_cross_threshold", 0.0),
             rsi_sell_first_amount=getattr(strategy_rec, "rsi_sell_first_amount", 1),
-            rsi_sell_next_threshold=getattr(strategy_rec, "rsi_sell_next_threshold", 1.0),
             rsi_sell_next_amount=getattr(strategy_rec, "rsi_sell_next_amount", 1),
             stop_loss=getattr(strategy_rec, "stop_loss", -10.0),
             max_holdings=getattr(strategy_rec, "max_holdings", 20),
@@ -187,6 +203,60 @@ class SimulationService:
             trailing_buy_batch=getattr(strategy_rec, "trailing_buy_batch", True),
             price_segments=getattr(strategy_rec, "price_segments", []) or [],
         )
+
+    def _compute_trade_metrics(self, strategy) -> dict:
+        """Compute cumulative buy/sell and max concurrent invested capital."""
+        cumulative_buy = 0.0
+        cumulative_sell = 0.0
+        events = []  # (timestamp, delta_invested)
+
+        def _to_ts(val):
+            if not val:
+                return None
+            try:
+                if isinstance(val, str):
+                    return datetime.fromisoformat(val).timestamp()
+                return float(val)
+            except Exception:
+                return None
+
+        for trade in strategy.trade_history:
+            buy_amt = float(trade.get("buy_amount", 0.0) or 0.0)
+            sell_amt = float(trade.get("sell_amount", 0.0) or 0.0)
+            cumulative_buy += buy_amt
+            cumulative_sell += sell_amt
+
+            buy_ts = _to_ts(trade.get("bought_at"))
+            sell_ts = _to_ts(trade.get("timestamp"))
+            if buy_ts is not None and buy_amt > 0:
+                events.append((buy_ts, buy_amt))
+            if sell_ts is not None and buy_amt > 0:
+                events.append((sell_ts, -buy_amt))
+
+        # Include currently open filled positions in cumulative buy and peak-invested math.
+        for split in strategy.splits:
+            if split.status not in ("BUY_FILLED", "PENDING_SELL"):
+                continue
+            buy_amt = float(getattr(split, "buy_amount", 0.0) or 0.0)
+            if buy_amt <= 0:
+                continue
+            cumulative_buy += buy_amt
+            buy_ts = _to_ts(getattr(split, "bought_at", None))
+            if buy_ts is not None:
+                events.append((buy_ts, buy_amt))
+
+        invested = 0.0
+        peak_invested = 0.0
+        for _, delta in sorted(events, key=lambda x: x[0]):
+            invested += delta
+            if invested > peak_invested:
+                peak_invested = invested
+
+        return {
+            "cumulative_buy_amount": cumulative_buy,
+            "cumulative_sell_amount": cumulative_sell,
+            "max_invested_amount": peak_invested,
+        }
 
     def _default_exec_interval(self, config: StrategyConfig) -> str:
         return "days" if config.strategy_mode == "RSI" else "minutes/5"
@@ -197,9 +267,51 @@ class SimulationService:
             raise ValueError(f"Strategy not found: {strategy_id}")
         return s
 
+    def _ensure_historical_candles(self, ticker: str, total_days: int):
+        """Pre-fetch historical daily candles so simulation can run without hitting the real API."""
+        end_ts = time.time()
+        needed_start_ts = end_ts - (total_days * 86400)
+
+        existing = self.candle_db.get_candles(ticker, "days", needed_start_ts, end_ts)
+        if len(existing) >= int(total_days * 0.9):
+            logging.info(f"[SIM] Candle DB already has {len(existing)} daily candles for {ticker}. Skipping pre-fetch.")
+            return
+
+        logging.info(f"[SIM] Pre-fetching {total_days} days of daily candles for {ticker} (have {len(existing)})...")
+        to_ts = end_ts
+        fetched_total = 0
+
+        while to_ts > needed_start_ts:
+            try:
+                to_dt = datetime.fromtimestamp(to_ts, tz=timezone.utc)
+                to_str = to_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+                candles = self.public_exchange.get_candles(ticker, count=200, interval="days", to=to_str)
+                if not candles:
+                    break
+                self.candle_db.save_candles(ticker, "days", candles)
+                fetched_total += len(candles)
+
+                oldest_ts = min(float(c.get("timestamp") or 0) for c in candles)
+                # Upbit returns timestamps in milliseconds — normalize to seconds
+                if oldest_ts > 10_000_000_000:
+                    oldest_ts /= 1000.0
+                if oldest_ts <= 0 or oldest_ts <= needed_start_ts:
+                    break
+                to_ts = oldest_ts - 86400  # step back one day (in seconds)
+                time.sleep(0.3)  # rate limit guard
+            except Exception as e:
+                logging.warning(f"[SIM] Pre-fetch candles failed: {e}")
+                break
+
+        logging.info(f"[SIM] Pre-fetch complete: {fetched_total} candles saved for {ticker}.")
+
     def _get_market_context(self, ticker: str, ts: float):
-        m5 = self.candle_db.get_candles(ticker, "minutes/5", ts - (300 * 300), ts)
-        days = self.candle_db.get_candles(ticker, "days", ts - (86400 * 300), ts)
+        # Use ts - 1 (strict less than) so the current tick's candle is excluded.
+        # A daily candle with timestamp=ts opens at ts and closes at ts+86400.
+        # Including it in RSI would be look-ahead — the close price isn't known yet.
+        # Real trading also only sees candles that have already closed.
+        m5 = self.candle_db.get_candles(ticker, "minutes/5", ts - (300 * 300), ts - 1)
+        days = self.candle_db.get_candles(ticker, "days", ts - (86400 * 300), ts - 1)
         return {
             "candles": {
                 ticker: {
@@ -361,7 +473,17 @@ class SimulationService:
         exec_interval = exec_interval or self._default_exec_interval(config)
 
         session_id = str(uuid.uuid4())
-        sim_exchange = _ReplayPaperExchange(self.public_exchange, initial_krw=initial_krw)
+
+        # Pre-populate candle DB with historical daily candles before replay starts.
+        # This prevents _update_daily_rsi from falling back to the real API (→ 429).
+        if replay_days and int(replay_days) > 0 and exec_interval == "days":
+            rsi_lookback = 200  # daily candles needed for RSI calculation
+            total_days = int(replay_days) + rsi_lookback
+            self._ensure_historical_candles(strategy_rec.ticker, total_days)
+
+        sim_exchange = _ReplayPaperExchange(
+            self.public_exchange, initial_krw=initial_krw, candle_db=self.candle_db
+        )
         sim_strategy = _SimulationStrategy(
             sim_exchange,
             strategy_id=strategy_id,
@@ -418,6 +540,7 @@ class SimulationService:
                         if ts <= 0 or price <= 0:
                             continue
                         sim_strategy._sim_now_utc = datetime.fromtimestamp(ts, tz=timezone.utc)
+                        sim_exchange._current_sim_ts = ts
                         sim_exchange.set_tick(strategy_rec.ticker, price, high_price=high, low_price=low)
                         market_context = self._get_market_context(strategy_rec.ticker, ts)
                         sim_strategy.tick(current_price=price, market_context=market_context)
@@ -530,6 +653,24 @@ class SimulationService:
                     pass
         return {"session_id": session_id, "status": "stopped"}
 
+    def stop_all_live_by_strategy(self, strategy_id: int):
+        """Stop all active live simulation sessions for a specific strategy."""
+        stopped_sessions = []
+        with self._lock:
+            for session_id, session in self.live_sessions.items():
+                if session.strategy_id == strategy_id and session.status == "running":
+                    session.status = "stopped"
+                    runtime = self._live_runtime.get(session_id)
+                    if runtime and runtime.get("strategy"):
+                        try:
+                            runtime["strategy"].stop()
+                        except Exception:
+                            pass
+                    stopped_sessions.append(session_id)
+        if stopped_sessions:
+            logging.info(f"[SIM] Stopped {len(stopped_sessions)} live sessions for strategy {strategy_id}")
+        return stopped_sessions
+
     def get_live(self, session_id: str) -> dict:
         with self._lock:
             session = self.live_sessions.get(session_id)
@@ -541,6 +682,7 @@ class SimulationService:
         exchange = runtime["exchange"]
         current_price = exchange.get_current_price(session.ticker)
         realized = sum(float(t.get("net_profit", 0.0)) for t in strategy.trade_history)
+        metrics = self._compute_trade_metrics(strategy)
 
         return {
             "session_id": session.id,
@@ -556,6 +698,7 @@ class SimulationService:
             "last_error": session.last_error,
             "trades": len(strategy.trade_history),
             "realized_profit": realized,
+            **metrics,
             "final_state": strategy.get_state(current_price=current_price),
             "trade_history": strategy.trade_history[:200],
             "sim_events": strategy.sim_events[:MAX_SIM_EVENTS],

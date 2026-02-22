@@ -24,6 +24,7 @@ class PriceStrategyLogic:
         rsi_5m: float,
         just_exited_watch: bool = False,
         market_context: dict = None,
+        rsi_daily: float = None,
     ):
         """
         Build a buy execution plan.
@@ -65,6 +66,7 @@ class PriceStrategyLogic:
         return {
             "current_price": current_price,
             "rsi_5m": rsi_5m,
+            "rsi_daily": rsi_daily,
             "reference_msg": reference_msg,
             "is_grid_buy": is_grid_buy,
             "allow_batch_buy": allow_batch_buy,
@@ -77,6 +79,7 @@ class PriceStrategyLogic:
         just_exited_watch: bool = False,
         market_context: dict = None,
         planned_buy: dict = None,
+        rsi_daily: float = None,
     ):
         """
         Execute core buy logic after plan/validation.
@@ -86,18 +89,23 @@ class PriceStrategyLogic:
             rsi_5m=rsi_5m,
             just_exited_watch=just_exited_watch,
             market_context=market_context,
+            rsi_daily=rsi_daily,
         )
         if buy_plan is None:
             return
 
         current_price = buy_plan["current_price"]
         rsi_5m = buy_plan["rsi_5m"]
+        rsi_daily = buy_plan.get("rsi_daily")
         reference_msg = buy_plan["reference_msg"]
         is_grid_buy = buy_plan["is_grid_buy"]
         allow_batch_buy = bool(buy_plan.get("allow_batch_buy", False))
 
         levels_crossed = self._resolve_levels_crossed(is_grid_buy, current_price, allow_batch_buy=allow_batch_buy)
-        created_count, log_details = self._execute_batch_buys(levels_crossed, current_price, rsi_5m)
+        
+        # Use rsi_daily for the recorded buy_rsi if available
+        buy_rsi_to_record = rsi_daily if rsi_daily is not None else rsi_5m
+        created_count, log_details = self._execute_batch_buys(levels_crossed, current_price, buy_rsi_to_record)
         if created_count <= 0:
             return
 

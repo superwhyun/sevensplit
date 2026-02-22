@@ -83,8 +83,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
         // Fields that should be treated as floats/ints directly
         const floatFields = [
             'fee_rate', 'buy_rate', 'sell_rate', 'tick_interval',
-            'rsi_buy_max', 'rsi_buy_first_threshold', 'rsi_buy_next_threshold',
-            'rsi_sell_min', 'rsi_sell_first_threshold', 'rsi_sell_next_threshold',
+            'rsi_buy_max', 'rsi_buy_cross_threshold', 'rsi_sell_min', 'rsi_sell_cross_threshold',
             'stop_loss',
             'trailing_buy_rebound_percent'
         ];
@@ -506,12 +505,15 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                 <label>Max Buy RSI (Underground)</label>
                 <input type="number" name="rsi_buy_max" value={formData.rsi_buy_max ?? 30} onChange={handleChange} />
             </div>
+            <div className="input-group">
+                <label>Buy Cross Threshold (RSI Delta)</label>
+                <input type="number" step="0.1" name="rsi_buy_cross_threshold" value={formData.rsi_buy_cross_threshold ?? 0} onChange={handleChange} />
+                <small style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
+                    Require (전날 RSI - 전전날 RSI) ≥ this value when buy cross occurs.
+                </small>
+            </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                <div className="input-group">
-                    <label>Rebound Threshold (+)</label>
-                    <input type="number" name="rsi_buy_first_threshold" value={formData.rsi_buy_first_threshold ?? 5} onChange={handleChange} />
-                </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.75rem' }}>
                 <div className="input-group">
                     <label>Buy Amount (Splits)</label>
                     <input type="number" name="rsi_buy_first_amount" value={formData.rsi_buy_first_amount ?? 1} onChange={handleChange} />
@@ -524,12 +526,15 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                 <label>Min Sell RSI (Overbought)</label>
                 <input type="number" name="rsi_sell_min" value={formData.rsi_sell_min ?? 70} onChange={handleChange} />
             </div>
+            <div className="input-group">
+                <label>Sell Cross Threshold (RSI Delta)</label>
+                <input type="number" step="0.1" name="rsi_sell_cross_threshold" value={formData.rsi_sell_cross_threshold ?? 0} onChange={handleChange} />
+                <small style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
+                    Require (전전날 RSI - 전날 RSI) ≥ this value when sell cross occurs.
+                </small>
+            </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                <div className="input-group">
-                    <label>Drop Threshold (-)</label>
-                    <input type="number" name="rsi_sell_first_threshold" value={formData.rsi_sell_first_threshold ?? 5} onChange={handleChange} />
-                </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.75rem' }}>
                 <div className="input-group">
                     <label>Sell Amount (%)</label>
                     <input
