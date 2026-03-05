@@ -363,7 +363,7 @@ const calculateStrategyProfit = (strategyState) => {
         realized_profit: realized,
         realized_profit_24h: realized24h,
         unrealized_profit: unrealized,
-        total_profit: realized + unrealized,
+        total_profit: realized,
     };
 };
 
@@ -1165,7 +1165,7 @@ const Dashboard = () => {
                 backgroundColor: 'rgba(15, 23, 42, 0.8)'
             }}>
                 {strategies.map(s => {
-                    const tabProfit = strategyProfitById[s.id]?.total_profit ?? 0;
+                    const tabProfit = strategyProfitById[s.id]?.realized_profit ?? 0;
                     return (
                     <button
                         key={s.id}
@@ -1367,11 +1367,11 @@ const Dashboard = () => {
                             </div>
                             <div style={{
                                 padding: '1rem',
-                                backgroundColor: selectedStrategyProfit.total_profit >= 0
+                                backgroundColor: selectedStrategyProfit.realized_profit >= 0
                                     ? 'rgba(16, 185, 129, 0.1)'
                                     : 'rgba(239, 68, 68, 0.1)',
                                 borderRadius: '0.5rem',
-                                border: selectedStrategyProfit.total_profit >= 0
+                                border: selectedStrategyProfit.realized_profit >= 0
                                     ? '1px solid rgba(16, 185, 129, 0.3)'
                                     : '1px solid rgba(239, 68, 68, 0.3)'
                             }}>
@@ -1379,10 +1379,10 @@ const Dashboard = () => {
                                 <div style={{
                                     fontSize: '1.25rem',
                                     fontWeight: 'bold',
-                                    color: selectedStrategyProfit.total_profit >= 0 ? '#10b981' : '#ef4444'
+                                    color: selectedStrategyProfit.realized_profit >= 0 ? '#10b981' : '#ef4444'
                                 }}>
-                                    {selectedStrategyProfit.total_profit >= 0 ? '+' : ''}
-                                    ₩{Math.round(selectedStrategyProfit.total_profit).toLocaleString()}
+                                    {selectedStrategyProfit.realized_profit >= 0 ? '+' : ''}
+                                    ₩{Math.round(selectedStrategyProfit.realized_profit).toLocaleString()}
                                 </div>
                                 <div style={{
                                     fontSize: '0.75rem',

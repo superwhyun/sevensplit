@@ -41,6 +41,7 @@ build/
 # IDEs
 .idea/
 .vscode/
+.serena/
 *.swp
 *.swo
 
