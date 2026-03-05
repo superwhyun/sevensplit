@@ -331,6 +331,42 @@ const formatTime = (t) => {
     return new Date(timeStr).toLocaleString('ko-KR', options);
 };
 
+const toTimestampMs = (value) => {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'number') {
+        return value > 1e12 ? value : value * 1000;
+    }
+    const normalized = String(value).includes('T') && !String(value).endsWith('Z') && !String(value).includes('+')
+        ? `${value}Z`
+        : String(value);
+    const parsed = Date.parse(normalized);
+    return Number.isNaN(parsed) ? null : parsed;
+};
+
+const calculateStrategyProfit = (strategyState) => {
+    if (!strategyState || typeof strategyState !== 'object') {
+        return { realized_profit: 0, realized_profit_24h: 0, unrealized_profit: 0, total_profit: 0 };
+    }
+    const last24hStart = Date.now() - (24 * 60 * 60 * 1000);
+    const realized = (strategyState.trade_history || []).reduce((sum, trade) => {
+        return sum + Number(trade?.net_profit || 0);
+    }, 0);
+    const realized24h = (strategyState.trade_history || []).reduce((sum, trade) => {
+        const ts = toTimestampMs(trade?.timestamp);
+        if (ts !== null && ts >= last24hStart) {
+            return sum + Number(trade?.net_profit || 0);
+        }
+        return sum;
+    }, 0);
+    const unrealized = Number(strategyState.total_profit_amount || 0);
+    return {
+        realized_profit: realized,
+        realized_profit_24h: realized24h,
+        unrealized_profit: unrealized,
+        total_profit: realized + unrealized,
+    };
+};
+
 const Dashboard = () => {
     const [status, setStatus] = useState(null);
     const [portfolio, setPortfolio] = useState(null);
@@ -352,6 +388,7 @@ const Dashboard = () => {
     const [simMeta, setSimMeta] = useState(null);
     const [simSystemEvents, setSimSystemEvents] = useState([]);
     const [strategyEvents, setStrategyEvents] = useState([]);
+    const [strategyProfitById, setStrategyProfitById] = useState({});
     const TRADES_PER_PAGE = 10;
 
     const selectedStrategyIdRef = useRef(selectedStrategyId);
@@ -434,6 +471,10 @@ const Dashboard = () => {
             const response = await axios.get(`${API_BASE_URL}/strategies/${currentId}/status`);
             const { config, ...restStatus } = response.data;
             setStatus(restStatus);
+            setStrategyProfitById((prev) => ({
+                ...prev,
+                [currentId]: calculateStrategyProfit(response.data),
+            }));
             // Include budget in config to prevent WebSocket updates from triggering Config component re-renders
             const safeConfig = config && typeof config === 'object' ? config : {};
             setStrategyConfig({ strategy_mode: 'PRICE', ...safeConfig, budget: response.data.budget });
@@ -513,6 +554,11 @@ const Dashboard = () => {
                         const data = JSON.parse(event.data);
                         if (data?.strategies) {
                             const currentId = selectedStrategyIdRef.current;
+                            const profitMap = {};
+                            data.strategies.forEach((s) => {
+                                profitMap[s.id] = calculateStrategyProfit(s);
+                            });
+                            setStrategyProfitById(profitMap);
                             // strategies is an array, find the one with matching id
                             const strategy = data.strategies.find(s => s.id === currentId);
                             if (strategy) {
@@ -936,6 +982,12 @@ const Dashboard = () => {
     };
 
     const displayedStatus = simOverlayState || status;
+    const selectedStrategyProfit = calculateStrategyProfit(displayedStatus);
+    const aggregateProfit = Object.values(strategyProfitById).reduce((acc, profit) => {
+        acc.realized_profit += Number(profit?.realized_profit || 0);
+        acc.realized_profit_24h += Number(profit?.realized_profit_24h || 0);
+        return acc;
+    }, { realized_profit: 0, realized_profit_24h: 0 });
     const resolvedConfig = strategyConfig ?? displayedStatus?.config ?? {};
     const isDevMode = portfolio?.mode === 'DEV';
     const isDevSimulationActive = isDevMode && (liveSessionState?.status === 'running');
@@ -1063,10 +1115,20 @@ const Dashboard = () => {
                             <span className="value">₩{Math.round(portfolio.total_value)?.toLocaleString()}</span>
                         </div>
                         <div className="profit-section">
-                            <span className="label">Realized Profit</span>
-                            <span className="value" style={{ color: (portfolio.total_realized_profit || 0) >= 0 ? '#10b981' : '#ef4444' }}>
-                                {new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(portfolio.total_realized_profit || 0)}
-                            </span>
+                            <span className="label">REALIZED PROFIT</span>
+                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'baseline', justifyContent: 'flex-end' }}>
+                                <span style={{ fontSize: '0.7rem', color: '#94a3b8', letterSpacing: '0.04em' }}>ALL</span>
+                                <span className="value" style={{ color: aggregateProfit.realized_profit >= 0 ? '#10b981' : '#ef4444' }}>
+                                    {new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(aggregateProfit.realized_profit)}
+                                </span>
+                            </div>
+                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'baseline', justifyContent: 'flex-end', marginTop: '0.2rem' }}>
+                                <span style={{ fontSize: '0.7rem', color: '#94a3b8', letterSpacing: '0.04em' }}>24H</span>
+                                <span style={{ fontSize: '0.95rem', color: aggregateProfit.realized_profit_24h >= 0 ? '#10b981' : '#ef4444' }}>
+                                    {(aggregateProfit.realized_profit_24h >= 0 ? '+' : '')}
+                                    {new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(aggregateProfit.realized_profit_24h)}
+                                </span>
+                            </div>
                         </div>
                     </div>
 
@@ -1102,7 +1164,9 @@ const Dashboard = () => {
                 borderBottom: '1px solid #334155',
                 backgroundColor: 'rgba(15, 23, 42, 0.8)'
             }}>
-                {strategies.map(s => (
+                {strategies.map(s => {
+                    const tabProfit = strategyProfitById[s.id]?.total_profit ?? 0;
+                    return (
                     <button
                         key={s.id}
                         className={`tab-btn ${selectedStrategyId === s.id ? 'active' : ''}`}
@@ -1149,8 +1213,17 @@ const Dashboard = () => {
                             )}
                         </div>
                         <span style={{ fontSize: '0.7rem', opacity: 0.8 }}>{s.ticker}</span>
+                        <span style={{
+                            fontSize: '0.7rem',
+                            fontWeight: 600,
+                            color: tabProfit >= 0 ? '#10b981' : '#ef4444',
+                            opacity: selectedStrategyId === s.id ? 1 : 0.9
+                        }}>
+                            {(tabProfit >= 0 ? '+' : '')}₩{Math.round(tabProfit).toLocaleString()}
+                        </span>
                     </button>
-                ))}
+                    );
+                })}
                 <button
                     onClick={() => setIsModalOpen(true)}
                     style={{
@@ -1290,6 +1363,34 @@ const Dashboard = () => {
                                     marginTop: '0.25rem'
                                 }}>
                                     ({(displayedStatus.total_profit_rate || 0).toFixed(2)}%)
+                                </div>
+                            </div>
+                            <div style={{
+                                padding: '1rem',
+                                backgroundColor: selectedStrategyProfit.total_profit >= 0
+                                    ? 'rgba(16, 185, 129, 0.1)'
+                                    : 'rgba(239, 68, 68, 0.1)',
+                                borderRadius: '0.5rem',
+                                border: selectedStrategyProfit.total_profit >= 0
+                                    ? '1px solid rgba(16, 185, 129, 0.3)'
+                                    : '1px solid rgba(239, 68, 68, 0.3)'
+                            }}>
+                                <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>Profit</div>
+                                <div style={{
+                                    fontSize: '1.25rem',
+                                    fontWeight: 'bold',
+                                    color: selectedStrategyProfit.total_profit >= 0 ? '#10b981' : '#ef4444'
+                                }}>
+                                    {selectedStrategyProfit.total_profit >= 0 ? '+' : ''}
+                                    ₩{Math.round(selectedStrategyProfit.total_profit).toLocaleString()}
+                                </div>
+                                <div style={{
+                                    fontSize: '0.75rem',
+                                    color: selectedStrategyProfit.realized_profit_24h >= 0 ? '#10b981' : '#ef4444',
+                                    marginTop: '0.25rem'
+                                }}>
+                                    24h: {(selectedStrategyProfit.realized_profit_24h >= 0 ? '+' : '')}
+                                    ₩{Math.round(selectedStrategyProfit.realized_profit_24h).toLocaleString()}
                                 </div>
                             </div>
                         </div>
