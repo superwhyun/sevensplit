@@ -336,6 +336,8 @@ class UpbitExchange(Exchange):
 class PaperExchange(Exchange):
     """Paper trading exchange: public market data + in-memory simulated orders/fills."""
 
+    _LOCK_EPSILON = 1e-12
+
     def __init__(self, public_client: UpbitExchange, initial_krw: float = 10_000_000.0):
         self.public_client = public_client
         self.orders: Dict[str, dict] = {}
@@ -379,9 +381,14 @@ class PaperExchange(Exchange):
 
     def _lock(self, currency: str, amount: float) -> bool:
         self._ensure_currency(currency)
-        if self.balances[currency]["balance"] < amount:
+        balance = float(self.balances[currency]["balance"])
+        epsilon = max(self._LOCK_EPSILON, abs(amount) * self._LOCK_EPSILON)
+        if balance + epsilon < amount:
             return False
-        self.balances[currency]["balance"] -= amount
+        new_balance = balance - amount
+        if abs(new_balance) <= epsilon:
+            new_balance = 0.0
+        self.balances[currency]["balance"] = new_balance
         self.balances[currency]["locked"] += amount
         return True
 

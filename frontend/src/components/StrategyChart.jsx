@@ -2,7 +2,16 @@ import { useEffect, useRef, useState } from 'react';
 import { createChart, ColorType, CrosshairMode } from 'lightweight-charts';
 import axios from 'axios';
 
-const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], trailingBuyState, systemEvents = [], nextBuyTargetPrice = null }) => {
+const StrategyChart = ({
+    ticker,
+    splits = [],
+    config = {},
+    tradeHistory = [],
+    trailingBuyState,
+    systemEvents = [],
+    nextBuyTargetPrice = null,
+    adaptiveState = null,
+}) => {
     const chartContainerRef = useRef();
     const chartRef = useRef();
     const candlestickSeriesRef = useRef();
@@ -12,6 +21,8 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], tr
     const rsiSeries14Ref = useRef();
     const rsiSeries4Ref = useRef();
     const rsiCursorLineRef = useRef();
+    const adaptivePressureSeriesRef = useRef();
+    const adaptivePressureCapLineRef = useRef();
     const tickerRef = useRef(ticker);
 
     const rsiBuyLineRef = useRef();
@@ -36,6 +47,11 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], tr
 
     // Scaling State
     const [isAutoScaling, setIsAutoScaling] = useState(true);
+
+    const normalizedStrategyMode = (config?.strategy_mode || '').toString().toUpperCase();
+    const showRSIPanel = normalizedStrategyMode === 'RSI' || Boolean(config?.use_trailing_buy);
+    const showAdaptivePressure = normalizedStrategyMode !== 'RSI' && Boolean(config?.use_adaptive_buy_control);
+    const chartHeight = showAdaptivePressure ? (showRSIPanel ? 500 : 460) : 400;
 
     // Helper: Parse exact UTC ISO string to Unix Timestamp
     const parseUTC = (utcString) => {
@@ -230,10 +246,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], tr
                 }
 
                 // Update RSI (Dual)
-                // Show RSI if mode is RSI OR if Trailing Buy is enabled (which uses 5m RSI)
-                const showRSI = isRsiMode(config?.strategy_mode) || config?.use_trailing_buy === true;
-
-                if (showRSI && rsiSeries14Ref.current) {
+                if (showRSIPanel && rsiSeries14Ref.current) {
                     const selectedPeriod = Number(config?.rsi_period) || 14;
                     // RSI mode: align chart RSI with trade signal (D-1/D-2 based on closed candles).
                     // Exclude the latest candle only when it belongs to today's KST date (in-progress).
@@ -250,10 +263,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], tr
                     rsiSeries14Ref.current.setData(rsiSeriesData);
 
                     chartRef.current.priceScale('rsi').applyOptions({
-                        autoScale: false,
-                        minValue: 0,
-                        maxValue: 100,
-                        scaleMargins: { top: 0.6, bottom: 0.15 },
+                        autoScale: true,
                         visible: true,
                         borderColor: '#ef4444',
                     });
@@ -271,7 +281,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], tr
                 console.error("[Chart] Error setting data:", error);
             }
         }
-    }, [candleData, volumeData, config?.strategy_mode, config?.use_trailing_buy, config?.rsi_period]);
+    }, [candleData, volumeData, config?.strategy_mode, config?.use_trailing_buy, config?.rsi_period, showRSIPanel]);
 
     // Handle AutoScaling Toggle
     useEffect(() => {
@@ -304,7 +314,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], tr
                 autoScale: true,
                 scaleMargins: {
                     top: 0.05,
-                    bottom: 0.3, // Leave space for RSI
+                    bottom: 0.3,
                 },
             },
             localization: {
@@ -351,7 +361,7 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], tr
                 },
             },
             width: chartContainerRef.current.clientWidth,
-            height: 400,
+            height: chartHeight,
         });
 
         // Initialize rsiCursorLineRef
@@ -487,6 +497,12 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], tr
             title: '', // Remove title to prevent axis label clutter
             priceFormat: { type: 'price', precision: 1, minMove: 0.1 },
             lastValueVisible: false, // Hide default static last value label
+            autoscaleInfoProvider: () => ({
+                priceRange: {
+                    minValue: 0,
+                    maxValue: 100,
+                },
+            }),
         });
         rsiSeries14Ref.current = rsiSeries14;
 
@@ -523,6 +539,33 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], tr
         });
         rsiBuyLineRef.current = rsiBuyLine;
 
+        const adaptivePressureSeries = chart.addLineSeries({
+            color: '#f59e0b',
+            lineWidth: 2,
+            priceScaleId: 'adaptivePressure',
+            title: '',
+            priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+            lastValueVisible: false,
+            priceLineVisible: false,
+            autoscaleInfoProvider: () => ({
+                priceRange: {
+                    minValue: 0,
+                    maxValue: Number(configRef.current?.adaptive_pressure_cap ?? 4.0),
+                },
+            }),
+        });
+        adaptivePressureSeriesRef.current = adaptivePressureSeries;
+
+        const adaptivePressureCapLine = adaptivePressureSeries.createPriceLine({
+            price: Number(configRef.current?.adaptive_pressure_cap ?? 4.0),
+            color: 'rgba(245, 158, 11, 0.45)',
+            lineWidth: 1,
+            lineStyle: 2,
+            axisLabelVisible: true,
+            title: 'Cap',
+        });
+        adaptivePressureCapLineRef.current = adaptivePressureCapLine;
+
         const handleResize = () => {
             chart.applyOptions({ width: chartContainerRef.current.clientWidth });
         };
@@ -540,6 +583,105 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], tr
     useEffect(() => {
         configRef.current = config;
     }, [config]);
+
+    useEffect(() => {
+        if (!chartRef.current || !chartContainerRef.current) return;
+
+        chartRef.current.applyOptions({
+            height: chartHeight,
+            width: chartContainerRef.current.clientWidth,
+        });
+
+        if (showRSIPanel && showAdaptivePressure) {
+            chartRef.current.priceScale('right').applyOptions({
+                scaleMargins: { top: 0.05, bottom: 0.5 },
+            });
+            chartRef.current.priceScale('volume').applyOptions({
+                scaleMargins: { top: 0.55, bottom: 0.33 },
+            });
+            chartRef.current.priceScale('rsi').applyOptions({
+                autoScale: true,
+                visible: true,
+                borderColor: '#8b5cf6',
+                scaleMargins: { top: 0.7, bottom: 0.18 },
+            });
+            chartRef.current.priceScale('adaptivePressure').applyOptions({
+                autoScale: true,
+                visible: true,
+                borderColor: '#f59e0b',
+                scaleMargins: { top: 0.84, bottom: 0.04 },
+            });
+            rsiSeries14Ref.current?.applyOptions({ visible: true });
+            adaptivePressureSeriesRef.current?.applyOptions({ visible: true });
+            return;
+        }
+
+        if (showRSIPanel) {
+            chartRef.current.priceScale('right').applyOptions({
+                scaleMargins: { top: 0.05, bottom: 0.4 },
+            });
+            chartRef.current.priceScale('volume').applyOptions({
+                scaleMargins: { top: 0.55, bottom: 0.33 },
+            });
+            chartRef.current.priceScale('rsi').applyOptions({
+                autoScale: true,
+                visible: true,
+                borderColor: '#8b5cf6',
+                scaleMargins: { top: 0.74, bottom: 0.06 },
+            });
+            chartRef.current.priceScale('adaptivePressure').applyOptions({
+                visible: false,
+            });
+            rsiSeries14Ref.current?.applyOptions({ visible: true });
+            adaptivePressureSeriesRef.current?.applyOptions({ visible: false });
+            return;
+        }
+
+        if (showAdaptivePressure) {
+            chartRef.current.priceScale('right').applyOptions({
+                scaleMargins: { top: 0.05, bottom: 0.4 },
+            });
+            chartRef.current.priceScale('volume').applyOptions({
+                scaleMargins: { top: 0.56, bottom: 0.3 },
+            });
+            chartRef.current.priceScale('rsi').applyOptions({
+                visible: false,
+            });
+            chartRef.current.priceScale('adaptivePressure').applyOptions({
+                autoScale: true,
+                visible: true,
+                borderColor: '#f59e0b',
+                scaleMargins: { top: 0.78, bottom: 0.06 },
+            });
+            rsiSeries14Ref.current?.applyOptions({ visible: false });
+            adaptivePressureSeriesRef.current?.applyOptions({ visible: true });
+            return;
+        }
+
+        chartRef.current.priceScale('right').applyOptions({
+            scaleMargins: { top: 0.05, bottom: 0.3 },
+        });
+        chartRef.current.priceScale('volume').applyOptions({
+            scaleMargins: { top: 0.5, bottom: 0.35 },
+        });
+        chartRef.current.priceScale('rsi').applyOptions({
+            visible: false,
+        });
+        chartRef.current.priceScale('adaptivePressure').applyOptions({
+            visible: false,
+        });
+        rsiSeries14Ref.current?.applyOptions({ visible: false });
+        adaptivePressureSeriesRef.current?.applyOptions({ visible: false });
+    }, [chartHeight, showRSIPanel, showAdaptivePressure, config?.adaptive_pressure_cap]);
+
+    useEffect(() => {
+        if (!adaptivePressureCapLineRef.current) return;
+        adaptivePressureCapLineRef.current.applyOptions({
+            price: Number(config?.adaptive_pressure_cap ?? 4.0),
+            axisLabelVisible: showAdaptivePressure,
+            title: 'Cap',
+        });
+    }, [config?.adaptive_pressure_cap, showAdaptivePressure]);
 
     // Markers System (Using True UTC)
     useEffect(() => {
@@ -760,6 +902,70 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], tr
         nextTargetSeriesRef.current.setData(targetLine);
     }, [candleData, systemEvents, nextBuyTargetPrice]);
 
+    useEffect(() => {
+        if (!adaptivePressureSeriesRef.current) return;
+
+        if (!showAdaptivePressure || !candleData || candleData.length === 0) {
+            adaptivePressureSeriesRef.current.setData([]);
+            return;
+        }
+
+        const eventToTs = (ev) => {
+            const val = ev?.timestamp;
+            if (!val) return null;
+            if (typeof val === 'number') return val;
+            return parseUTC(val);
+        };
+
+        const parsePressureFromMessage = (msg) => {
+            if (!msg) return null;
+            const match = String(msg).match(/Pressure:\s*([0-9]+(?:\.[0-9]+)?)/i);
+            if (!match) return null;
+            const parsed = Number(match[1]);
+            return Number.isFinite(parsed) ? parsed : null;
+        };
+
+        const sortedEvents = [...(systemEvents || [])]
+            .map((e) => ({
+                ...e,
+                _ts: eventToTs(e),
+                _pressure: parsePressureFromMessage(e?.message),
+            }))
+            .filter((e) => e._ts !== null && e.event_type === 'ADAPTIVE_PRESSURE' && e._pressure !== null)
+            .sort((a, b) => a._ts - b._ts);
+
+        let eventIdx = 0;
+        let currentPressure = null;
+        const pressureLine = [];
+
+        for (const c of candleData) {
+            while (eventIdx < sortedEvents.length && sortedEvents[eventIdx]._ts <= c.time) {
+                currentPressure = sortedEvents[eventIdx]._pressure;
+                eventIdx += 1;
+            }
+            if (currentPressure !== null) {
+                pressureLine.push({ time: c.time, value: currentPressure });
+            }
+        }
+
+        const latestPressure = Number(adaptiveState?.pressure);
+        if (Number.isFinite(latestPressure) && candleData.length > 0) {
+            if (pressureLine.length > 0) {
+                pressureLine[pressureLine.length - 1] = {
+                    time: candleData[candleData.length - 1].time,
+                    value: latestPressure,
+                };
+            } else {
+                pressureLine.push(...candleData.map((c) => ({
+                    time: c.time,
+                    value: latestPressure,
+                })));
+            }
+        }
+
+        adaptivePressureSeriesRef.current.setData(pressureLine);
+    }, [candleData, systemEvents, adaptiveState?.pressure, showAdaptivePressure]);
+
     // Draw Trailing Buy Lines
     useEffect(() => {
         if (!candlestickSeriesRef.current || !config) return;
@@ -848,8 +1054,47 @@ const StrategyChart = ({ ticker, splits = [], config = {}, tradeHistory = [], tr
                 <span style={{ background: 'rgba(239, 68, 68, 0.6)', color: '#f8fafc', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>Trade Limit</span>
                 <span style={{ background: 'rgba(148, 163, 184, 0.42)', color: '#f8fafc', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>Buy Ready</span>
                 <span style={{ background: 'rgba(34, 211, 238, 0.25)', color: '#67e8f9', border: '1px solid rgba(34, 211, 238, 0.65)', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>Next Target</span>
+                {showAdaptivePressure && (
+                    <span style={{ background: 'rgba(245, 158, 11, 0.2)', color: '#fbbf24', border: '1px solid rgba(245, 158, 11, 0.5)', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>
+                        {`Stress ${Number(adaptiveState?.pressure ?? 0).toFixed(2)} / ${Number(config?.adaptive_pressure_cap ?? 4).toFixed(2)}`}
+                    </span>
+                )}
             </div>
-            <div ref={chartContainerRef} style={{ position: 'relative', height: '400px', width: '100%', touchAction: 'none' }}>
+            <div ref={chartContainerRef} style={{ position: 'relative', height: `${chartHeight}px`, width: '100%', touchAction: 'none' }}>
+                {showRSIPanel && (
+                    <div style={{
+                        position: 'absolute',
+                        left: '10px',
+                        bottom: showAdaptivePressure ? '108px' : '56px',
+                        zIndex: 15,
+                        padding: '0.15rem 0.4rem',
+                        borderRadius: '0.25rem',
+                        backgroundColor: 'rgba(139, 92, 246, 0.14)',
+                        color: '#c4b5fd',
+                        fontSize: '0.7rem',
+                        fontWeight: 700,
+                        pointerEvents: 'none',
+                    }}>
+                        RSI
+                    </div>
+                )}
+                {showAdaptivePressure && (
+                    <div style={{
+                        position: 'absolute',
+                        left: '10px',
+                        bottom: '12px',
+                        zIndex: 15,
+                        padding: '0.15rem 0.4rem',
+                        borderRadius: '0.25rem',
+                        backgroundColor: 'rgba(245, 158, 11, 0.14)',
+                        color: '#fbbf24',
+                        fontSize: '0.7rem',
+                        fontWeight: 700,
+                        pointerEvents: 'none',
+                    }}>
+                        Stress
+                    </div>
+                )}
                 {/* Scale Lock Toggle Button */}
                 <button
                     onClick={(e) => {

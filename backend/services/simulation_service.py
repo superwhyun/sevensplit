@@ -201,6 +201,16 @@ class SimulationService:
             use_trailing_buy=getattr(strategy_rec, "use_trailing_buy", False),
             trailing_buy_rebound_percent=getattr(strategy_rec, "trailing_buy_rebound_percent", 0.2),
             trailing_buy_batch=getattr(strategy_rec, "trailing_buy_batch", True),
+            use_adaptive_buy_control=getattr(strategy_rec, "use_adaptive_buy_control", False),
+            adaptive_sell_pressure_step=getattr(strategy_rec, "adaptive_sell_pressure_step", 1.0),
+            adaptive_buy_relief_step=getattr(strategy_rec, "adaptive_buy_relief_step", 1.0),
+            adaptive_pressure_cap=getattr(strategy_rec, "adaptive_pressure_cap", 4.0),
+            adaptive_probe_multiplier=getattr(strategy_rec, "adaptive_probe_multiplier", 0.5),
+            use_fast_drop_brake=getattr(strategy_rec, "use_fast_drop_brake", True),
+            fast_drop_trigger_levels=getattr(strategy_rec, "fast_drop_trigger_levels", 2),
+            fast_drop_batch_cap=getattr(strategy_rec, "fast_drop_batch_cap", 1),
+            fast_drop_next_gap_levels=getattr(strategy_rec, "fast_drop_next_gap_levels", 2),
+            fast_drop_multiplier_cap=getattr(strategy_rec, "fast_drop_multiplier_cap", 0.75),
             price_segments=getattr(strategy_rec, "price_segments", []) or [],
         )
 

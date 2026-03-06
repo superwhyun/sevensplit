@@ -45,6 +45,18 @@ class StrategyConfig(BaseModel):
     trailing_buy_rebound_percent: float = 0.2 # 0.2% Rebound threshold (default)
     trailing_buy_batch: bool = True # Applies on Watch-mode rebound exit: if True, catch-up buy multiple splits; else buy one.
 
+    # Adaptive Buy Control (PRICE mode only)
+    use_adaptive_buy_control: bool = False
+    adaptive_sell_pressure_step: float = 1.0
+    adaptive_buy_relief_step: float = 1.0
+    adaptive_pressure_cap: float = 4.0
+    adaptive_probe_multiplier: float = 0.5
+    use_fast_drop_brake: bool = True
+    fast_drop_trigger_levels: int = 2
+    fast_drop_batch_cap: int = 1
+    fast_drop_next_gap_levels: int = 2
+    fast_drop_multiplier_cap: float = 0.75
+
     # Segmented Price Strategy
     price_segments: List[PriceSegment] = []
 

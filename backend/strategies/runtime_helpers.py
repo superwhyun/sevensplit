@@ -54,6 +54,7 @@ class StrategyStateManager:
                 "is_watching": strategy.is_watching,
                 "watch_lowest_price": strategy.watch_lowest_price,
                 "pending_buy_units": strategy.pending_buy_units,
+                "adaptive_reentry_pressure": strategy.adaptive_reentry_pressure,
             }
         )
         return payload
@@ -120,6 +121,16 @@ class StrategyStateManager:
             use_trailing_buy=getattr(state, "use_trailing_buy", False),
             trailing_buy_rebound_percent=getattr(state, "trailing_buy_rebound_percent", 0.2),
             trailing_buy_batch=getattr(state, "trailing_buy_batch", True),
+            use_adaptive_buy_control=getattr(state, "use_adaptive_buy_control", False),
+            adaptive_sell_pressure_step=getattr(state, "adaptive_sell_pressure_step", 1.0),
+            adaptive_buy_relief_step=getattr(state, "adaptive_buy_relief_step", 1.0),
+            adaptive_pressure_cap=getattr(state, "adaptive_pressure_cap", 4.0),
+            adaptive_probe_multiplier=getattr(state, "adaptive_probe_multiplier", 0.5),
+            use_fast_drop_brake=getattr(state, "use_fast_drop_brake", True),
+            fast_drop_trigger_levels=getattr(state, "fast_drop_trigger_levels", 2),
+            fast_drop_batch_cap=getattr(state, "fast_drop_batch_cap", 1),
+            fast_drop_next_gap_levels=getattr(state, "fast_drop_next_gap_levels", 2),
+            fast_drop_multiplier_cap=getattr(state, "fast_drop_multiplier_cap", 0.75),
             price_segments=getattr(state, "price_segments", []) or [],
         )
 
@@ -133,6 +144,11 @@ class StrategyStateManager:
         strategy.is_watching = getattr(state, "is_watching", False)
         strategy.watch_lowest_price = getattr(state, "watch_lowest_price", None)
         strategy.pending_buy_units = getattr(state, "pending_buy_units", 0)
+        strategy.adaptive_reentry_pressure = getattr(state, "adaptive_reentry_pressure", 0.0) or 0.0
+        strategy.adaptive_effective_buy_multiplier = 1.0
+        strategy.adaptive_fast_drop_active = False
+        if hasattr(strategy, "adaptive_buy_controller"):
+            strategy.adaptive_buy_controller.refresh_runtime()
 
     def _load_splits(self, strategy) -> None:
         db_splits = strategy.db.get_splits(strategy.strategy_id)
@@ -348,6 +364,11 @@ class StrategyOrderManager:
 
         split.status = "SELL_FILLED"
         strategy.last_sell_price = actual_sell_price
+        if hasattr(strategy, "adaptive_buy_controller"):
+            strategy.adaptive_buy_controller.apply_sell_fill(
+                sell_total,
+                split.actual_buy_price or split.buy_price,
+            )
         logging.info(
             f"Sell order filled for split {split.id} at {actual_sell_price}. "
             f"Net Profit: {net_profit} KRW ({profit_rate:.2f}%) after fees: {total_fee} KRW"
@@ -409,6 +430,8 @@ class StrategyOrderManager:
         split.actual_buy_price = actual_price
         split.buy_price = actual_price
         split.buy_volume = volume if volume > 0 else executed_vol
+        if hasattr(strategy, "adaptive_buy_controller"):
+            strategy.adaptive_buy_controller.apply_buy_fill(split.buy_amount, split.actual_buy_price)
 
         logging.info(
             f"Buy order {state} for split {split.id}. "
@@ -464,7 +487,16 @@ class StrategyLifecycleManager:
             else:
                 logging.info(f"Starting strategy {strategy.strategy_id} at current price: {current_price}")
                 rsi_5m = strategy.watch_logic.get_rsi_5m(current_price)
-                split = strategy.price_logic._execute_single_buy(current_price, buy_rsi=rsi_5m)
+                buy_multiplier = (
+                    strategy.adaptive_buy_controller.get_pressure_multiplier()
+                    if hasattr(strategy, "adaptive_buy_controller")
+                    else 1.0
+                )
+                split = strategy.price_logic._execute_single_buy(
+                    current_price,
+                    buy_rsi=rsi_5m,
+                    buy_multiplier=buy_multiplier,
+                )
                 if split:
                     next_target = current_price * (1 - strategy.config.buy_rate)
                     msg = (
@@ -636,6 +668,13 @@ class StrategyStatusPresenter:
             "rsi_daily_short": strategy.rsi_logic.current_rsi_daily_short,
             "is_watching": strategy.is_watching,
             "watch_lowest_price": strategy.watch_lowest_price,
+            "adaptive_reentry_pressure": strategy.adaptive_reentry_pressure,
+            "adaptive_effective_buy_multiplier": (
+                strategy.adaptive_effective_buy_multiplier
+                if strategy.adaptive_fast_drop_active
+                else strategy.adaptive_buy_controller.get_pressure_multiplier()
+            ) if hasattr(strategy, "adaptive_buy_controller") else 1.0,
+            "adaptive_fast_drop_active": strategy.adaptive_fast_drop_active,
             "status_msg": strategy.last_status_msg,
         }
 
@@ -643,9 +682,10 @@ class StrategyStatusPresenter:
 class StrategyGuardService:
     """Budget and trade-limit guards."""
 
-    def has_sufficient_budget(self, strategy, market_context: dict = None) -> bool:
+    def has_sufficient_budget(self, strategy, market_context: dict = None, required_amount: Optional[float] = None) -> bool:
+        required_amount = float(required_amount) if required_amount is not None else float(strategy.config.investment_per_split)
         total_invested = sum(s.buy_amount for s in strategy.splits if s.status != "SELL_FILLED")
-        if total_invested + strategy.config.investment_per_split > strategy.budget:
+        if total_invested + required_amount > strategy.budget:
             return False
 
         if market_context and "accounts" in market_context:
@@ -656,7 +696,7 @@ class StrategyGuardService:
                         krw_balance = float(acc.get("balance", 0))
                         break
 
-                if krw_balance < strategy.config.investment_per_split:
+                if krw_balance < required_amount:
                     logging.warning(f"Insufficient KRW balance in account: {krw_balance}")
                     return False
             except Exception as e:

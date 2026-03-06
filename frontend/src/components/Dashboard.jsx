@@ -1582,6 +1582,12 @@ const Dashboard = () => {
                                     }}
                                     systemEvents={simOverlayState ? simSystemEvents : strategyEvents}
                                     nextBuyTargetPrice={getNextBuyTarget(displayedStatus)}
+                                    adaptiveState={{
+                                        enabled: !!resolvedConfig?.use_adaptive_buy_control,
+                                        pressure: displayedStatus?.adaptive_reentry_pressure,
+                                        multiplier: displayedStatus?.adaptive_effective_buy_multiplier,
+                                        fastDropActive: displayedStatus?.adaptive_fast_drop_active,
+                                    }}
                                 />
                             </div>
 
@@ -1628,7 +1634,7 @@ const Dashboard = () => {
                                                         <div>
                                                             <div style={{ color: '#94a3b8' }}>Invested Amount</div>
                                                             <div style={{ color: '#10b981', fontWeight: 'bold' }}>
-                                                                ₩{totalInvested.toLocaleString()}
+                                                                ₩{Math.round(totalInvested).toLocaleString()}
                                                             </div>
                                                         </div>
                                                     </div>
@@ -1670,7 +1676,7 @@ const Dashboard = () => {
                                                         <div>
                                                             <div style={{ color: '#94a3b8' }}>Invested Amount</div>
                                                             <div style={{ color: '#ef4444', fontWeight: 'bold' }}>
-                                                                ₩{outOfRangeInvested.toLocaleString()}
+                                                                ₩{Math.round(outOfRangeInvested).toLocaleString()}
                                                             </div>
                                                         </div>
                                                     </div>

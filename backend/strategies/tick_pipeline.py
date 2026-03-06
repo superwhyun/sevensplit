@@ -46,6 +46,8 @@ class TickPipeline:
         self.post_tick(strategy, ctx)
 
     def pre_tick(self, strategy, ctx: TickContext) -> bool:
+        if hasattr(strategy, "adaptive_buy_controller"):
+            strategy.adaptive_buy_controller.refresh_runtime()
         strategy.tick_coordinator.dedupe_splits(strategy)
         ctx.current_price = strategy.tick_coordinator.resolve_current_price(strategy, ctx.current_price)
         return bool(ctx.current_price)

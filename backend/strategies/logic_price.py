@@ -1,4 +1,5 @@
 import logging
+import math
 import time
 from types import SimpleNamespace
 from datetime import datetime, timezone, timedelta
@@ -30,9 +31,6 @@ class PriceStrategyLogic:
         Build a buy execution plan.
         Returns None when buy should be skipped this tick.
         """
-        if not self._passes_buy_guards(market_context=market_context):
-            return None
-
         # Check active positions
         active_splits = [s for s in self.strategy.splits if s.status in ["PENDING_BUY", "BUY_FILLED", "PENDING_SELL"]]
         has_active_positions = len(active_splits) > 0
@@ -62,6 +60,15 @@ class PriceStrategyLogic:
             logging.info(msg)
             return None
 
+        raw_levels_crossed = self._calculate_raw_levels_crossed(is_grid_buy, current_price)
+        adaptive_controls = self.strategy.adaptive_buy_controller.resolve_execution_controls(
+            raw_levels_crossed=raw_levels_crossed,
+            allow_batch_buy=allow_batch_buy,
+        )
+        required_amount = self._estimate_buy_amount(current_price, adaptive_controls["buy_multiplier"])
+        if not self._passes_buy_guards(market_context=market_context, required_amount=required_amount):
+            return None
+
         self._set_buy_gate("BUY_READY", "Price strategy buy conditions satisfied.", level="INFO")
         return {
             "current_price": current_price,
@@ -70,6 +77,8 @@ class PriceStrategyLogic:
             "reference_msg": reference_msg,
             "is_grid_buy": is_grid_buy,
             "allow_batch_buy": allow_batch_buy,
+            "raw_levels_crossed": raw_levels_crossed,
+            "adaptive_controls": adaptive_controls,
         }
 
     def execute_buy_logic(
@@ -100,24 +109,48 @@ class PriceStrategyLogic:
         reference_msg = buy_plan["reference_msg"]
         is_grid_buy = buy_plan["is_grid_buy"]
         allow_batch_buy = bool(buy_plan.get("allow_batch_buy", False))
+        adaptive_controls = buy_plan.get("adaptive_controls", {})
+        buy_multiplier = float(adaptive_controls.get("buy_multiplier", 1.0) or 1.0)
+        next_gap_levels = max(1, int(adaptive_controls.get("next_gap_levels", 1) or 1))
+        batch_cap = adaptive_controls.get("batch_cap")
 
         levels_crossed = self._resolve_levels_crossed(is_grid_buy, current_price, allow_batch_buy=allow_batch_buy)
+        if batch_cap is not None:
+            levels_crossed = min(levels_crossed, max(1, int(batch_cap)))
         
         # Use rsi_daily for the recorded buy_rsi if available
         buy_rsi_to_record = rsi_daily if rsi_daily is not None else rsi_5m
-        created_count, log_details = self._execute_batch_buys(levels_crossed, current_price, buy_rsi_to_record)
+        created_count, log_details = self._execute_batch_buys(
+            levels_crossed,
+            current_price,
+            buy_rsi_to_record,
+            buy_multiplier,
+        )
         if created_count <= 0:
             return
 
         self.strategy.log_event(
             "INFO",
             "BUY_EXEC",
-            self._build_buy_exec_message(is_grid_buy, reference_msg, current_price, log_details),
+            self._build_buy_exec_message(
+                is_grid_buy,
+                reference_msg,
+                current_price,
+                log_details,
+                buy_multiplier=buy_multiplier,
+                next_gap_levels=next_gap_levels,
+                fast_drop_active=bool(adaptive_controls.get("fast_drop_active", False)),
+            ),
         )
-        self.strategy.next_buy_target_price = current_price * (1 - self.strategy.config.buy_rate)
+        self.strategy.next_buy_target_price = current_price * (
+            1 - (self.strategy.config.buy_rate * next_gap_levels)
+        )
 
-    def _passes_buy_guards(self, market_context: dict = None) -> bool:
-        if not self.strategy.has_sufficient_budget(market_context=market_context):
+    def _passes_buy_guards(self, market_context: dict = None, required_amount: float = None) -> bool:
+        if not self.strategy.has_sufficient_budget(
+            market_context=market_context,
+            required_amount=required_amount,
+        ):
             msg = "Price Logic: Buy skipped due to insufficient budget."
             logging.info(msg)
             self._set_buy_gate("WAIT_INSUFFICIENT_BUDGET", msg, level="WARNING")
@@ -214,6 +247,11 @@ class PriceStrategyLogic:
             logging.debug(f"Price Logic: Failed to normalize manual target {target_price}: {e}")
         return target_price
 
+    def _calculate_raw_levels_crossed(self, is_grid_buy: bool, current_price: float) -> int:
+        if not is_grid_buy or self.strategy.last_buy_price is None:
+            return 1
+        return max(1, self._calculate_levels_crossed(self.strategy.last_buy_price, current_price))
+
     def _resolve_levels_crossed(self, is_grid_buy: bool, current_price: float, allow_batch_buy: bool = False) -> int:
         if not is_grid_buy:
             return 1
@@ -222,15 +260,29 @@ class PriceStrategyLogic:
             return 1
         return levels_crossed
 
-    def _execute_batch_buys(self, levels_crossed: int, current_price: float, buy_rsi: float):
+    def _estimate_buy_amount(self, price: float, buy_multiplier: float) -> float:
+        segment = self._find_matching_segment(price)
+        if segment is None:
+            return 0.0
+        raw_amount = float(segment.investment_per_split or 0.0) * max(float(buy_multiplier or 0.0), 0.0)
+        return self._round_order_amount(raw_amount)
+
+    @staticmethod
+    def _round_order_amount(amount: float) -> float:
+        normalized = max(float(amount or 0.0), 0.0)
+        return float(math.floor(normalized + 0.5))
+
+    def _execute_batch_buys(self, levels_crossed: int, current_price: float, buy_rsi: float, buy_multiplier: float):
         created_count = 0
         log_details = []
         for _ in range(levels_crossed):
-            split = self._execute_single_buy(current_price, buy_rsi=buy_rsi)
+            split = self._execute_single_buy(current_price, buy_rsi=buy_rsi, buy_multiplier=buy_multiplier)
             if not split:
                 break
             created_count += 1
-            log_details.append(f"Split #{split.id}: Entry @ {current_price:.1f}")
+            log_details.append(
+                f"Split #{split.id}: Entry @ {current_price:.1f} / ₩{split.buy_amount:,.0f}"
+            )
         return created_count, log_details
 
     def _build_buy_exec_message(
@@ -239,13 +291,20 @@ class PriceStrategyLogic:
         reference_msg: str,
         current_price: float,
         log_details: list,
+        buy_multiplier: float = 1.0,
+        next_gap_levels: int = 1,
+        fast_drop_active: bool = False,
     ) -> str:
-        final_next_target = current_price * (1 - self.strategy.config.buy_rate)
+        final_next_target = current_price * (1 - (self.strategy.config.buy_rate * next_gap_levels))
         msg = (
             f"Buy Executed ({'Grid' if is_grid_buy else 'Initial'}).\n"
             f"- Condition: {reference_msg}\n"
             f"- Market Price: {current_price:.1f}\n"
         )
+        if buy_multiplier < 0.999 or fast_drop_active:
+            msg += f"- Buy Size Multiplier: {buy_multiplier:.2f}x\n"
+        if fast_drop_active:
+            msg += f"- Fast Drop Brake: ON ({next_gap_levels} levels)\n"
         if log_details:
             msg += "- " + "\n- ".join(log_details) + "\n"
         msg += f"- Next Buy Target: {final_next_target:.1f}"
@@ -337,11 +396,15 @@ class PriceStrategyLogic:
         state_changed = False
         prev_target = self.strategy.next_buy_target_price
 
-        # 1. Get the lowest price among active splits
+        # 1. Get the lowest price among actual holdings.
+        # PENDING_BUY orders are not filled inventory yet, so they must not
+        # keep the rebuy anchor pinned below a realized sell.
         active_ref_price = None
         has_active_positions = False
         if self.strategy.splits:
-            active_buys = [s for s in self.strategy.splits if s.status != "SELL_FILLED"]
+            active_buys = [
+                s for s in self.strategy.splits if s.status in ["BUY_FILLED", "PENDING_SELL"]
+            ]
             if active_buys:
                 has_active_positions = True
                 def get_ref_price(s):
@@ -415,7 +478,12 @@ class PriceStrategyLogic:
 
     # _create_buy_orders removed (logic moved to execute_buy_logic for better control over levels)
 
-    def _execute_single_buy(self, actual_market_price: float, buy_rsi: float = None) -> SplitState:
+    def _execute_single_buy(
+        self,
+        actual_market_price: float,
+        buy_rsi: float = None,
+        buy_multiplier: float = 1.0,
+    ) -> SplitState:
         """
         Execute a single buy order.
         actual_market_price: Current price we are buying at.
@@ -434,7 +502,20 @@ class PriceStrategyLogic:
                 f"구매 보류: 현재 가격({actual_market_price:,.0f})에 매칭되는 세그먼트가 없습니다."
             )
             return None
-        investment_amount = segment.investment_per_split
+        base_investment_amount = float(segment.investment_per_split or 0.0)
+        investment_amount = self._round_order_amount(
+            base_investment_amount * max(float(buy_multiplier or 0.0), 0.0)
+        )
+
+        min_buy_amount = self.strategy.adaptive_buy_controller.get_minimum_buy_amount()
+        if investment_amount < min_buy_amount:
+            msg = (
+                f"Price Logic: Adaptive buy amount ₩{investment_amount:,.0f} is below minimum "
+                f"order size ₩{min_buy_amount:,.0f}. Skipping buy."
+            )
+            logging.info(msg)
+            self._set_buy_gate("WAIT_BUY_AMOUNT_TOO_SMALL", msg, level="WARNING")
+            return None
         
         if current_invested + investment_amount > self.strategy.budget:
             return None
@@ -446,7 +527,7 @@ class PriceStrategyLogic:
         try:
             logging.info(f"Price Logic: Attempting buy_market_order for {investment_amount} KRW")
             result = self.strategy.exchange.buy_market_order(self.strategy.ticker, investment_amount)
-            if result:
+            if result and result.get('uuid'):
                 logging.info(f"Price Logic: Buy order created! UUID={result.get('uuid')}")
                 
                 # Use actual market price as the base for the split and next target calculation

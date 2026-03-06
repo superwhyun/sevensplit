@@ -3,7 +3,7 @@ import logging
 from database import get_db
 
 from models.strategy_state import SplitState
-from strategies import BaseStrategy, PriceStrategyLogic, RSIStrategyLogic
+from strategies import AdaptiveBuyController, BaseStrategy, PriceStrategyLogic, RSIStrategyLogic
 from strategies.logic_watch import WatchModeLogic
 from strategies.tick_pipeline import TickPipeline
 from strategies.runtime_helpers import (
@@ -30,11 +30,18 @@ class SevenSplitStrategy(BaseStrategy):
         self.next_buy_target_price = None # Single source of truth for next buy target
         self.budget = budget
         self.last_status_msg = "" # Latest reason for skipping buy or bot action
+        self.is_watching = False
+        self.watch_lowest_price = None
+        self.pending_buy_units = 0
+        self.adaptive_reentry_pressure = 0.0
+        self.adaptive_effective_buy_multiplier = 1.0
+        self.adaptive_fast_drop_active = False
         
         # Constants
         self.ORDER_TIMEOUT_SEC = 1800
         
         # Logic Modules
+        self.adaptive_buy_controller = AdaptiveBuyController(self)
         self.price_logic = PriceStrategyLogic(self)
         self.rsi_logic = RSIStrategyLogic(self)
         self.watch_logic = WatchModeLogic(self)
@@ -124,8 +131,12 @@ class SevenSplitStrategy(BaseStrategy):
 
     # update_config is inherited from BaseStrategy
 
-    def has_sufficient_budget(self, market_context: dict = None) -> bool:
-        return self.guard_service.has_sufficient_budget(self, market_context=market_context)
+    def has_sufficient_budget(self, market_context: dict = None, required_amount: Optional[float] = None) -> bool:
+        return self.guard_service.has_sufficient_budget(
+            self,
+            market_context=market_context,
+            required_amount=required_amount,
+        )
 
     def check_trade_limit(self) -> bool:
         return self.guard_service.check_trade_limit(self)

@@ -1,4 +1,5 @@
 import logging
+import math
 import time
 from datetime import timedelta, timezone, datetime
 from utils.indicators import calculate_rsi
@@ -272,7 +273,7 @@ class RSIStrategyLogic:
         return success_count > 0
 
     def _create_buy_order(self, target_price: float, buy_rsi: float) -> SplitState:
-        amount = self.strategy.config.investment_per_split
+        amount = float(math.floor(max(float(self.strategy.config.investment_per_split or 0.0), 0.0) + 0.5))
         total_invested = sum(s.buy_amount for s in self.strategy.splits)
         if total_invested + amount > self.strategy.budget:
             return None

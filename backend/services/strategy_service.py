@@ -107,6 +107,8 @@ class StrategyService:
         strategy.update_config(config)
         if hasattr(strategy, "price_logic") and hasattr(strategy.price_logic, "_last_buy_gate_code"):
             strategy.price_logic._last_buy_gate_code = None
+        if hasattr(strategy, "adaptive_buy_controller"):
+            strategy.adaptive_buy_controller.refresh_runtime()
 
         # Re-evaluate immediately so config changes (e.g. segment max_splits) are reflected
         # without waiting for the next scheduler/websocket cycle.
@@ -150,7 +152,8 @@ class StrategyService:
                 next_split_id=1,
                 last_buy_price=None,
                 last_sell_price=None,
-                next_buy_target_price=None
+                next_buy_target_price=None,
+                adaptive_reentry_pressure=0.0,
             )
 
             # Recreate instance
@@ -161,6 +164,12 @@ class StrategyService:
                 s_rec.ticker, 
                 s_rec.budget
             )
+            if getattr(self.strategies[strategy_id].config, "use_adaptive_buy_control", False):
+                self.strategies[strategy_id].log_event(
+                    "INFO",
+                    "ADAPTIVE_PRESSURE",
+                    "Pressure: 0.0000 | Multiplier: 1.0000x | Cause: RESET",
+                )
             logging.info(f"Reset strategy {strategy_id}")
 
         except Exception as e:

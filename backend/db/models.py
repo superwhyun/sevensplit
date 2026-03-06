@@ -60,6 +60,16 @@ class Strategy(Base):
     use_trailing_buy = Column(Boolean, default=False, nullable=False)
     trailing_buy_rebound_percent = Column(Float, default=0.2, nullable=False)
     trailing_buy_batch = Column(Boolean, default=True, nullable=False)
+    use_adaptive_buy_control = Column(Boolean, default=False, nullable=False)
+    adaptive_sell_pressure_step = Column(Float, default=1.0, nullable=False)
+    adaptive_buy_relief_step = Column(Float, default=1.0, nullable=False)
+    adaptive_pressure_cap = Column(Float, default=4.0, nullable=False)
+    adaptive_probe_multiplier = Column(Float, default=0.5, nullable=False)
+    use_fast_drop_brake = Column(Boolean, default=True, nullable=False)
+    fast_drop_trigger_levels = Column(Integer, default=2, nullable=False)
+    fast_drop_batch_cap = Column(Integer, default=1, nullable=False)
+    fast_drop_next_gap_levels = Column(Integer, default=2, nullable=False)
+    fast_drop_multiplier_cap = Column(Float, default=0.75, nullable=False)
     
     # Price Segments (JSON List)
     price_segments = Column(JSON, nullable=True)
@@ -68,6 +78,7 @@ class Strategy(Base):
     is_watching = Column(Boolean, default=False, nullable=False)
     watch_lowest_price = Column(Float, nullable=True)
     pending_buy_units = Column(Integer, default=0, nullable=False)    # Accumulated buy units
+    adaptive_reentry_pressure = Column(Float, default=0.0, nullable=False)
     next_buy_target_price = Column(Float, nullable=True)  # Next buy target (user-set/auto-updated)
 
     # Timestamps

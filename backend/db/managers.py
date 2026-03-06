@@ -266,7 +266,17 @@ class DatabaseManager:
                 new_config_columns = [
                     ('use_trailing_buy', "BOOLEAN DEFAULT FALSE NOT NULL"),
                     ('trailing_buy_rebound_percent', "FLOAT DEFAULT 0.2 NOT NULL"),
-                    ('trailing_buy_batch', "BOOLEAN DEFAULT TRUE NOT NULL")
+                    ('trailing_buy_batch', "BOOLEAN DEFAULT TRUE NOT NULL"),
+                    ('use_adaptive_buy_control', "BOOLEAN DEFAULT FALSE NOT NULL"),
+                    ('adaptive_sell_pressure_step', "FLOAT DEFAULT 1.0 NOT NULL"),
+                    ('adaptive_buy_relief_step', "FLOAT DEFAULT 1.0 NOT NULL"),
+                    ('adaptive_pressure_cap', "FLOAT DEFAULT 4.0 NOT NULL"),
+                    ('adaptive_probe_multiplier', "FLOAT DEFAULT 0.5 NOT NULL"),
+                    ('use_fast_drop_brake', "BOOLEAN DEFAULT TRUE NOT NULL"),
+                    ('fast_drop_trigger_levels', "INTEGER DEFAULT 2 NOT NULL"),
+                    ('fast_drop_batch_cap', "INTEGER DEFAULT 1 NOT NULL"),
+                    ('fast_drop_next_gap_levels', "INTEGER DEFAULT 2 NOT NULL"),
+                    ('fast_drop_multiplier_cap', "FLOAT DEFAULT 0.75 NOT NULL"),
                 ]
                 for col_name, col_def in new_config_columns:
                     if col_name not in columns:
@@ -277,6 +287,10 @@ class DatabaseManager:
                 if 'price_segments' not in columns:
                     print(f"Migrating: Adding price_segments to strategies table")
                     conn.execute(text("ALTER TABLE strategies ADD COLUMN price_segments JSON"))
+
+                if 'adaptive_reentry_pressure' not in columns:
+                    print("Migrating: Adding adaptive_reentry_pressure to strategies table")
+                    conn.execute(text("ALTER TABLE strategies ADD COLUMN adaptive_reentry_pressure FLOAT DEFAULT 0.0 NOT NULL"))
 
                 # Next Buy Target Migration
                 if 'next_buy_target_price' not in columns:
@@ -301,12 +315,30 @@ class DatabaseManager:
                 trailing_columns = [
                     ('is_watching', "BOOLEAN DEFAULT 0"),
                     ('watch_lowest_price', "FLOAT"),
-                    ('pending_buy_units', "INTEGER DEFAULT 0")
+                    ('pending_buy_units', "INTEGER DEFAULT 0"),
+                    ('adaptive_reentry_pressure', "FLOAT DEFAULT 0.0 NOT NULL"),
                 ]
 
                 for col_name, col_def in trailing_columns:
                     if col_name not in columns:
                         print(f"Migrating: Adding {col_name} to strategies table (Trailing Buy)")
+                        conn.execute(text(f"ALTER TABLE strategies ADD COLUMN {col_name} {col_def}"))
+
+                adaptive_columns = [
+                    ('use_adaptive_buy_control', "BOOLEAN DEFAULT FALSE NOT NULL"),
+                    ('adaptive_sell_pressure_step', "FLOAT DEFAULT 1.0 NOT NULL"),
+                    ('adaptive_buy_relief_step', "FLOAT DEFAULT 1.0 NOT NULL"),
+                    ('adaptive_pressure_cap', "FLOAT DEFAULT 4.0 NOT NULL"),
+                    ('adaptive_probe_multiplier', "FLOAT DEFAULT 0.5 NOT NULL"),
+                    ('use_fast_drop_brake', "BOOLEAN DEFAULT TRUE NOT NULL"),
+                    ('fast_drop_trigger_levels', "INTEGER DEFAULT 2 NOT NULL"),
+                    ('fast_drop_batch_cap', "INTEGER DEFAULT 1 NOT NULL"),
+                    ('fast_drop_next_gap_levels', "INTEGER DEFAULT 2 NOT NULL"),
+                    ('fast_drop_multiplier_cap', "FLOAT DEFAULT 0.75 NOT NULL"),
+                ]
+                for col_name, col_def in adaptive_columns:
+                    if col_name not in columns:
+                        print(f"Migrating: Adding {col_name} to strategies table (Adaptive Buy)")
                         conn.execute(text(f"ALTER TABLE strategies ADD COLUMN {col_name} {col_def}"))
                 
                 if 'price_segments' not in columns:

@@ -109,7 +109,7 @@ function PriceRow({ split, currentPrice, sellRate, priceSegments }) {
                     {buyPriceRate > 0 ? '+' : ''}{buyPriceRate.toFixed(2)}%
                 </div>
             </td>
-            <td style={{ padding: '1rem' }}>₩{(split.buy_amount || 0).toLocaleString()}</td>
+            <td style={{ padding: '1rem' }}>₩{Math.round(split.buy_amount || 0).toLocaleString()}</td>
             <td style={{ padding: '1rem' }}>
                 <div>₩{sellTargetPrice.toLocaleString()}</div>
                 <div style={{ fontSize: '0.75rem', color: sellTargetRate < 0 ? '#ef4444' : sellTargetRate > 0 ? '#10b981' : '#94a3b8' }}>
@@ -153,7 +153,7 @@ function RSIRow({ split, currentPrice }) {
                     {buyPriceRate > 0 ? '+' : ''}{buyPriceRate.toFixed(2)}%
                 </div>
             </td>
-            <td style={{ padding: '1rem' }}>₩{(split.buy_amount || 0).toLocaleString()}</td>
+            <td style={{ padding: '1rem' }}>₩{Math.round(split.buy_amount || 0).toLocaleString()}</td>
             <td style={{ padding: '1rem', color: profitRate > 0 ? '#10b981' : profitRate < 0 ? '#ef4444' : '#94a3b8' }}>
                 {isBought ? `${profitRate.toFixed(2)}%` : '-'}
             </td>
@@ -174,6 +174,10 @@ export default function StrategyStatusPanel({
     const currentPrice = status?.current_price;
     const nextBuyTarget = isRSI ? null : getNextBuyTarget(status, strategyConfig);
     const showNextBuyBadge = !isRSI && (status?.next_buy_target_price || status?.last_buy_price);
+    const adaptiveEnabled = !isRSI && (status?.config?.use_adaptive_buy_control || strategyConfig?.use_adaptive_buy_control);
+    const adaptivePressure = Number(status?.adaptive_reentry_pressure ?? 0);
+    const adaptiveMultiplier = Number(status?.adaptive_effective_buy_multiplier ?? 1);
+    const fastDropActive = !!status?.adaptive_fast_drop_active;
 
     return (
         <div className="grid-status-container">
@@ -217,6 +221,44 @@ export default function StrategyStatusPanel({
                         </span>
                     )}
                 </div>
+
+                {adaptiveEnabled && (
+                    <div style={{
+                        padding: '0 1rem 1rem',
+                        display: 'flex',
+                        gap: '0.75rem',
+                        flexWrap: 'wrap',
+                        fontSize: '0.8rem',
+                    }}>
+                        <span style={{
+                            padding: '0.3rem 0.55rem',
+                            borderRadius: '999px',
+                            border: '1px solid #334155',
+                            backgroundColor: '#0f172a',
+                            color: '#cbd5e1',
+                        }}>
+                            Pressure: {adaptivePressure.toFixed(2)}
+                        </span>
+                        <span style={{
+                            padding: '0.3rem 0.55rem',
+                            borderRadius: '999px',
+                            border: '1px solid #334155',
+                            backgroundColor: 'rgba(56, 189, 248, 0.12)',
+                            color: '#7dd3fc',
+                        }}>
+                            Buy Size: {adaptiveMultiplier.toFixed(2)}x
+                        </span>
+                        <span style={{
+                            padding: '0.3rem 0.55rem',
+                            borderRadius: '999px',
+                            border: `1px solid ${fastDropActive ? '#f59e0b' : '#334155'}`,
+                            backgroundColor: fastDropActive ? 'rgba(245, 158, 11, 0.12)' : '#0f172a',
+                            color: fastDropActive ? '#fbbf24' : '#94a3b8',
+                        }}>
+                            Fast Drop Brake: {fastDropActive ? 'ON' : 'OFF'}
+                        </span>
+                    </div>
+                )}
 
                 <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                     <thead style={{ position: 'sticky', top: 0, backgroundColor: '#1e293b', zIndex: 10 }}>

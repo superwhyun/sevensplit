@@ -3,7 +3,86 @@ import axios from 'axios';
 import Slider from 'rc-slider';
 import 'rc-slider/assets/index.css';
 
-const defaultConfig = { strategy_mode: 'PRICE' };
+const defaultConfig = {
+    strategy_mode: 'PRICE',
+    use_adaptive_buy_control: false,
+    adaptive_sell_pressure_step: 1.0,
+    adaptive_buy_relief_step: 1.0,
+    adaptive_pressure_cap: 4.0,
+    adaptive_probe_multiplier: 0.5,
+    use_fast_drop_brake: true,
+    fast_drop_trigger_levels: 2,
+    fast_drop_batch_cap: 1,
+    fast_drop_next_gap_levels: 2,
+    fast_drop_multiplier_cap: 0.75,
+};
+
+const adaptivePresets = [
+    {
+        key: 'balanced',
+        label: '균형형',
+        description: '추세를 크게 놓치지 않으면서 상단 재물림을 완화',
+        values: {
+            use_adaptive_buy_control: true,
+            adaptive_sell_pressure_step: 0.8,
+            adaptive_buy_relief_step: 1.0,
+            adaptive_pressure_cap: 3.0,
+            adaptive_probe_multiplier: 0.65,
+            use_fast_drop_brake: true,
+            fast_drop_trigger_levels: 3,
+            fast_drop_batch_cap: 1,
+            fast_drop_next_gap_levels: 2,
+            fast_drop_multiplier_cap: 0.8,
+        },
+    },
+    {
+        key: 'trend',
+        label: '추세추종형',
+        description: '눌림 추종을 더 우선하고 제한은 약하게',
+        values: {
+            use_adaptive_buy_control: true,
+            adaptive_sell_pressure_step: 0.6,
+            adaptive_buy_relief_step: 1.0,
+            adaptive_pressure_cap: 2.5,
+            adaptive_probe_multiplier: 0.75,
+            use_fast_drop_brake: true,
+            fast_drop_trigger_levels: 3,
+            fast_drop_batch_cap: 1,
+            fast_drop_next_gap_levels: 2,
+            fast_drop_multiplier_cap: 0.85,
+        },
+    },
+    {
+        key: 'defensive',
+        label: '방어형',
+        description: '고점 재진입과 급락 다단매수를 더 강하게 억제',
+        values: {
+            use_adaptive_buy_control: true,
+            adaptive_sell_pressure_step: 1.0,
+            adaptive_buy_relief_step: 0.8,
+            adaptive_pressure_cap: 4.0,
+            adaptive_probe_multiplier: 0.5,
+            use_fast_drop_brake: true,
+            fast_drop_trigger_levels: 2,
+            fast_drop_batch_cap: 1,
+            fast_drop_next_gap_levels: 2,
+            fast_drop_multiplier_cap: 0.75,
+        },
+    },
+];
+
+const adaptiveTooltips = {
+    use_adaptive_buy_control: '매도 후 재진입 압력과 급락 브레이크를 사용해 매수 금액과 배치 규모를 자동으로 완화합니다.',
+    adaptive_sell_pressure_step: '매도가 체결될 때 스트레스가 얼마나 빨리 쌓일지 정합니다. 높을수록 몇 번 팔린 뒤 다음 매수를 더 작게 줄입니다.',
+    adaptive_buy_relief_step: '매수가 체결될 때 스트레스가 얼마나 빨리 풀릴지 정합니다. 높을수록 다시 사면서 매수 크기가 더 빨리 정상으로 복구됩니다.',
+    adaptive_pressure_cap: '스트레스 지수의 최대값입니다. 낮을수록 빨리 포화되고, 높을수록 더 천천히 누적됩니다.',
+    adaptive_probe_multiplier: '스트레스가 최대일 때 적용되는 최소 매수 비율입니다. 0.65면 기본 split 금액의 65%만 매수합니다.',
+    use_fast_drop_brake: '급락 중 과도한 연속 매수를 막는 보조 브레이크입니다. 여러 레벨을 한 번에 통과할 때 배치 수와 매수 크기를 추가로 제한합니다.',
+    fast_drop_trigger_levels: '현재 가격이 한 번에 몇 개 buy level을 통과하면 급락 브레이크를 켤지 정합니다.',
+    fast_drop_batch_cap: '급락 브레이크가 켜졌을 때 한 번에 최대 몇 개 split까지 살지 정합니다.',
+    fast_drop_next_gap_levels: '급락 브레이크 매수 후 다음 매수 목표를 몇 레벨 아래로 넓힐지 정합니다.',
+    fast_drop_multiplier_cap: '급락 브레이크가 켜졌을 때 허용되는 최대 매수 비율입니다. 현재 압력이 낮아도 이 값 이상으로는 사지 않습니다.',
+};
 
 const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
 
@@ -41,6 +120,50 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
         if (val === null || val === undefined) return 0;
         if (typeof val === 'number') return val;
         return parseFloat(val.toString().replace(/,/g, ''));
+    };
+
+    const clampNumber = (value, fallback, min = Number.NEGATIVE_INFINITY, max = Number.POSITIVE_INFINITY) => {
+        const num = Number(value);
+        if (!Number.isFinite(num)) return fallback;
+        return Math.min(max, Math.max(min, num));
+    };
+
+    const sanitizeAdaptiveConfig = (data) => ({
+        ...data,
+        use_adaptive_buy_control: !!data.use_adaptive_buy_control,
+        adaptive_sell_pressure_step: clampNumber(data.adaptive_sell_pressure_step, 1.0, 0.1),
+        adaptive_buy_relief_step: clampNumber(data.adaptive_buy_relief_step, 1.0, 0.1),
+        adaptive_pressure_cap: clampNumber(data.adaptive_pressure_cap, 4.0, 0.1),
+        adaptive_probe_multiplier: clampNumber(data.adaptive_probe_multiplier, 0.5, 0.05, 1.0),
+        use_fast_drop_brake: data.use_fast_drop_brake !== false,
+        fast_drop_trigger_levels: Math.max(1, Math.round(clampNumber(data.fast_drop_trigger_levels, 2, 1))),
+        fast_drop_batch_cap: Math.max(1, Math.round(clampNumber(data.fast_drop_batch_cap, 1, 1))),
+        fast_drop_next_gap_levels: Math.max(1, Math.round(clampNumber(data.fast_drop_next_gap_levels, 2, 1))),
+        fast_drop_multiplier_cap: clampNumber(data.fast_drop_multiplier_cap, 0.75, 0.05, 1.0),
+    });
+
+    const applyAdaptivePreset = (presetValues) => {
+        setIsEditing(true);
+        setFormData((prev) => ({
+            ...prev,
+            ...sanitizeAdaptiveConfig({
+                ...prev,
+                ...presetValues,
+            }),
+        }));
+    };
+
+    const isAdaptivePresetActive = (presetValues) => {
+        const current = sanitizeAdaptiveConfig(formData || {});
+        const target = sanitizeAdaptiveConfig({ ...(formData || {}), ...presetValues });
+        return Object.keys(presetValues).every((key) => {
+            const currentValue = current[key];
+            const targetValue = target[key];
+            if (typeof targetValue === 'number') {
+                return Math.abs(Number(currentValue) - Number(targetValue)) < 1e-9;
+            }
+            return currentValue === targetValue;
+        });
     };
 
     const buildFallbackSegment = (data) => {
@@ -85,14 +208,17 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
             'fee_rate', 'buy_rate', 'sell_rate', 'tick_interval',
             'rsi_buy_max', 'rsi_buy_cross_threshold', 'rsi_sell_min', 'rsi_sell_cross_threshold',
             'stop_loss',
-            'trailing_buy_rebound_percent'
+            'trailing_buy_rebound_percent',
+            'adaptive_sell_pressure_step', 'adaptive_buy_relief_step',
+            'adaptive_pressure_cap', 'adaptive_probe_multiplier', 'fast_drop_multiplier_cap',
         ];
 
         const intFields = [
             'max_trades_per_day', 'rsi_period',
             'rsi_buy_first_amount', 'rsi_buy_next_amount',
             'rsi_sell_first_amount', 'rsi_sell_next_amount',
-            'max_holdings'
+            'max_holdings',
+            'fast_drop_trigger_levels', 'fast_drop_batch_cap', 'fast_drop_next_gap_levels',
         ];
 
         if (type === 'checkbox') {
@@ -124,7 +250,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
 
             const { budget: newBudget, ...rawConfigData } = formData;
             const configData = {
-                ...rawConfigData,
+                ...sanitizeAdaptiveConfig(rawConfigData),
                 price_segments: ensureSegments(rawConfigData),
             };
             const response = await axios.post(`${API_BASE_URL}/strategies/config`, {
@@ -168,7 +294,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                 <label>Buy Rate (% price drop to buy)</label>
                 <input
                     type="number"
-                    step="0.001"
+                    step="any"
                     name="buy_rate"
                     value={formData.buy_rate ?? 0.005}
                     onChange={handleChange}
@@ -181,7 +307,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                 <label>Sell Rate (% profit to sell)</label>
                 <input
                     type="number"
-                    step="0.001"
+                    step="any"
                     name="sell_rate"
                     value={formData.sell_rate ?? 0.005}
                     onChange={handleChange}
@@ -447,7 +573,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                     <label>Rebound Threshold (% to trigger buy)</label>
                     <input
                         type="number"
-                        step="0.1"
+                        step="any"
                         name="trailing_buy_rebound_percent"
                         value={formData.trailing_buy_rebound_percent ?? 0.2}
                         onChange={handleChange}
@@ -473,6 +599,194 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                     <small style={{ color: '#94a3b8', fontSize: '0.75rem', display: 'block', marginTop: '0.25rem' }}>
                         Applied only when Watch Mode ends on rebound. If enabled, catch-up buys multiple splits at once; if disabled, buys one split.
                     </small>
+                </div>
+            )}
+
+            <div style={{ marginTop: '1.5rem', marginBottom: '0.5rem', fontWeight: 'bold', color: '#38bdf8', borderTop: '1px solid #334155', paddingTop: '1rem' }}>
+                Adaptive Buy Control
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: '1rem' }}>
+                <input
+                    type="checkbox"
+                    id="use_adaptive_buy_control"
+                    name="use_adaptive_buy_control"
+                    checked={formData.use_adaptive_buy_control || false}
+                    onChange={handleChange}
+                    title={adaptiveTooltips.use_adaptive_buy_control}
+                    style={{ width: '1.25rem', height: '1.25rem', marginRight: '0.75rem', accentColor: '#38bdf8' }}
+                />
+                <label htmlFor="use_adaptive_buy_control" title={adaptiveTooltips.use_adaptive_buy_control} style={{ margin: 0, cursor: 'pointer', color: formData.use_adaptive_buy_control ? '#38bdf8' : '#94a3b8' }}>
+                    Enable Adaptive Buy Control
+                </label>
+            </div>
+
+            {formData.use_adaptive_buy_control && (
+                <div className="input-group" style={{ paddingLeft: '2rem', borderLeft: '2px solid #38bdf8' }}>
+                    <div style={{ marginBottom: '1rem' }}>
+                        <div style={{ marginBottom: '0.6rem', fontWeight: 'bold', color: '#e2e8f0' }}>Preset Profiles</div>
+                        <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'nowrap' }}>
+                            {adaptivePresets.map((preset) => {
+                                const active = isAdaptivePresetActive(preset.values);
+                                return (
+                                    <button
+                                        key={preset.key}
+                                        type="button"
+                                        onClick={() => applyAdaptivePreset(preset.values)}
+                                        title={preset.description}
+                                        style={{
+                                            textAlign: 'center',
+                                            padding: '0.65rem 0.75rem',
+                                            borderRadius: '0.5rem',
+                                            border: active ? '1px solid #38bdf8' : '1px solid #334155',
+                                            backgroundColor: active ? 'rgba(56, 189, 248, 0.14)' : '#0f172a',
+                                            color: '#e2e8f0',
+                                            cursor: 'pointer',
+                                            flex: '1 1 0',
+                                            minWidth: 0,
+                                        }}
+                                    >
+                                        <div style={{ fontWeight: 700, color: active ? '#7dd3fc' : '#f8fafc' }}>{preset.label}</div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    <div style={{ marginBottom: '1rem', fontWeight: 'bold', color: '#e2e8f0' }}>Reentry Pressure</div>
+
+                    <div className="input-group">
+                        <label title={adaptiveTooltips.adaptive_sell_pressure_step}>Sell Pressure Step</label>
+                        <input
+                            type="number"
+                            step="any"
+                            min="0.1"
+                            max="10"
+                            name="adaptive_sell_pressure_step"
+                            value={formData.adaptive_sell_pressure_step ?? 1.0}
+                            onChange={handleChange}
+                            title={adaptiveTooltips.adaptive_sell_pressure_step}
+                        />
+                    </div>
+
+                    <div className="input-group">
+                        <label title={adaptiveTooltips.adaptive_buy_relief_step}>Buy Relief Step</label>
+                        <input
+                            type="number"
+                            step="any"
+                            min="0.1"
+                            max="10"
+                            name="adaptive_buy_relief_step"
+                            value={formData.adaptive_buy_relief_step ?? 1.0}
+                            onChange={handleChange}
+                            title={adaptiveTooltips.adaptive_buy_relief_step}
+                        />
+                    </div>
+
+                    <div className="input-group">
+                        <label title={adaptiveTooltips.adaptive_pressure_cap}>Pressure Cap</label>
+                        <input
+                            type="number"
+                            step="any"
+                            min="0.1"
+                            max="20"
+                            name="adaptive_pressure_cap"
+                            value={formData.adaptive_pressure_cap ?? 4.0}
+                            onChange={handleChange}
+                            title={adaptiveTooltips.adaptive_pressure_cap}
+                        />
+                    </div>
+
+                    <div className="input-group">
+                        <label title={adaptiveTooltips.adaptive_probe_multiplier}>Probe Multiplier</label>
+                        <input
+                            type="number"
+                            step="any"
+                            min="0.05"
+                            max="1"
+                            name="adaptive_probe_multiplier"
+                            value={formData.adaptive_probe_multiplier ?? 0.5}
+                            onChange={handleChange}
+                            title={adaptiveTooltips.adaptive_probe_multiplier}
+                        />
+                        <small style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
+                            Pressure 0 uses 1.0x. Pressure cap uses this minimum size.
+                        </small>
+                    </div>
+
+                    <div style={{ marginTop: '1.25rem', marginBottom: '1rem', fontWeight: 'bold', color: '#e2e8f0' }}>Fast Drop Brake</div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '1rem' }}>
+                        <input
+                            type="checkbox"
+                            id="use_fast_drop_brake"
+                            name="use_fast_drop_brake"
+                            checked={formData.use_fast_drop_brake !== false}
+                            onChange={handleChange}
+                            title={adaptiveTooltips.use_fast_drop_brake}
+                            style={{ width: '1.25rem', height: '1.25rem', marginRight: '0.75rem', accentColor: '#38bdf8' }}
+                        />
+                        <label htmlFor="use_fast_drop_brake" title={adaptiveTooltips.use_fast_drop_brake} style={{ margin: 0, cursor: 'pointer', color: formData.use_fast_drop_brake !== false ? '#38bdf8' : '#94a3b8' }}>
+                            Enable Fast Drop Brake
+                        </label>
+                    </div>
+
+                    {formData.use_fast_drop_brake !== false && (
+                        <>
+                            <div className="input-group">
+                                <label title={adaptiveTooltips.fast_drop_trigger_levels}>Trigger Levels</label>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    max="10"
+                                    name="fast_drop_trigger_levels"
+                                    value={formData.fast_drop_trigger_levels ?? 2}
+                                    onChange={handleChange}
+                                    title={adaptiveTooltips.fast_drop_trigger_levels}
+                                />
+                            </div>
+
+                            <div className="input-group">
+                                <label title={adaptiveTooltips.fast_drop_batch_cap}>Batch Cap</label>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    max="10"
+                                    name="fast_drop_batch_cap"
+                                    value={formData.fast_drop_batch_cap ?? 1}
+                                    onChange={handleChange}
+                                    title={adaptiveTooltips.fast_drop_batch_cap}
+                                />
+                            </div>
+
+                            <div className="input-group">
+                                <label title={adaptiveTooltips.fast_drop_next_gap_levels}>Next Gap Levels</label>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    max="10"
+                                    name="fast_drop_next_gap_levels"
+                                    value={formData.fast_drop_next_gap_levels ?? 2}
+                                    onChange={handleChange}
+                                    title={adaptiveTooltips.fast_drop_next_gap_levels}
+                                />
+                            </div>
+
+                            <div className="input-group">
+                                <label title={adaptiveTooltips.fast_drop_multiplier_cap}>Brake Multiplier Cap</label>
+                                <input
+                                    type="number"
+                                    step="any"
+                                    min="0.05"
+                                    max="1"
+                                    name="fast_drop_multiplier_cap"
+                                    value={formData.fast_drop_multiplier_cap ?? 0.75}
+                                    onChange={handleChange}
+                                    title={adaptiveTooltips.fast_drop_multiplier_cap}
+                                />
+                            </div>
+                        </>
+                    )}
                 </div>
             )}
         </>
@@ -507,7 +821,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
             </div>
             <div className="input-group">
                 <label>Buy Cross Threshold (RSI Delta)</label>
-                <input type="number" step="0.1" name="rsi_buy_cross_threshold" value={formData.rsi_buy_cross_threshold ?? 0} onChange={handleChange} />
+                <input type="number" step="any" name="rsi_buy_cross_threshold" value={formData.rsi_buy_cross_threshold ?? 0} onChange={handleChange} />
                 <small style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
                     Require (전날 RSI - 전전날 RSI) ≥ this value when buy cross occurs.
                 </small>
@@ -528,7 +842,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
             </div>
             <div className="input-group">
                 <label>Sell Cross Threshold (RSI Delta)</label>
-                <input type="number" step="0.1" name="rsi_sell_cross_threshold" value={formData.rsi_sell_cross_threshold ?? 0} onChange={handleChange} />
+                <input type="number" step="any" name="rsi_sell_cross_threshold" value={formData.rsi_sell_cross_threshold ?? 0} onChange={handleChange} />
                 <small style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
                     Require (전전날 RSI - 전날 RSI) ≥ this value when sell cross occurs.
                 </small>
@@ -554,13 +868,13 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
                 <div className="input-group">
                     <label>Min Profit (%)</label>
-                    <input type="number" step="0.1" name="sell_rate" value={((formData.sell_rate ?? 0.005) * 100).toFixed(1)}
+                    <input type="number" step="any" name="sell_rate" value={((formData.sell_rate ?? 0.005) * 100).toFixed(1)}
                         onChange={(e) => handleChange({ target: { name: 'sell_rate', value: parseFloat(e.target.value) / 100 } })}
                     />
                 </div>
                 <div className="input-group">
                     <label>Stop Loss (%)</label>
-                    <input type="number" step="0.1" name="stop_loss" value={formData.stop_loss ?? -10} onChange={handleChange} />
+                    <input type="number" step="any" name="stop_loss" value={formData.stop_loss ?? -10} onChange={handleChange} />
                 </div>
             </div>
             <div className="input-group">
@@ -645,7 +959,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                         <label>Tick Interval (s)</label>
                         <input
                             type="number"
-                            step="0.1"
+                            step="any"
                             name="tick_interval"
                             value={formData.tick_interval ?? 1.0}
                             onChange={handleChange}
@@ -664,7 +978,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                         <label>Fee Rate</label>
                         <input
                             type="number"
-                            step="0.0001"
+                            step="any"
                             name="fee_rate"
                             value={formData.fee_rate || 0.0005}
                             onChange={handleChange}
