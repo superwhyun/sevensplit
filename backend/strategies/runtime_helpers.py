@@ -586,6 +586,29 @@ class StrategyStatusPresenter:
         totals: Dict[str, float],
         status_counts: Dict[str, int],
     ) -> Dict[str, Any]:
+        realized_total = sum(float(t.get("net_profit", 0.0)) for t in strategy.trade_history)
+        now_utc = datetime.now(timezone.utc)
+        realized_24h = 0.0
+        try:
+            realized_total = strategy.db.get_realized_profit_sum(strategy.strategy_id)
+            realized_24h = strategy.db.get_realized_profit_sum(
+                strategy.strategy_id,
+                since=now_utc - timedelta(hours=24),
+            )
+        except Exception as e:
+            logging.debug(f"Realized profit aggregation fallback to in-memory history: {e}")
+            cutoff = now_utc - timedelta(hours=24)
+            for trade in strategy.trade_history:
+                ts = trade.get("timestamp")
+                if not ts:
+                    continue
+                try:
+                    trade_ts = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                except Exception:
+                    continue
+                if trade_ts >= cutoff:
+                    realized_24h += float(trade.get("net_profit", 0.0))
+
         return {
             "id": strategy.strategy_id,
             "name": strategy_name,
@@ -604,6 +627,8 @@ class StrategyStatusPresenter:
             "status_counts": status_counts,
             "last_buy_price": strategy.last_buy_price,
             "next_buy_target_price": strategy.next_buy_target_price,
+            "realized_profit_total": realized_total,
+            "realized_profit_24h": realized_24h,
             "trade_history": strategy.trade_history[:200],
             "rsi": strategy.rsi_logic.current_rsi,
             "rsi_short": strategy.rsi_logic.current_rsi_short,

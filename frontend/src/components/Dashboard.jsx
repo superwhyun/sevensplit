@@ -348,16 +348,18 @@ const calculateStrategyProfit = (strategyState) => {
         return { realized_profit: 0, realized_profit_24h: 0, unrealized_profit: 0, total_profit: 0 };
     }
     const last24hStart = Date.now() - (24 * 60 * 60 * 1000);
-    const realized = (strategyState.trade_history || []).reduce((sum, trade) => {
+    const realizedFromHistory = (strategyState.trade_history || []).reduce((sum, trade) => {
         return sum + Number(trade?.net_profit || 0);
     }, 0);
-    const realized24h = (strategyState.trade_history || []).reduce((sum, trade) => {
+    const realized24hFromHistory = (strategyState.trade_history || []).reduce((sum, trade) => {
         const ts = toTimestampMs(trade?.timestamp);
         if (ts !== null && ts >= last24hStart) {
             return sum + Number(trade?.net_profit || 0);
         }
         return sum;
     }, 0);
+    const realized = Number(strategyState.realized_profit_total ?? realizedFromHistory);
+    const realized24h = Number(strategyState.realized_profit_24h ?? realized24hFromHistory);
     const unrealized = Number(strategyState.total_profit_amount || 0);
     return {
         realized_profit: realized,
@@ -988,6 +990,7 @@ const Dashboard = () => {
         acc.realized_profit_24h += Number(profit?.realized_profit_24h || 0);
         return acc;
     }, { realized_profit: 0, realized_profit_24h: 0 });
+    const totalRealizedProfit = Number(portfolio?.total_realized_profit ?? aggregateProfit.realized_profit);
     const resolvedConfig = strategyConfig ?? displayedStatus?.config ?? {};
     const isDevMode = portfolio?.mode === 'DEV';
     const isDevSimulationActive = isDevMode && (liveSessionState?.status === 'running');
@@ -1118,8 +1121,8 @@ const Dashboard = () => {
                             <span className="label">REALIZED PROFIT</span>
                             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'baseline', justifyContent: 'flex-end' }}>
                                 <span style={{ fontSize: '0.7rem', color: '#94a3b8', letterSpacing: '0.04em' }}>ALL</span>
-                                <span className="value" style={{ color: aggregateProfit.realized_profit >= 0 ? '#10b981' : '#ef4444' }}>
-                                    {new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(aggregateProfit.realized_profit)}
+                                <span className="value" style={{ color: totalRealizedProfit >= 0 ? '#10b981' : '#ef4444' }}>
+                                    {new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(totalRealizedProfit)}
                                 </span>
                             </div>
                             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'baseline', justifyContent: 'flex-end', marginTop: '0.2rem' }}>

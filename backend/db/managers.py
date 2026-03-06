@@ -4,7 +4,7 @@ import logging
 import os
 from datetime import datetime, timezone
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, func, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from .models import (
@@ -566,6 +566,20 @@ class DatabaseManager:
             if limit:
                 query = query.limit(limit)
             return query.all()
+        finally:
+            session.close()
+
+    def get_realized_profit_sum(self, strategy_id: int, since: datetime = None) -> float:
+        """Get realized profit sum for a strategy (optionally since a timestamp)."""
+        session = self.get_session()
+        try:
+            query = session.query(func.coalesce(func.sum(Trade.net_profit), 0.0)).filter(
+                Trade.strategy_id == strategy_id
+            )
+            if since is not None:
+                query = query.filter(Trade.timestamp >= since)
+            value = query.scalar()
+            return float(value or 0.0)
         finally:
             session.close()
 
