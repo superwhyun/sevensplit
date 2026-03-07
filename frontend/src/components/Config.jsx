@@ -16,6 +16,7 @@ const defaultConfig = {
     fast_drop_next_gap_levels: 2,
     fast_drop_multiplier_cap: 0.75,
 };
+const DEFAULT_PRICE_SEGMENT_MAX_SPLITS = 20;
 
 const adaptivePresets = [
     {
@@ -174,7 +175,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
             min_price: minPrice,
             max_price: maxPrice,
             investment_per_split: Number(data.investment_per_split) || 100000,
-            max_splits: Number(data.max_holdings) || 20,
+            max_splits: DEFAULT_PRICE_SEGMENT_MAX_SPLITS,
         };
     };
 

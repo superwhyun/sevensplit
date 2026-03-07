@@ -488,12 +488,7 @@ class PriceStrategyLogic:
         Execute a single buy order.
         actual_market_price: Current price we are buying at.
         """
-        # 1. Check Global Max Holdings
-        current_holdings = len([s for s in self.strategy.splits if s.status != "SELL_FILLED"])
-        if current_holdings >= self.strategy.config.max_holdings:
-            return None
-
-        # 2. Determine Investment Amount
+        # 1. Determine Investment Amount
         # Use actual market price for segment calculation
         current_invested = sum(s.buy_amount for s in self.strategy.splits)
         segment = self._find_matching_segment(actual_market_price)
@@ -520,7 +515,7 @@ class PriceStrategyLogic:
         if current_invested + investment_amount > self.strategy.budget:
             return None
 
-        # 3. Order Execution
+        # 2. Order Execution
         split_id = self.strategy.next_split_id
         
         # We always use market order for immediate entry
@@ -600,7 +595,7 @@ class PriceStrategyLogic:
                 min_price=min_price,
                 max_price=max_price,
                 investment_per_split=float(self.strategy.config.investment_per_split),
-                max_splits=int(self.strategy.config.max_holdings),
+                max_splits=float("inf"),
             )
         ]
 

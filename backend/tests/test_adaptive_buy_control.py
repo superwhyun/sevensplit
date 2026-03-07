@@ -199,6 +199,41 @@ class TestAdaptiveBuyController(unittest.TestCase):
 
 
 class TestAdaptivePriceLogic(unittest.TestCase):
+    def test_price_logic_ignores_global_max_holdings_when_segment_allows_more(self):
+        config = StrategyConfig(
+            strategy_mode="PRICE",
+            investment_per_split=20000.0,
+            buy_rate=0.01,
+            max_holdings=20,
+            price_segments=[
+                PriceSegment(
+                    min_price=0.0,
+                    max_price=1_000_000_000.0,
+                    investment_per_split=20000.0,
+                    max_splits=50,
+                )
+            ],
+        )
+        strategy = _StrategyStub(config=config)
+        strategy.splits = [
+            SplitState(
+                id=i + 1,
+                status="BUY_FILLED",
+                buy_price=100.0,
+                actual_buy_price=100.0,
+                buy_amount=20000.0,
+                buy_volume=200.0,
+            )
+            for i in range(20)
+        ]
+        strategy.next_split_id = 21
+
+        split = strategy.price_logic._execute_single_buy(100.0, buy_rsi=35.0)
+
+        self.assertIsNotNone(split)
+        self.assertEqual(split.id, 21)
+        self.assertEqual(len(strategy.exchange.orders), 1)
+
     def test_last_sell_anchor_ignores_pending_buy_during_cleanup(self):
         config = StrategyConfig(
             strategy_mode="PRICE",
