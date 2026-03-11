@@ -44,3 +44,30 @@ services:
   #     TZ: ${TZ:-Asia/Seoul}
   #   volumes:
   #     - ./data/user2:/app/backend/database
+
+  # Development Bot Instance (Mock trading)
+  bot-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sevensplit-v2:${IMAGE_TAG:-latest}
+    container_name: sevensplit-dev
+    restart: unless-stopped
+    ports:
+      - "8005:8000"
+    environment:
+      TRADING_MODE: DEV
+      UPBIT_ACCESS_KEY: ${USER1_ACCESS_KEY}
+      UPBIT_SECRET_KEY: ${USER1_SECRET_KEY}
+      UPBIT_OPEN_API_SERVER_URL: ${USER1_UPBIT_OPEN_API_SERVER_URL:-https://api.upbit.com}
+      DB_PATH: /app/backend/database/sevensplit.db
+      CANDLE_DB_PATH: /app/backend/database/market_data.db
+      TZ: ${TZ:-Asia/Seoul}
+    volumes:
+      - ./data/dev:/app/backend/database
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/', timeout=3).read()\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
