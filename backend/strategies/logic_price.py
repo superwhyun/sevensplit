@@ -119,7 +119,7 @@ class PriceStrategyLogic:
             levels_crossed = min(levels_crossed, max(1, int(batch_cap)))
         
         # Use rsi_daily for the recorded buy_rsi if available
-        buy_rsi_to_record = rsi_daily if rsi_daily is not None else rsi_5m
+        buy_rsi_to_record = rsi_5m if rsi_5m is not None else rsi_daily
         created_count, log_details = self._execute_batch_buys(
             levels_crossed,
             current_price,
