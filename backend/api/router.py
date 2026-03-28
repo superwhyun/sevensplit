@@ -359,6 +359,12 @@ def get_portfolio():
     return calculate_portfolio(prices=shared_prices, accounts_raw=accounts_raw)
 
 
+@router.get("/daily-profits")
+def get_daily_profits(days: int = 30):
+    """Get daily realized profit aggregation in KST."""
+    return db.get_daily_profits(days=days)
+
+
 @router.post("/simulations/backtest")
 def run_backtest(req: BacktestRequest):
     try:

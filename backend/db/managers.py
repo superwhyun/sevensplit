@@ -615,6 +615,25 @@ class DatabaseManager:
         finally:
             session.close()
 
+    def get_daily_profits(self, days: int = 30) -> list:
+        """Get daily profit aggregation in KST for the last N days."""
+        session = self.get_session()
+        try:
+            from datetime import timedelta
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+            result = session.execute(text("""
+                SELECT
+                    strftime('%Y-%m-%d', datetime(timestamp, '+9 hours')) as kst_date,
+                    COALESCE(SUM(net_profit), 0) as daily_profit
+                FROM trades
+                WHERE timestamp >= :cutoff
+                GROUP BY kst_date
+                ORDER BY kst_date ASC
+            """), {"cutoff": cutoff.isoformat()})
+            return [{"date": row[0], "profit": float(row[1])} for row in result]
+        finally:
+            session.close()
+
     def get_all_trades(self, limit: int = None):
         """Get all trades across all strategies"""
         session = self.get_session()

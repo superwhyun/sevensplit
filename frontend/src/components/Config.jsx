@@ -938,6 +938,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                         placeholder="e.g. 1,000,000"
                     />
                 </div>
+                {!(formData.strategy_mode !== 'RSI' && formData.price_segments && formData.price_segments.length > 0) && (
                 <div className="input-group">
                     <label>Investment per Split (KRW)</label>
                     <input
@@ -948,6 +949,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                         placeholder="e.g. 100,000"
                     />
                 </div>
+                )}
 
                 {/* Conditional Settings */}
                 {(formData.strategy_mode || 'PRICE') === 'RSI' ? renderRSIConfig() : renderClassicConfig()}

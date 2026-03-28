@@ -124,6 +124,14 @@
   gap: 1rem;
 }
 
+.daily-profit-chart {
+  flex: 1;
+  min-width: 120px;
+  height: 72px;
+  align-self: center;
+  padding: 0 0.5rem;
+}
+
 .total-value-section {
   display: flex;
   flex-direction: column;

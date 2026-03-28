@@ -347,13 +347,15 @@ const calculateStrategyProfit = (strategyState) => {
     if (!strategyState || typeof strategyState !== 'object') {
         return { realized_profit: 0, realized_profit_24h: 0, unrealized_profit: 0, total_profit: 0 };
     }
-    const last24hStart = Date.now() - (24 * 60 * 60 * 1000);
+    const kstOffsetMs = 9 * 60 * 60 * 1000;
+    const kstNow = new Date(Date.now() + kstOffsetMs);
+    const todayMidnightKST = Date.UTC(kstNow.getUTCFullYear(), kstNow.getUTCMonth(), kstNow.getUTCDate()) - kstOffsetMs;
     const realizedFromHistory = (strategyState.trade_history || []).reduce((sum, trade) => {
         return sum + Number(trade?.net_profit || 0);
     }, 0);
     const realized24hFromHistory = (strategyState.trade_history || []).reduce((sum, trade) => {
         const ts = toTimestampMs(trade?.timestamp);
-        if (ts !== null && ts >= last24hStart) {
+        if (ts !== null && ts >= todayMidnightKST) {
             return sum + Number(trade?.net_profit || 0);
         }
         return sum;
@@ -367,6 +369,57 @@ const calculateStrategyProfit = (strategyState) => {
         unrealized_profit: unrealized,
         total_profit: realized,
     };
+};
+
+const DailyProfitChart = ({ data }) => {
+    const [tooltip, setTooltip] = React.useState(null);
+    if (!data || data.length === 0) return <div className="daily-profit-chart" />;
+
+    const values = data.map(d => d.profit);
+    const maxAbs = Math.max(...values.map(Math.abs), 1);
+    const W = 400, H = 72, barGap = 2;
+    const barW = Math.max(2, Math.floor((W - barGap * (data.length - 1)) / data.length));
+    const midY = H / 2;
+
+    return (
+        <div className="daily-profit-chart" style={{ position: 'relative' }}>
+            <svg width="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ display: 'block' }}>
+                <line x1={0} y1={midY} x2={W} y2={midY} stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
+                {data.map((d, i) => {
+                    const x = i * (barW + barGap);
+                    const ratio = d.profit / maxAbs;
+                    const barH = Math.max(1, Math.abs(ratio) * (midY - 4));
+                    const y = d.profit >= 0 ? midY - barH : midY;
+                    const color = d.profit >= 0 ? '#10b981' : '#ef4444';
+                    const opacity = i === data.length - 1 ? 1 : 0.65;
+                    return (
+                        <rect
+                            key={d.date}
+                            x={x} y={y} width={barW} height={barH}
+                            fill={color} opacity={opacity} rx="1"
+                            onMouseEnter={(e) => setTooltip({ d, x: e.clientX, y: e.clientY })}
+                            onMouseLeave={() => setTooltip(null)}
+                            style={{ cursor: 'default' }}
+                        />
+                    );
+                })}
+            </svg>
+            {tooltip && (
+                <div style={{
+                    position: 'fixed', left: tooltip.x + 10, top: tooltip.y - 36,
+                    background: '#1e293b', border: '1px solid #334155',
+                    borderRadius: '0.4rem', padding: '0.3rem 0.6rem',
+                    fontSize: '0.72rem', color: '#f1f5f9', pointerEvents: 'none', zIndex: 9999,
+                    whiteSpace: 'nowrap',
+                }}>
+                    <span style={{ color: '#94a3b8' }}>{tooltip.d.date} </span>
+                    <span style={{ color: tooltip.d.profit >= 0 ? '#10b981' : '#ef4444', fontWeight: 600 }}>
+                        {tooltip.d.profit >= 0 ? '+' : ''}₩{Math.round(tooltip.d.profit).toLocaleString()}
+                    </span>
+                </div>
+            )}
+        </div>
+    );
 };
 
 const Dashboard = () => {
@@ -391,6 +444,7 @@ const Dashboard = () => {
     const [simSystemEvents, setSimSystemEvents] = useState([]);
     const [strategyEvents, setStrategyEvents] = useState([]);
     const [strategyProfitById, setStrategyProfitById] = useState({});
+    const [dailyProfits, setDailyProfits] = useState([]);
     const TRADES_PER_PAGE = 10;
 
     const selectedStrategyIdRef = useRef(selectedStrategyId);
@@ -507,12 +561,22 @@ const Dashboard = () => {
         }
     };
 
+    const fetchDailyProfits = async () => {
+        try {
+            const response = await axios.get(`${API_BASE_URL}/daily-profits?days=30`);
+            setDailyProfits(response.data || []);
+        } catch (error) {
+            console.error('Error fetching daily profits:', error);
+        }
+    };
+
     const wsRef = useRef(null);
 
     useEffect(() => {
         // Initial fetch
         fetchStrategies();
         fetchPortfolio();
+        fetchDailyProfits();
 
         // Set up websocket connection for live updates
         const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -1117,6 +1181,7 @@ const Dashboard = () => {
                             <span className="label">Total Assets</span>
                             <span className="value">₩{Math.round(portfolio.total_value)?.toLocaleString()}</span>
                         </div>
+                        <DailyProfitChart data={dailyProfits} />
                         <div className="profit-section">
                             <span className="label">REALIZED PROFIT</span>
                             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'baseline', justifyContent: 'flex-end' }}>
@@ -1126,7 +1191,7 @@ const Dashboard = () => {
                                 </span>
                             </div>
                             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'baseline', justifyContent: 'flex-end', marginTop: '0.2rem' }}>
-                                <span style={{ fontSize: '0.7rem', color: '#94a3b8', letterSpacing: '0.04em' }}>24H</span>
+                                <span style={{ fontSize: '0.7rem', color: '#94a3b8', letterSpacing: '0.04em' }}>TODAY</span>
                                 <span style={{ fontSize: '0.95rem', color: aggregateProfit.realized_profit_24h >= 0 ? '#10b981' : '#ef4444' }}>
                                     {(aggregateProfit.realized_profit_24h >= 0 ? '+' : '')}
                                     {new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(aggregateProfit.realized_profit_24h)}
@@ -1392,7 +1457,7 @@ const Dashboard = () => {
                                     color: selectedStrategyProfit.realized_profit_24h >= 0 ? '#10b981' : '#ef4444',
                                     marginTop: '0.25rem'
                                 }}>
-                                    24h: {(selectedStrategyProfit.realized_profit_24h >= 0 ? '+' : '')}
+                                    Today: {(selectedStrategyProfit.realized_profit_24h >= 0 ? '+' : '')}
                                     ₩{Math.round(selectedStrategyProfit.realized_profit_24h).toLocaleString()}
                                 </div>
                             </div>
