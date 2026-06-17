@@ -217,13 +217,13 @@ class StrategyStateManager:
 class StrategyOrderManager:
     """Order synchronization/fill handling for a strategy."""
 
-    def manage_orders(self, strategy, open_order_uuids: set) -> None:
+    def manage_orders(self, strategy, open_order_uuids: set, current_price: float = None) -> None:
         for split in list(strategy.splits):
             if split.status == "PENDING_BUY":
                 self._process_pending_buy_split(strategy, split, open_order_uuids)
 
             elif split.status == "PENDING_SELL":
-                self._process_pending_sell_split(strategy, split, open_order_uuids)
+                self._process_pending_sell_split(strategy, split, open_order_uuids, current_price)
 
         if strategy.config.strategy_mode != "RSI":
             strategy.price_logic.manage_active_positions(open_order_uuids)
@@ -389,13 +389,20 @@ class StrategyOrderManager:
         if should_recheck:
             self._safe_check_buy_order(strategy, split, context="manage")
 
-    def _process_pending_sell_split(self, strategy, split: SplitState, open_order_uuids: set) -> None:
+    def _process_pending_sell_split(self, strategy, split: SplitState, open_order_uuids: set, current_price: float = None) -> None:
         if not split.sell_order_uuid:
             self._recover_zombie_pending_sell(strategy, split)
             return
 
-        if split.sell_order_uuid not in open_order_uuids:
-            self._safe_check_sell_order(strategy, split, context="manage")
+        if split.sell_order_uuid in open_order_uuids:
+            return
+
+        # Limit sell orders can only fill when price reaches the target.
+        # Skip the API call when price is still below target to avoid unnecessary requests.
+        if current_price and split.target_sell_price and current_price < split.target_sell_price:
+            return
+
+        self._safe_check_sell_order(strategy, split, context="manage")
 
     def _safe_check_buy_order(self, strategy, split: SplitState, context: str) -> None:
         try:

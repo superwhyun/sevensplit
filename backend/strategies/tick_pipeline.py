@@ -68,7 +68,7 @@ class TickPipeline:
         return True
 
     def evaluate_guards(self, strategy, ctx: TickContext) -> bool:
-        strategy.order_manager.manage_orders(strategy, ctx.open_order_uuids)
+        strategy.order_manager.manage_orders(strategy, ctx.open_order_uuids, ctx.current_price)
         if not strategy.is_running:
             return False
         return True
