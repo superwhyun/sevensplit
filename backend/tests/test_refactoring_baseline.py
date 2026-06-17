@@ -6,7 +6,8 @@ from datetime import datetime
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from strategy import SevenSplitStrategy, StrategyConfig
+from strategy import SevenSplitStrategy
+from models.strategy_state import StrategyConfig
 
 # Configure logging to capture output during tests
 logging.basicConfig(level=logging.INFO)
