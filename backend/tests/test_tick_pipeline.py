@@ -26,7 +26,7 @@ class _StubOrderManager:
         self.calls = 0
         self.last_open_order_uuids = None
 
-    def manage_orders(self, strategy, open_order_uuids):
+    def manage_orders(self, strategy, open_order_uuids, current_price=None):
         self.calls += 1
         self.last_open_order_uuids = open_order_uuids
 
