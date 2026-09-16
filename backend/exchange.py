@@ -35,6 +35,14 @@ class Exchange:
         raise NotImplementedError
 
 class UpbitExchange(Exchange):
+    # (connect, read) seconds. A hung request would otherwise freeze the single-threaded engine.
+    REQUEST_TIMEOUT = (3, 10)
+    # Backoff schedule for HTTP 429 (rate limit) retries.
+    RATE_LIMIT_BACKOFF_SEC = (0.2, 0.5, 1.0)
+    # Upbit /v1/orders returns at most 100 rows per page.
+    ORDERS_PAGE_LIMIT = 100
+    ORDERS_MAX_PAGES = 10
+
     def __init__(self, access_key, secret_key, server_url="https://api.upbit.com"):
         self.access_key = access_key
         self.secret_key = secret_key
@@ -144,29 +152,60 @@ class UpbitExchange(Exchange):
             headers = {'Authorization': f'Bearer {token}'}
         
         try:
-            if method == 'GET':
-                resp = self.requests.get(url, params=params, headers=headers)
-            elif method == 'POST':
-                resp = self.requests.post(url, json=data, params=params, headers=headers)
-            elif method == 'DELETE':
-                resp = self.requests.delete(url, params=params, headers=headers)
-            
+            resp = self._send_with_rate_limit_retry(method, url, params, data, headers)
+
             # Check for error response content before raising
             if not resp.ok:
                 error_msg = f"Upbit API Error: {resp.status_code} {resp.text}"
-                
+
                 # Downgrade 404 (Order not found) to WARNING to avoid noise in logs
                 if resp.status_code == 404:
                     logging.warning(error_msg)
                 else:
                     logging.error(error_msg)
-                    
+
                 raise Exception(error_msg)
-            
+
             return resp.json()
         except Exception as e:
             logging.error(f"Request failed: {e} for url: {url}")
             raise
+
+    def _send_once(self, method, url, params, data, headers):
+        if method == 'GET':
+            return self.requests.get(url, params=params, headers=headers, timeout=self.REQUEST_TIMEOUT)
+        if method == 'POST':
+            return self.requests.post(url, json=data, params=params, headers=headers, timeout=self.REQUEST_TIMEOUT)
+        if method == 'DELETE':
+            return self.requests.delete(url, params=params, headers=headers, timeout=self.REQUEST_TIMEOUT)
+        raise ValueError(f"Unsupported HTTP method: {method}")
+
+    def _send_with_rate_limit_retry(self, method, url, params, data, headers):
+        """Retry on HTTP 429 with a short backoff. Every other response is returned as-is."""
+        resp = self._send_once(method, url, params, data, headers)
+        for attempt, delay in enumerate(self.RATE_LIMIT_BACKOFF_SEC, start=1):
+            if resp.status_code != 429:
+                break
+            logging.warning(
+                f"Upbit rate limit (429) on {url}; retry {attempt}/{len(self.RATE_LIMIT_BACKOFF_SEC)} "
+                f"after {delay}s (Remaining-Req: {resp.headers.get('Remaining-Req')})"
+            )
+            self.time.sleep(delay)
+            resp = self._send_once(method, url, params, data, headers)
+        return resp
+
+    @staticmethod
+    def format_volume(volume) -> str:
+        """Fixed-point volume string (Upbit rejects scientific notation such as '3e-05')."""
+        text = f"{float(volume):.8f}".rstrip('0').rstrip('.')
+        return text if text else "0"
+
+    @staticmethod
+    def format_price(price) -> str:
+        value = float(price)
+        if value == int(value):
+            return str(int(value))
+        return f"{value:.8f}".rstrip('0').rstrip('.')
 
     def get_balance(self, ticker="KRW"):
         try:
@@ -188,15 +227,17 @@ class UpbitExchange(Exchange):
         try:
             accounts = self._request('GET', '/v1/accounts')
 
-            # Collect tickers to batch-fetch prices
-            # LIMIT: Only fetch prices for BTC, ETH, SOL to avoid rate limits
-            target_coins = {"BTC", "ETH", "SOL"}
+            # Price every held coin that has a KRW market, in a single batched ticker request.
+            valid_markets = self._get_valid_markets()
             tickers = []
             for account in accounts:
                 currency = account.get('currency')
-                if currency and currency != 'KRW' and currency in target_coins:
-                    ticker = f"KRW-{currency}"
-                    tickers.append(ticker)
+                if not currency or currency == 'KRW':
+                    continue
+                ticker = f"KRW-{currency}"
+                if valid_markets and ticker not in valid_markets:
+                    continue
+                tickers.append(ticker)
 
             prices = self.get_current_prices(tickers) if tickers else {}
 
@@ -276,7 +317,7 @@ class UpbitExchange(Exchange):
         data = {
             'market': ticker,
             'side': 'bid',
-            'price': str(amount),
+            'price': self.format_price(amount),
             'ord_type': 'price'
         }
         return self._request('POST', '/v1/orders', data=data)
@@ -285,46 +326,60 @@ class UpbitExchange(Exchange):
         data = {
             'market': ticker,
             'side': 'ask',
-            'volume': str(volume),
+            'volume': self.format_volume(volume),
             'ord_type': 'market'
         }
         return self._request('POST', '/v1/orders', data=data)
 
     def buy_limit_order(self, ticker, price, volume):
-        # Ensure price is integer string if it's a whole number
-        price_str = str(int(price)) if price == int(price) else str(price)
         data = {
             'market': ticker,
             'side': 'bid',
-            'volume': str(volume),
-            'price': price_str,
+            'volume': self.format_volume(volume),
+            'price': self.format_price(price),
             'ord_type': 'limit'
         }
         return self._request('POST', '/v1/orders', data=data)
 
     def sell_limit_order(self, ticker, price, volume):
-        # Ensure price is integer string if it's a whole number
-        price_str = str(int(price)) if price == int(price) else str(price)
         data = {
             'market': ticker,
             'side': 'ask',
-            'volume': str(volume),
-            'price': price_str,
+            'volume': self.format_volume(volume),
+            'price': self.format_price(price),
             'ord_type': 'limit'
         }
         return self._request('POST', '/v1/orders', data=data)
 
-    def get_orders(self, ticker=None, state='wait', page=1, limit=100):
-        """Fetch orders with filtering"""
-        params = {
-            'state': state,
-            'page': page,
-            'limit': limit,
-            'order_by': 'desc'
-        }
-        if ticker:
-            params['market'] = ticker
-        return self._request('GET', '/v1/orders', params=params)
+    def get_orders(self, ticker=None, state='wait', page=1, limit=None, fetch_all=True):
+        """Fetch orders with filtering.
+
+        Upbit caps each page at 100 rows. With fetch_all (default) pages are followed
+        until a short page is returned, so accounts with >100 open orders are fully covered.
+        """
+        page_limit = int(limit or self.ORDERS_PAGE_LIMIT)
+        collected = []
+        current_page = int(page or 1)
+        for _ in range(self.ORDERS_MAX_PAGES):
+            params = {
+                'state': state,
+                'page': current_page,
+                'limit': page_limit,
+                'order_by': 'desc'
+            }
+            if ticker:
+                params['market'] = ticker
+            batch = self._request('GET', '/v1/orders', params=params) or []
+            collected.extend(batch)
+            if not fetch_all or len(batch) < page_limit:
+                break
+            current_page += 1
+        else:
+            logging.warning(
+                f"get_orders stopped after {self.ORDERS_MAX_PAGES} pages "
+                f"({len(collected)} orders); some open orders may be missing."
+            )
+        return collected
 
     def get_order(self, uuid):
         return self._request('GET', '/v1/order', params={'uuid': uuid})

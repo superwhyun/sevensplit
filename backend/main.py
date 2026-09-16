@@ -11,8 +11,10 @@ from core.engine import start_engine
 from api.router import router
 from api.ws import websocket_endpoint
 
-# Configure logging
-logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(levelname)s - %(message)s')
+# Configure logging. INFO keeps buy/sell execution and order reconciliation visible in
+# container logs; per-tick chatter is emitted at DEBUG. Override with LOG_LEVEL=DEBUG|WARNING.
+_log_level = getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO)
+logging.basicConfig(level=_log_level, format='%(asctime)s - %(levelname)s - %(message)s')
 
 app = FastAPI(title="Seven Split Bitcoin Bot")
 

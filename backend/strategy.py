@@ -64,23 +64,14 @@ class SevenSplitStrategy(BaseStrategy):
             state_loaded = True 
             self.is_running = False # Force stop safety
 
-        # Check for "bad defaults" from previous runs
-        # Old default was 50,000,000. If we see this, it's likely wrong (even for BTC, 50m is too low now).
-        has_bad_default = (self.config.min_price == 50000000.0)
-        
-        # If no state loaded, or we have bad defaults, or uninitialized (0.0), try to set from current price
-        if not state_loaded or has_bad_default or self.config.min_price == 0.0:
+        # Only an uninitialized grid (no state, or min_price still 0.0) gets defaults.
+        # User-configured values, including a deliberate 50,000,000 floor, are never overwritten.
+        if not state_loaded or self.config.min_price == 0.0:
             current_price = self.exchange.get_current_price(self.ticker)
             if current_price:
                 # Default grid range: -15% ~ +15% around the current price
                 self.config.min_price = current_price * 0.85
                 self.config.max_price = current_price * 1.15
-                # Ensure buy/sell rates are default 0.005 if they look wrong (optional, but requested)
-                if self.config.buy_rate != 0.005:
-                    self.config.buy_rate = 0.005
-                if self.config.sell_rate != 0.005:
-                    self.config.sell_rate = 0.005
-                    
                 logging.info(f"Initialized default config for {ticker} (Strategy {strategy_id}): min_price={self.config.min_price}, max_price={self.config.max_price}")
                 self.save_state()
                 

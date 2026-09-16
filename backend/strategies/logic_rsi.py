@@ -143,7 +143,7 @@ class RSIStrategyLogic:
                 if self._cached_candles and (now - self._last_candle_fetch_time < self._candle_fetch_interval):
                     candles = self._cached_candles
                 else:
-                    logging.info(f"RSI Logic: Fetching daily candles from exchange for {self.strategy.ticker}...")
+                    logging.debug(f"RSI Logic: Fetching daily candles from exchange for {self.strategy.ticker}...")
                     candles = self.strategy.exchange.get_candles(self.strategy.ticker, count=500, interval="days")
                     if candles:
                         self._cached_candles = candles
@@ -193,7 +193,7 @@ class RSIStrategyLogic:
             rsi_short_d1 = calculate_rsi(closed_closes, 4) if len(closed_closes) >= 5 else None
 
             if rsi_d1 is not None:
-                logging.info(
+                logging.debug(
                     f"[Daily RSI] Updated(confirmed): D-1={rsi_d1:.2f} "
                     f"(D-2: {rsi_d2 if rsi_d2 is not None else 0:.2f}), "
                     f"Short(4) D-1: {rsi_short_d1 if rsi_short_d1 is not None else 0:.2f}, "
@@ -363,7 +363,17 @@ class RSIStrategyLogic:
             try:
                 self.strategy.exchange.cancel_order(split.sell_order_uuid)
             except Exception as e:
-                logging.warning(f"RSI Logic: Failed to cancel sell order {split.sell_order_uuid}: {e}")
+                # The limit sell may already be filled. Selling again would dump coins that
+                # belong to other splits (or fail), so reconcile the existing order instead.
+                logging.warning(
+                    f"RSI Logic: Failed to cancel sell order {split.sell_order_uuid} for split {split.id}: {e}. "
+                    "Skipping market sell to avoid a double sell."
+                )
+                try:
+                    self.strategy.order_manager.check_sell_order(self.strategy, split)
+                except Exception as sync_err:
+                    logging.debug(f"RSI Logic: sell order reconcile skipped: {sync_err}")
+                return
         try:
             res = self.strategy.exchange.sell_market_order(self.strategy.ticker, split.buy_volume)
             if res:

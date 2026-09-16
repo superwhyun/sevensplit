@@ -25,7 +25,7 @@ class WatchModeLogic:
                 if self._cached_candles and (now - self._last_candle_fetch_time < self._candle_fetch_interval):
                     candles = self._cached_candles
                 else:
-                    logging.info(f"Watch Logic: Fetching 5m candles from exchange for {self.strategy.ticker}...")
+                    logging.debug(f"Watch Logic: Fetching 5m candles from exchange for {self.strategy.ticker}...")
                     candles = self.strategy.exchange.get_candles(self.strategy.ticker, count=200, interval="minutes/5")
                     if candles:
                         self._cached_candles = candles
@@ -56,7 +56,7 @@ class WatchModeLogic:
 
             # --- DEBUG LOG: Show data points ---
             if rsi_14 is not None:
-                logging.info(f"[5m RSI] Updated: {rsi_14:.2f} (Short: {rsi_5 if rsi_5 is not None else 0:.2f}), Closes: {len(closes)}")
+                logging.debug(f"[5m RSI] Updated: {rsi_14:.2f} (Short: {rsi_5 if rsi_5 is not None else 0:.2f}), Closes: {len(closes)}")
             else:
                 logging.debug(f"RSI(5m) Calc: Count={len(closes)} - Result is None (Warmup?)")
 

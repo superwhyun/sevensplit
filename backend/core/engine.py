@@ -74,7 +74,12 @@ class PortfolioCalculator:
             balance = float(account.get("balance", 0))
             locked = float(account.get("locked", 0))
             ticker = f"KRW-{currency}" if currency and currency != "KRW" else None
-            current_price = 1.0 if currency == "KRW" else float(prices.get(ticker, 0.0))
+            if currency == "KRW":
+                current_price = 1.0
+            else:
+                # Prefer the live engine price; fall back to the price the exchange client
+                # attached when the accounts were fetched so non-strategy coins are still valued.
+                current_price = float(prices.get(ticker) or account.get("current_price") or 0.0)
             total_balance = balance + locked
             value = total_balance * current_price if current_price else 0.0
             accounts.append(
@@ -264,7 +269,7 @@ class StrategyEngine:
 
             if len(batch) >= 3:
                 oldest_3 = [b.get("candle_date_time_utc", "") for b in batch[-3:]]
-                logging.info(f"[ENGINE] Fetched {interval} for {ticker}: {len(batch)} candles, oldest 3: {oldest_3}")
+                logging.debug(f"[ENGINE] Fetched {interval} for {ticker}: {len(batch)} candles, oldest 3: {oldest_3}")
 
             self.candle_cache["data"][ticker][interval] = batch
             self.candle_cache["timestamp"][ticker][interval] = now

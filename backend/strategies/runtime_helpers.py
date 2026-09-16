@@ -214,21 +214,94 @@ class StrategyStateManager:
         }
 
 
+def _parse_iso_datetime(value: Any) -> Optional[datetime]:
+    """Parse an ISO-8601 string into a UTC-aware datetime. Returns None on failure."""
+    if not value:
+        return None
+    try:
+        text = str(value).replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(text)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _is_order_not_found_error(error: Exception) -> bool:
+    message = str(error)
+    return "404" in message or "Order not found" in message
+
+
 class StrategyOrderManager:
     """Order synchronization/fill handling for a strategy."""
 
+    # A single 404 from the exchange must never drop a real holding. Only after this many
+    # consecutive not-found responses for the same order do we treat it as truly gone.
+    NOT_FOUND_DROP_THRESHOLD = 5
+    # Pending sells below the current price are normally skipped to save API calls.
+    # Every FULL_SYNC_INTERVAL_SEC (and on the very first tick) we check all of them anyway,
+    # so fills that happened while the bot was offline are always reconciled.
+    FULL_SYNC_INTERVAL_SEC = 300
+    _VOLUME_EPSILON = 1e-9
+
+    def __init__(self):
+        self._not_found_counts: Dict[str, int] = {}
+        self._last_full_sync: Dict[int, float] = {}
+
     def manage_orders(self, strategy, open_order_uuids: set, current_price: float = None) -> None:
+        force_full_check = self._should_run_full_sync(strategy)
         for split in list(strategy.splits):
             if split.status == "PENDING_BUY":
                 self._process_pending_buy_split(strategy, split, open_order_uuids)
 
             elif split.status == "PENDING_SELL":
-                self._process_pending_sell_split(strategy, split, open_order_uuids, current_price)
+                self._process_pending_sell_split(
+                    strategy,
+                    split,
+                    open_order_uuids,
+                    current_price,
+                    force_check=force_full_check,
+                )
 
         if strategy.config.strategy_mode != "RSI":
             strategy.price_logic.manage_active_positions(open_order_uuids)
 
         self.cleanup_filled_splits(strategy)
+
+    def _should_run_full_sync(self, strategy) -> bool:
+        now_ts = strategy.get_now_utc().timestamp()
+        last_ts = self._last_full_sync.get(strategy.strategy_id)
+        if last_ts is not None and (now_ts - last_ts) < self.FULL_SYNC_INTERVAL_SEC:
+            return False
+        self._last_full_sync[strategy.strategy_id] = now_ts
+        return True
+
+    def _register_not_found(self, order_uuid: str) -> int:
+        count = self._not_found_counts.get(order_uuid, 0) + 1
+        self._not_found_counts[order_uuid] = count
+        return count
+
+    def _clear_not_found(self, order_uuid: Optional[str]) -> None:
+        if order_uuid:
+            self._not_found_counts.pop(order_uuid, None)
+
+    @staticmethod
+    def resolve_fill_time(order: dict, fallback: datetime) -> datetime:
+        """Best-effort actual fill time from the exchange order payload (UTC)."""
+        fill_times = [
+            parsed
+            for parsed in (_parse_iso_datetime(t.get("created_at")) for t in (order.get("trades") or []))
+            if parsed is not None
+        ]
+        if fill_times:
+            return max(fill_times)
+        order_created = _parse_iso_datetime(order.get("created_at"))
+        if order_created is not None:
+            return order_created
+        if fallback.tzinfo is None:
+            return fallback.replace(tzinfo=timezone.utc)
+        return fallback.astimezone(timezone.utc)
 
     def sync_pending_orders(self, strategy) -> None:
         for split in strategy.splits:
@@ -255,6 +328,7 @@ class StrategyOrderManager:
             order = strategy.exchange.get_order(split.buy_order_uuid)
             if not order:
                 return
+            self._clear_not_found(split.buy_order_uuid)
 
             state = order.get("state")
             if state in ("done", "cancel"):
@@ -265,11 +339,22 @@ class StrategyOrderManager:
                     self._reset_buy_split(strategy, split, "order cancelled with 0 volume")
 
         except Exception as e:
-            error_msg = str(e)
-            if "404" in error_msg or "Order not found" in error_msg:
-                self._reset_buy_split(strategy, split, "order not found (likely exchange restart)")
-            else:
+            if not _is_order_not_found_error(e):
                 logging.error(f"Error checking buy order {split.buy_order_uuid}: {e}")
+                return
+            count = self._register_not_found(split.buy_order_uuid)
+            if count < self.NOT_FOUND_DROP_THRESHOLD:
+                logging.warning(
+                    f"Buy order {split.buy_order_uuid} for split {split.id} not found "
+                    f"({count}/{self.NOT_FOUND_DROP_THRESHOLD}). Keeping split until confirmed."
+                )
+                return
+            self._clear_not_found(split.buy_order_uuid)
+            self._reset_buy_split(
+                strategy,
+                split,
+                f"order not found {count} consecutive times",
+            )
 
     def calculate_execution_metrics(self, order: dict, fallback_price: float) -> tuple[float, float]:
         trades = order.get("trades", [])
@@ -296,53 +381,117 @@ class StrategyOrderManager:
 
         try:
             order = strategy.exchange.get_order(split.sell_order_uuid)
-            if order and order.get("state") == "done":
+            if not order:
+                return
+            self._clear_not_found(split.sell_order_uuid)
+
+            state = order.get("state")
+            if state == "done":
                 actual_sell_price, _ = self.calculate_execution_metrics(
                     order,
                     fallback_price=split.target_sell_price,
                 )
                 if actual_sell_price == 0.0:
                     logging.warning(f"Sell filled but price is 0. Order: {order}")
-                self.finalize_sell_trade(strategy, split, actual_sell_price)
+                filled_at = self.resolve_fill_time(order, strategy.get_now_utc())
+                self.finalize_sell_trade(strategy, split, actual_sell_price, filled_at=filled_at)
+            elif state == "cancel":
+                self._handle_cancelled_sell(strategy, split, order)
 
         except Exception as e:
-            error_msg = str(e)
-            if "404" in error_msg or "Order not found" in error_msg:
-                self._reset_sell_split_to_pending_buy(
-                    strategy,
-                    split,
-                    "sell order not found (likely exchange restart)",
-                )
-            else:
+            if not _is_order_not_found_error(e):
                 logging.error(f"Error checking sell order {split.sell_order_uuid}: {e}")
+                return
+            count = self._register_not_found(split.sell_order_uuid)
+            if count < self.NOT_FOUND_DROP_THRESHOLD:
+                logging.warning(
+                    f"Sell order {split.sell_order_uuid} for split {split.id} not found "
+                    f"({count}/{self.NOT_FOUND_DROP_THRESHOLD}). Keeping position until confirmed."
+                )
+                return
+            self._clear_not_found(split.sell_order_uuid)
+            self._revert_sell_split_to_buy_filled(
+                strategy,
+                split,
+                f"sell order not found {count} consecutive times; re-placing sell for held coins",
+            )
 
-    def finalize_sell_trade(self, strategy, split: SplitState, actual_sell_price: float) -> None:
-        buy_total = split.buy_amount
-        buy_fee = buy_total * strategy.config.fee_rate
+    def _handle_cancelled_sell(self, strategy, split: SplitState, order: dict) -> None:
+        """A cancelled limit sell may still have executed partially. Never lose the coins."""
+        executed_vol = float(order.get("executed_volume") or 0.0)
+        held_vol = float(split.buy_volume or 0.0)
 
-        sell_total = actual_sell_price * split.buy_volume
+        if executed_vol <= self._VOLUME_EPSILON:
+            self._revert_sell_split_to_buy_filled(
+                strategy,
+                split,
+                "sell order cancelled with 0 volume; re-placing sell",
+            )
+            return
+
+        actual_sell_price, _ = self.calculate_execution_metrics(order, fallback_price=split.target_sell_price)
+        filled_at = self.resolve_fill_time(order, strategy.get_now_utc())
+
+        if executed_vol + self._VOLUME_EPSILON >= held_vol:
+            self.finalize_sell_trade(strategy, split, actual_sell_price, filled_at=filled_at)
+            return
+
+        ratio = executed_vol / held_vol if held_vol > 0 else 0.0
+        sold_buy_amount = split.buy_amount * ratio
+        self._record_sell_trade(
+            strategy,
+            split,
+            actual_sell_price,
+            volume=executed_vol,
+            buy_amount=sold_buy_amount,
+            filled_at=filled_at,
+        )
+        split.buy_volume = held_vol - executed_vol
+        split.buy_amount = split.buy_amount - sold_buy_amount
+        split.sell_order_uuid = None
+        split.status = "BUY_FILLED"
+        strategy.last_sell_price = actual_sell_price
+        strategy.log_event(
+            "WARNING",
+            "SELL_PARTIAL",
+            f"Split #{split.id}: sell order cancelled after partial fill "
+            f"({executed_vol:.8f} of {held_vol:.8f}). Remaining volume will be re-listed.",
+        )
+        strategy.save_state()
+
+    def _record_sell_trade(
+        self,
+        strategy,
+        split: SplitState,
+        actual_sell_price: float,
+        volume: float,
+        buy_amount: float,
+        filled_at: datetime,
+    ) -> Dict[str, float]:
+        buy_fee = buy_amount * strategy.config.fee_rate
+        sell_total = actual_sell_price * volume
         sell_fee = sell_total * strategy.config.fee_rate
-
         total_fee = buy_fee + sell_fee
-        net_profit = sell_total - buy_total - total_fee
-        profit_rate = (net_profit / buy_total) * 100
+        net_profit = sell_total - buy_amount - total_fee
+        profit_rate = (net_profit / buy_amount) * 100 if buy_amount > 0 else 0.0
 
         trade_data = {
             "split_id": split.id,
             "buy_price": split.actual_buy_price,
             "sell_price": actual_sell_price,
-            "coin_volume": split.buy_volume,
-            "buy_amount": buy_total,
+            "coin_volume": volume,
+            "buy_amount": buy_amount,
             "sell_amount": sell_total,
-            "gross_profit": sell_total - buy_total,
+            "gross_profit": sell_total - buy_amount,
             "total_fee": total_fee,
             "net_profit": net_profit,
             "profit_rate": profit_rate,
             "buy_order_id": split.buy_order_uuid,
             "sell_order_id": split.sell_order_uuid,
-            "bought_at": datetime.fromisoformat(split.bought_at) if split.bought_at else None,
+            "bought_at": _parse_iso_datetime(split.bought_at),
             "is_accumulated": split.is_accumulated,
             "buy_rsi": split.buy_rsi,
+            "timestamp": filled_at,
         }
         strategy.db.add_trade(strategy.strategy_id, strategy.ticker, trade_data)
 
@@ -351,32 +500,61 @@ class StrategyOrderManager:
             {
                 "split_id": split.id,
                 "buy_price": split.actual_buy_price,
-                "buy_amount": buy_total,
+                "buy_amount": buy_amount,
                 "sell_price": actual_sell_price,
                 "sell_amount": sell_total,
-                "volume": split.buy_volume,
+                "volume": volume,
                 "buy_fee": buy_fee,
                 "sell_fee": sell_fee,
                 "total_fee": total_fee,
-                "gross_profit": sell_total - buy_total,
+                "gross_profit": sell_total - buy_amount,
                 "net_profit": net_profit,
                 "profit_rate": profit_rate,
-                "timestamp": strategy.get_now_utc().isoformat(),
+                "timestamp": filled_at.isoformat(),
                 "bought_at": split.bought_at,
                 "buy_rsi": split.buy_rsi,
             },
+        )
+        return {
+            "sell_total": sell_total,
+            "total_fee": total_fee,
+            "net_profit": net_profit,
+            "profit_rate": profit_rate,
+        }
+
+    def finalize_sell_trade(
+        self,
+        strategy,
+        split: SplitState,
+        actual_sell_price: float,
+        filled_at: Optional[datetime] = None,
+    ) -> None:
+        if filled_at is None:
+            filled_at = strategy.get_now_utc()
+        if filled_at.tzinfo is None:
+            filled_at = filled_at.replace(tzinfo=timezone.utc)
+        filled_at = filled_at.astimezone(timezone.utc)
+
+        result = self._record_sell_trade(
+            strategy,
+            split,
+            actual_sell_price,
+            volume=split.buy_volume,
+            buy_amount=split.buy_amount,
+            filled_at=filled_at,
         )
 
         split.status = "SELL_FILLED"
         strategy.last_sell_price = actual_sell_price
         if hasattr(strategy, "adaptive_buy_controller"):
             strategy.adaptive_buy_controller.apply_sell_fill(
-                sell_total,
+                result["sell_total"],
                 split.actual_buy_price or split.buy_price,
             )
         logging.info(
-            f"Sell order filled for split {split.id} at {actual_sell_price}. "
-            f"Net Profit: {net_profit} KRW ({profit_rate:.2f}%) after fees: {total_fee} KRW"
+            f"Sell order filled for split {split.id} at {actual_sell_price} ({filled_at.isoformat()}). "
+            f"Net Profit: {result['net_profit']} KRW ({result['profit_rate']:.2f}%) "
+            f"after fees: {result['total_fee']} KRW"
         )
         strategy.save_state()
 
@@ -389,7 +567,14 @@ class StrategyOrderManager:
         if should_recheck:
             self._safe_check_buy_order(strategy, split, context="manage")
 
-    def _process_pending_sell_split(self, strategy, split: SplitState, open_order_uuids: set, current_price: float = None) -> None:
+    def _process_pending_sell_split(
+        self,
+        strategy,
+        split: SplitState,
+        open_order_uuids: set,
+        current_price: float = None,
+        force_check: bool = False,
+    ) -> None:
         if not split.sell_order_uuid:
             self._recover_zombie_pending_sell(strategy, split)
             return
@@ -398,8 +583,14 @@ class StrategyOrderManager:
             return
 
         # Limit sell orders can only fill when price reaches the target.
-        # Skip the API call when price is still below target to avoid unnecessary requests.
-        if current_price and split.target_sell_price and current_price < split.target_sell_price:
+        # Skip the API call when price is still below target to avoid unnecessary requests,
+        # except during a periodic full sync (fills may have happened while offline).
+        if (
+            not force_check
+            and current_price
+            and split.target_sell_price
+            and current_price < split.target_sell_price
+        ):
             return
 
         self._safe_check_sell_order(strategy, split, context="manage")
@@ -437,7 +628,7 @@ class StrategyOrderManager:
         executed_vol: float,
     ) -> None:
         split.status = "BUY_FILLED"
-        split.bought_at = strategy.get_now_utc().isoformat()
+        split.bought_at = self.resolve_fill_time(order, strategy.get_now_utc()).isoformat()
         actual_price, volume = self.calculate_execution_metrics(order, split.buy_price or 0.0)
         split.actual_buy_price = actual_price
         split.buy_price = actual_price
@@ -457,27 +648,32 @@ class StrategyOrderManager:
         split.status = "PENDING_BUY"
         strategy.save_state()
 
-    def _reset_sell_split_to_pending_buy(self, strategy, split: SplitState, reason: str) -> None:
-        logging.warning(f"Resetting split {split.id} to PENDING_BUY: {reason}")
+    def _revert_sell_split_to_buy_filled(self, strategy, split: SplitState, reason: str) -> None:
+        """The coins are still held; drop only the sell order so a fresh one gets placed."""
+        logging.warning(f"Reverting split {split.id} to BUY_FILLED: {reason}")
+        strategy.log_event(
+            "WARNING",
+            "SELL_ORDER_LOST",
+            f"Split #{split.id}: {reason}",
+        )
         split.sell_order_uuid = None
-        split.status = "PENDING_BUY"
-        split.buy_order_uuid = None
+        split.status = "BUY_FILLED"
         strategy.save_state()
 
     def _is_buy_timeout(self, strategy, split: SplitState) -> bool:
         if not split.created_at:
             return False
+        created_dt = _parse_iso_datetime(split.created_at)
+        if created_dt is None:
+            return False
         try:
-            created_dt = datetime.fromisoformat(split.created_at)
-            if created_dt.tzinfo is None:
-                created_dt = created_dt.replace(tzinfo=timezone.utc)
-
             now_utc = strategy.get_now_utc()
+            if now_utc.tzinfo is None:
+                now_utc = now_utc.replace(tzinfo=timezone.utc)
             elapsed = (now_utc - created_dt).total_seconds()
             if elapsed < 0:
-                created_dt_corrected = created_dt - timedelta(hours=9)
-                elapsed = (now_utc - created_dt_corrected).total_seconds()
-
+                # Legacy rows stored naive KST timestamps; treat them as KST.
+                elapsed = (now_utc - (created_dt - timedelta(hours=9))).total_seconds()
             return elapsed > strategy.ORDER_TIMEOUT_SEC
         except Exception:
             return False

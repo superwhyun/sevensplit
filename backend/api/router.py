@@ -94,10 +94,23 @@ def export_trades(strategy_id: int):
     trades = db.get_trades(strategy_id)
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["ID", "Ticker", "Buy Price", "Sell Price", "Volume", "Gross Profit", "Net Profit", "Fee", "Hold Time", "Closed At"])
+    writer.writerow([
+        "ID", "Ticker", "Split ID", "Buy Price", "Sell Price", "Volume",
+        "Buy Amount", "Sell Amount", "Gross Profit", "Net Profit", "Fee",
+        "Profit Rate (%)", "Hold Time (s)", "Bought At", "Closed At",
+    ])
     for t in trades:
-        writer.writerow([t.id, t.ticker, t.avg_buy_price, t.sell_price, t.volume, t.gross_profit, t.net_profit, t.total_fee, t.hold_time_seconds, t.closed_at])
-    
+        hold_time_seconds = None
+        if t.bought_at and t.timestamp:
+            hold_time_seconds = int((t.timestamp - t.bought_at).total_seconds())
+        writer.writerow([
+            t.id, t.ticker, t.split_id, t.buy_price, t.sell_price, t.coin_volume,
+            t.buy_amount, t.sell_amount, t.gross_profit, t.net_profit, t.total_fee,
+            t.profit_rate, hold_time_seconds,
+            t.bought_at.isoformat() if t.bought_at else "",
+            t.timestamp.isoformat() if t.timestamp else "",
+        ])
+
     output.seek(0)
     return StreamingResponse(
         iter([output.getvalue()]),
@@ -295,15 +308,14 @@ def set_manual_target(strategy_id: int, req: ManualTargetRequest):
 
 @router.post("/strategies/{strategy_id}/name")
 def update_strategy_name(strategy_id: int, req: UpdateNameRequest):
+    strategy = db.get_strategy(strategy_id)
+    if not strategy:
+        raise HTTPException(status_code=404, detail="Strategy not found")
     try:
-        strategy = db.get_strategy(strategy_id)
-        if not strategy:
-             raise HTTPException(status_code=404, detail="Strategy not found")
-        strategy.name = req.name
-        db.session.commit()
+        db.update_strategy_name(strategy_id, req.name)
         return {"status": "success", "message": "Strategy name updated"}
     except Exception as e:
-        db.session.rollback()
+        logging.error(f"Failed to update strategy name for {strategy_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/bot/reset")

@@ -803,7 +803,7 @@ class DatabaseManager:
                 session.execute(stmt)
             
             session.commit()
-            logging.info(f"✅ [DATABASE] Successfully saved {len(prepared_data)} candles for {ticker} ({interval})")
+            logging.debug(f"✅ [DATABASE] Successfully saved {len(prepared_data)} candles for {ticker} ({interval})")
         except Exception as e:
             logging.error(f"❌ [DATABASE] Error saving candles for {ticker} ({interval}): {e}")
             import traceback

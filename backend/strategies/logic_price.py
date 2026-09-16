@@ -51,7 +51,7 @@ class PriceStrategyLogic:
 
         if current_price > target_price:
             msg = f"Price Logic: Price ({current_price}) is currently ABOVE target ({target_price:.1f}). Waiting for dip."
-            logging.info(msg)
+            logging.debug(msg)
             self._set_buy_gate("WAIT_PRICE_BELOW_TARGET", msg, level="INFO")
             return None
 
