@@ -593,13 +593,33 @@ class PriceStrategyLogic:
 
     def _effective_segments(self):
         segments = self.strategy.config.price_segments or []
-        if segments:
-            return segments
-
         min_price = float(self.strategy.config.min_price or 0.0)
         max_price = float(self.strategy.config.max_price or 0.0)
         if max_price <= min_price:
             max_price = float("inf")
+
+        top_level_bounds_set = bool(self.strategy.config.min_price or self.strategy.config.max_price)
+        if segments:
+            if len(segments) == 1 and top_level_bounds_set:
+                # A single segment plus non-zero top-level bounds means the user is on
+                # the "classic" min/max fields, not the multi-segment ladder editor.
+                # Those top-level fields are the ones shown/edited as 매수 하한가/
+                # 상한가, so they must stay authoritative here too -- otherwise editing
+                # them has no effect once a segment was auto-generated once (it used
+                # to just sit there with whatever bound it was first built with).
+                # (Skipped when both top-level bounds are still 0/unset, so an old
+                # strategy configured purely through the segment ladder isn't clobbered.)
+                only = segments[0]
+                if float(only.min_price or 0.0) != min_price or float(only.max_price or 0.0) != max_price:
+                    return [
+                        SimpleNamespace(
+                            min_price=min_price,
+                            max_price=max_price,
+                            investment_per_split=float(only.investment_per_split),
+                            max_splits=getattr(only, "max_splits", float("inf")),
+                        )
+                    ]
+            return segments
 
         return [
             SimpleNamespace(
