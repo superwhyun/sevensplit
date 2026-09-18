@@ -150,7 +150,18 @@ class SevenSplitStrategy(BaseStrategy):
                     pass
                 self.next_buy_target_price = target
             self.save_state()
-            logging.info(f"Strategy {self.strategy_id}: next_buy_target_price updated to {self.next_buy_target_price}")
+            # Must go through log_event (persisted, chart-visible), not just logging.info
+            # (server console only) -- otherwise a manual override silently diverges the
+            # dashboard's target line from the value actually used for buy gating, the same
+            # class of bug fixed in logic_price.py::_resolve_buy_target.
+            if self.next_buy_target_price is None:
+                self.log_event("INFO", "TARGET_UPDATE", "Next Buy Target: NONE (manual clear)")
+            else:
+                self.log_event(
+                    "INFO",
+                    "TARGET_UPDATE",
+                    f"Next Buy Target: {self.next_buy_target_price:.1f} (manual override)",
+                )
 
     def tick(self, current_price: float = None, open_orders: list = None, market_context: dict = None):
         """Main tick function called periodically to check and update splits."""

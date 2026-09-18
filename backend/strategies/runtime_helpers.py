@@ -748,6 +748,12 @@ class StrategyLifecycleManager:
                 )
                 if split:
                     next_target = current_price * (1 - strategy.config.buy_rate)
+                    # Assign the state too, not just the log message: this used to only
+                    # build display text, leaving next_buy_target_price at its old/None
+                    # value until a later, unlogged correction inside price_logic silently
+                    # replaced it. That made the chart's target line freeze on this stale
+                    # number instead of following what the bot was actually gating on.
+                    strategy.next_buy_target_price = next_target
                     msg = (
                         "Initial Buy Executed (On Start).\n"
                         "- Condition: Strategy Started with no positions.\n"

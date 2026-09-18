@@ -9,7 +9,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from models.strategy_state import PriceSegment, SplitState, StrategyConfig
 from strategies.adaptive_buy import AdaptiveBuyController
 from strategies.logic_price import PriceStrategyLogic
-from strategies.runtime_helpers import StrategyStateManager
+from strategies.runtime_helpers import StrategyLifecycleManager, StrategyStateManager
 
 
 class _ExchangeStub:
@@ -133,6 +133,53 @@ class TestAdaptiveBuyController(unittest.TestCase):
         self.assertEqual(controls["batch_cap"], 1)
         self.assertEqual(controls["next_gap_levels"], 2)
         self.assertAlmostEqual(controls["buy_multiplier"], 0.75)
+
+    def test_resolving_target_from_none_logs_target_update(self):
+        # Regression: this assignment used to be silent (no log_event call), so the
+        # dashboard chart -- which only learns about next_buy_target_price from
+        # BUY_EXEC/TARGET_UPDATE messages -- kept showing whatever number was last
+        # logged (e.g. an old, already-cleared position's price) even though the
+        # real gating value had already moved on. See logic_price.py::_resolve_buy_target.
+        strategy = _StrategyStub()
+        self.assertIsNone(strategy.next_buy_target_price)
+
+        decision = strategy.price_logic._resolve_buy_target(
+            current_price=100_000.0,
+            just_exited_watch=False,
+            has_active_positions=False,
+        )
+
+        self.assertIsNotNone(decision)
+        self.assertIsNotNone(strategy.next_buy_target_price)
+        target_events = [e for e in strategy.events if e[1] == "TARGET_UPDATE"]
+        self.assertEqual(len(target_events), 1)
+        self.assertIn(f"{strategy.next_buy_target_price:.1f}", target_events[0][2])
+
+        # A second call with an already-resolved target must not re-log (no-op path).
+        strategy.price_logic._resolve_buy_target(
+            current_price=100_000.0,
+            just_exited_watch=False,
+            has_active_positions=False,
+        )
+        self.assertEqual(len([e for e in strategy.events if e[1] == "TARGET_UPDATE"]), 1)
+
+    def test_lifecycle_start_sets_state_matching_its_own_log_message(self):
+        # Regression: StrategyLifecycleManager.start() used to compute the
+        # "Next Buy Target" text for its BUY_EXEC log message but never assign it
+        # to next_buy_target_price, leaving state and the displayed log disagreeing
+        # from the very first tick.
+        strategy = _StrategyStub()
+        strategy.watch_logic = SimpleNamespace(get_rsi_5m=lambda price, market_context=None: None)
+        strategy.order_manager = SimpleNamespace(sync_pending_orders=lambda s: None)
+
+        StrategyLifecycleManager().start(strategy, current_price=100_000.0)
+
+        self.assertEqual(len(strategy.splits), 1)
+        buy_events = [e for e in strategy.events if e[1] == "BUY_EXEC"]
+        self.assertEqual(len(buy_events), 1)
+        expected_target = 100_000.0 * (1 - strategy.config.buy_rate)
+        self.assertAlmostEqual(strategy.next_buy_target_price, expected_target)
+        self.assertIn(f"{expected_target:.1f}", buy_events[0][2])
 
     def test_state_manager_includes_adaptive_fields(self):
         strategy = _StrategyStub()
@@ -351,3 +398,32 @@ class TestAdaptivePriceLogic(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestManualTargetLogsEvent(unittest.TestCase):
+    def test_manual_target_set_and_clear_are_chart_visible(self):
+        # Regression: set_manual_target() used to call logging.info() only (server
+        # console), never self.log_event() (persisted, chart-visible). A manual
+        # override then silently diverged the dashboard target line from state,
+        # the same class of bug fixed in _resolve_buy_target/lifecycle start.
+        import strategy as strategy_module
+
+        instance = object.__new__(strategy_module.SevenSplitStrategy)
+        instance.lock = __import__("threading").RLock()
+        instance.exchange = SimpleNamespace()
+        instance.next_buy_target_price = None
+        instance.strategy_id = 1
+        instance.saved = 0
+        instance.events = []
+        instance.save_state = lambda: setattr(instance, "saved", instance.saved + 1)
+        instance.log_event = lambda level, event_type, message: instance.events.append(
+            (level, event_type, message)
+        )
+
+        instance.set_manual_target(123456.0)
+        self.assertEqual(instance.events[-1][1], "TARGET_UPDATE")
+        self.assertIn("123456.0", instance.events[-1][2])
+
+        instance.set_manual_target(None)
+        self.assertEqual(instance.events[-1][1], "TARGET_UPDATE")
+        self.assertIn("NONE", instance.events[-1][2])

@@ -195,7 +195,18 @@ class PriceStrategyLogic:
             return None
 
         if self.strategy.next_buy_target_price is None:
-            self.strategy.next_buy_target_price = self._normalize_target_price(auto_target_price)
+            new_target = self._normalize_target_price(auto_target_price)
+            self.strategy.next_buy_target_price = new_target
+            # This assignment used to be silent: the chart/event log only learns about
+            # next_buy_target_price changes made in handle_split_cleanup(). Without this,
+            # the displayed target line freezes at whatever was last logged (e.g. an old,
+            # already-sold position's price) while the real gating value has already moved
+            # on, producing a target line that looks disconnected from the price candles.
+            self.strategy.log_event(
+                "INFO",
+                "TARGET_UPDATE",
+                f"Next Buy Target: {new_target:.1f} ({reference_msg})",
+            )
 
         return {
             "target_price": self.strategy.next_buy_target_price,
