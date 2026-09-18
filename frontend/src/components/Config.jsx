@@ -182,7 +182,18 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
 
     const ensureSegments = (data) => {
         const segments = Array.isArray(data.price_segments) ? data.price_segments : [];
-        if (segments.length > 0) {
+        // A single (or absent) segment means the user is on the "classic" simple
+        // min/max fields, not the multi-segment ladder editor. Always rebuild that
+        // one segment from the current 매수 하한가/상한가 so editing those fields
+        // actually changes what the bot checks -- otherwise the buy logic keeps
+        // reading a stale segment bound from whenever it was first auto-generated,
+        // and the top-level fields silently have no effect (backend:
+        // logic_price.py::_effective_segments() only falls back to min_price/
+        // max_price when price_segments is empty; once populated, those top-level
+        // fields are ignored entirely).
+        // Two or more segments means the user deliberately split the ladder in the
+        // advanced editor, so that array is left untouched.
+        if (segments.length > 1) {
             return segments;
         }
         return [buildFallbackSegment(data)];
