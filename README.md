@@ -29,40 +29,40 @@ npm install
 cd ..
 ```
 
-### 3. 환경 변수 설정
+### 3. 환경 변수 설정 (선택)
 
-`backend` 디렉토리 안에 `.env.real` 파일을 생성하고 업비트 API 키를 설정하세요.
+업비트 API 키와 실행 모드(모의/실거래)는 **웹 대시보드의 첫 실행 마법사와 설정 화면에서 입력**합니다.
+입력한 값은 서버 DB(`system_config` 테이블)에 저장되고, 키는 화면과 API 응답에 마지막 네 자리만 노출됩니다.
 
-**`backend/.env.real` 파일 생성:**
+환경 변수는 첫 부팅의 초기값이자 DB에 값이 없을 때의 대체값으로만 쓰입니다.
 
-```bash
-UPBIT_ACCESS_KEY=your_actual_access_key_here
-UPBIT_SECRET_KEY=your_actual_secret_key_here
-UPBIT_OPEN_API_SERVER_URL=https://api.upbit.com
-```
+| 변수 | 설명 | 기본값 |
+| :--- | :--- | :--- |
+| `TRADING_MODE` | 첫 부팅 시 모드 (`DEV` 모의 / `REAL` 실거래). 이후에는 웹 설정이 우선 | `DEV` |
+| `UPBIT_ACCESS_KEY`, `UPBIT_SECRET_KEY` | 첫 부팅 시 시드할 업비트 키. 웹에서 저장하면 DB 값이 우선 | 없음 |
+| `DASHBOARD_PASSWORD` | 설정하면 변경 요청(POST/PUT/DELETE)과 `/settings`에 비밀번호 요구. 외부 노출 서버라면 반드시 설정 | 없음 (보호 안 함) |
+| `LOG_LEVEL` | `DEBUG` / `INFO` / `WARNING` | `INFO` |
+| `DB_PATH`, `CANDLE_DB_PATH` | SQLite 파일 경로 | `backend/database/*.db` |
+
+로컬 개발용으로는 `backend/.env.dev`(모의)와 `backend/.env.real`(실거래 시드)을 그대로 써도 됩니다.
 
 ## 🚀 실행 방법 / Running
 
-### Dev 모드 실행 (실주문 없음)
+한 프로세스가 모의 투자와 실거래를 모두 처리합니다. 모드는 웹 **설정 → 실행 방식**에서 전환하며,
+실행 중인 전략이 있으면 전환이 거부됩니다. 모의와 실거래의 전략·거래 기록은 같은 DB 안에서 `mode` 컬럼으로 분리됩니다.
 
-실제 주문 없이 동일한 전략 로직을 가상 체결로 실행합니다.
+### 처음 실행하면
 
-```bash
-npm run dev
-```
+1. 대시보드에 접속하면 3단계 마법사가 뜹니다: 업비트 키 입력(또는 건너뛰기) → 모의/실거래 선택 → 첫 전략(코인, 예산, 프리셋).
+2. "전략 만들고 시작"을 누르면 저장과 기동이 한 번에 끝납니다.
+3. 이후에는 상단 **설정**에서 키 교체, 모드 전환, 모의 잔고 변경이 가능합니다.
 
-- 권장: `DB_PATH`는 dev 전용으로 분리
-- 권장: `CANDLE_DB_PATH`는 real과 공유
-
-### Real 모드 실행 (실전 매매)
-
-실제 업비트 계좌와 연동하여 매매를 수행합니다. **주의: 실제 자산이 사용됩니다.**
+### 로컬 개발
 
 ```bash
-./scripts/run-real.sh
+npm run dev            # 백엔드(8000) + 프론트 개발 서버(5173)
+./scripts/run-real.sh  # backend/.env.real 로 시드해 백엔드만 실행 (8000, 정적 프론트 포함)
 ```
-
-- **Dashboard**: http://localhost:5173
 
 ### 🐳 Docker & Versioning
 
@@ -205,16 +205,31 @@ SevenSplit/
 
 ## API 엔드포인트
 
-- `GET /status?ticker=KRW-BTC` - 전략 상태 조회
-- `POST /start` - 전략 시작
-- `POST /stop` - 전략 중지
-- `POST /config` - 설정 업데이트
-- `POST /reset` - 전략 리셋 (주문 취소 및 DB 데이터 삭제)
+설정·온보딩
+
+- `GET /setup/status` - 키 유무, 모드, 전략 수 (첫 화면 판단용)
+- `GET /settings` - 현재 설정 (키는 마스킹)
+- `PUT /settings` - 업비트 키 저장(업비트에 검증 후) / 모의 잔고 변경
+- `POST /settings/validate` - 키 검증만 (잔고, 만료일 반환)
+- `POST /settings/mode` - `{"mode": "DEV"|"REAL"}` 모드 전환
+- `DELETE /settings/keys` - 저장된 키 삭제 (모의 모드에서만)
+- `GET /auth/status`, `POST /auth/check` - 대시보드 비밀번호 상태/확인
+- `GET /market/tickers`, `GET /market/price?ticker=KRW-BTC` - 마켓 목록, 현재가
+
+전략·봇
+
+- `GET /strategies`, `POST /strategies`, `DELETE /strategies/{id}` - 전략 목록/생성/삭제 (현재 모드 기준)
+- `GET /strategies/{id}/status` - 전략 상태 조회
+- `POST /bot/start`, `POST /bot/stop`, `POST /bot/hard-stop` - 시작 / 매수 정지 / 전량 정지
+- `POST /strategies/config` - 설정 업데이트
+- `POST /bot/reset` - 전략 리셋 (주문 취소 및 DB 데이터 삭제)
 - `POST /simulations/backtest` - 캔들 기반 백테스트 실행
 - `POST /simulations/live/start` - 라이브 시뮬 시작 (실주문 없음)
 - `POST /simulations/live/{session_id}/stop` - 라이브 시뮬 중지
 - `GET /simulations/live/{session_id}` - 라이브 시뮬 상태 조회
 - `GET /simulations/live` - 라이브 시뮬 세션 목록
+
+`DASHBOARD_PASSWORD`가 설정된 서버에서는 변경 요청에 `X-Dashboard-Password` 헤더가 필요합니다.
 
 예시 (백테스트):
 ```bash
@@ -231,4 +246,4 @@ curl -X POST http://localhost:8000/simulations/backtest \
 
 ⚠️ **실제 거래 전 반드시 소액으로 충분히 검증하세요.**
 
-- **Real 모드**: `backend/.env.real` 파일 설정 후 `./scripts/run-real.sh` 실행. 실제 자산 사용.
+- **실거래 모드**: 웹 설정에서 검증된 키를 저장하고 모드를 실거래로 전환하면 실제 자산이 사용됩니다. 상단 배지가 빨간색이면 실거래입니다.

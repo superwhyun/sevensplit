@@ -300,3 +300,75 @@ class TestFillTimeResolution(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestActualFeesFromExchange(unittest.TestCase):
+    """P/L must use the fee the exchange actually charged (paid_fee) and fall back to the
+    configured rate only when the payload lacks it."""
+
+    def _bought_split(self, buy_fee=None):
+        return SplitState(
+            id=1,
+            status="PENDING_SELL",
+            buy_order_uuid="buy-1",
+            sell_order_uuid="sell-1",
+            buy_price=100.0,
+            actual_buy_price=100.0,
+            buy_amount=100.0,
+            buy_volume=1.0,
+            target_sell_price=101.0,
+            bought_at="2026-09-01T00:00:00+00:00",
+            buy_fee=buy_fee,
+        )
+
+    def test_buy_fill_stores_paid_fee_on_split(self):
+        split = SplitState(id=1, status="PENDING_BUY", buy_order_uuid="buy-1", buy_price=100.0, buy_amount=100.0)
+        strategy = _StubStrategy([split])
+        strategy.exchange.orders["buy-1"] = {
+            "uuid": "buy-1", "state": "done", "ord_type": "price", "executed_volume": "1",
+            "paid_fee": "0.07",
+            "trades": [{"price": "100", "volume": "1", "funds": "100", "created_at": FILL_AT_KST}],
+        }
+
+        StrategyOrderManager().check_buy_order(strategy, split)
+
+        self.assertAlmostEqual(split.buy_fee, 0.07)
+
+    def test_sell_uses_actual_fees_when_reported(self):
+        split = self._bought_split(buy_fee=0.07)
+        strategy = _StubStrategy([split])
+        order = _done_sell_order(price=101.0, volume=1.0)
+        order["paid_fee"] = "0.09"
+        strategy.exchange.orders["sell-1"] = order
+
+        StrategyOrderManager().check_sell_order(strategy, split)
+
+        trade = strategy.db.trades[0]
+        self.assertAlmostEqual(trade["total_fee"], 0.16)          # 0.07 buy + 0.09 sell, not 0.1005 estimate
+        self.assertAlmostEqual(trade["net_profit"], 101.0 - 100.0 - 0.16)
+
+    def test_sell_falls_back_to_configured_rate_without_paid_fee(self):
+        split = self._bought_split(buy_fee=None)
+        strategy = _StubStrategy([split])
+        strategy.exchange.orders["sell-1"] = _done_sell_order(price=101.0, volume=1.0)  # no paid_fee key
+
+        StrategyOrderManager().check_sell_order(strategy, split)
+
+        trade = strategy.db.trades[0]
+        expected = 100.0 * 0.0005 + 101.0 * 0.0005
+        self.assertAlmostEqual(trade["total_fee"], expected)
+
+    def test_partial_sell_prorates_stored_buy_fee(self):
+        split = self._bought_split(buy_fee=0.10)
+        strategy = _StubStrategy([split])
+        strategy.exchange.orders["sell-1"] = {
+            "uuid": "sell-1", "state": "cancel", "ord_type": "limit", "price": "101",
+            "executed_volume": "0.4", "paid_fee": "0.02",
+            "trades": [{"price": "101", "volume": "0.4", "funds": "40.4", "created_at": FILL_AT_KST}],
+        }
+
+        StrategyOrderManager().check_sell_order(strategy, split)
+
+        trade = strategy.db.trades[0]
+        self.assertAlmostEqual(trade["total_fee"], 0.10 * 0.4 + 0.02)
+        self.assertAlmostEqual(split.buy_fee, 0.06)  # remaining 60% of the buy fee stays with the split

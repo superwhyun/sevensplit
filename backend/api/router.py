@@ -9,7 +9,8 @@ from fastapi.responses import StreamingResponse
 from core.config import (
     db,
     strategy_service,
-    exchange,
+    settings_service,
+    exchange_service,
     real_exchange,
     shared_prices,
     accounts_cache,
@@ -17,15 +18,79 @@ from core.config import (
 )
 from database import get_candle_db
 from core.schemas import (
-    CreateStrategyRequest, CommandRequest, ConfigRequest, 
+    CreateStrategyRequest, CommandRequest, ConfigRequest,
     ManualTargetRequest, UpdateNameRequest,
     DebugRSIRequest,
     BacktestRequest,
     LiveSimulationStartRequest,
+    SettingsUpdateRequest, ValidateKeysRequest, ModeSwitchRequest,
 )
 from core.engine import calculate_portfolio
+from services.settings_service import SettingsError
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------- settings / setup
+@router.get("/setup/status")
+def get_setup_status():
+    """What the first screen needs: keys present, mode, whether any strategy exists."""
+    return settings_service.get_setup_status()
+
+
+@router.get("/settings")
+def get_settings():
+    """Runtime settings with secrets masked."""
+    return settings_service.get_public_settings()
+
+
+@router.put("/settings")
+def update_settings(req: SettingsUpdateRequest):
+    """Save Upbit keys (validated against Upbit first) and/or the paper starting balance."""
+    try:
+        result = None
+        if req.access_key is not None or req.secret_key is not None:
+            result = settings_service.update_keys(
+                req.access_key or "",
+                req.secret_key or "",
+                validate=req.validate_keys,
+            )
+        if req.paper_initial_krw is not None:
+            result = settings_service.update_paper_initial_krw(req.paper_initial_krw)
+        if req.resume_strategies_on_boot is not None:
+            result = settings_service.update_resume_on_boot(req.resume_strategies_on_boot)
+        return result or settings_service.get_public_settings()
+    except SettingsError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"[settings] update failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/settings/keys")
+def delete_settings_keys():
+    try:
+        return settings_service.clear_keys()
+    except SettingsError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/settings/validate")
+def validate_settings_keys(req: ValidateKeysRequest):
+    """Check keys against Upbit without saving. Omit both fields to re-check the stored keys."""
+    return settings_service.validate_keys(req.access_key, req.secret_key)
+
+
+@router.post("/settings/mode")
+def switch_settings_mode(req: ModeSwitchRequest):
+    """Switch between paper (DEV) and live (REAL) trading. Refused while any strategy runs."""
+    try:
+        return settings_service.switch_mode(req.mode)
+    except SettingsError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"[settings] mode switch failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/strategies")
 def get_strategies():
@@ -36,7 +101,8 @@ def get_strategies():
             "name": db.get_strategy(s.strategy_id).name,
             "ticker": s.ticker,
             "budget": s.budget,
-            "is_running": s.is_running
+            "is_running": s.is_running,
+            "mode": strategy_service.current_mode,
         }
         for s in strategy_service.get_all_strategies()
     ]
@@ -127,8 +193,8 @@ def get_status(strategy_id: int):
     current_price = shared_prices.get(strategy.ticker)
     if not current_price:
         try:
-            current_price = exchange.get_current_price(strategy.ticker)
-        except:
+            current_price = exchange_service.get_current_price(strategy.ticker)
+        except Exception:
             current_price = 0.0
 
     state = strategy.get_state(current_price=current_price)
@@ -164,9 +230,51 @@ def get_full_snapshot():
 def get_accounts():
     """Expose detailed exchange account info for dashboard or debugging."""
     try:
-        return exchange.get_accounts()
+        return exchange_service.get_accounts()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+_POPULAR_TICKERS = ("KRW-BTC", "KRW-ETH", "KRW-SOL", "KRW-XRP", "KRW-DOGE")
+_markets_cache = {"data": [], "timestamp": 0.0}
+
+
+@router.get("/market/tickers")
+def get_market_tickers():
+    """KRW markets for pickers. Popular coins first, then alphabetical. Cached for an hour."""
+    now = time.time()
+    if not _markets_cache["data"] or now - _markets_cache["timestamp"] > 3600:
+        try:
+            markets = real_exchange.get_markets()
+            if markets:
+                _markets_cache["data"] = markets
+                _markets_cache["timestamp"] = now
+        except Exception as e:
+            logging.warning(f"Market list refresh failed: {e}")
+    markets = _markets_cache["data"] or [
+        {"market": t, "korean_name": t.split("-")[1], "english_name": t.split("-")[1]} for t in _POPULAR_TICKERS
+    ]
+    by_market = {m["market"]: m for m in markets}
+    ordered = [by_market[t] for t in _POPULAR_TICKERS if t in by_market]
+    rest = sorted((m for m in markets if m["market"] not in _POPULAR_TICKERS), key=lambda m: m["market"])
+    return {"popular": [m["market"] for m in ordered], "markets": ordered + rest}
+
+
+@router.get("/market/price")
+def get_market_price(ticker: str):
+    """Current price for one KRW market (public data, works in both modes)."""
+    ticker = (ticker or "").strip().upper()
+    if not ticker.startswith("KRW-"):
+        raise HTTPException(status_code=400, detail="ticker must look like KRW-BTC")
+    price = shared_prices.get(ticker)
+    if not price:
+        try:
+            price = real_exchange.get_current_price(ticker)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"시세 조회 실패: {e}")
+    if not price:
+        raise HTTPException(status_code=404, detail=f"{ticker} 시세를 찾을 수 없습니다.")
+    return {"ticker": ticker, "price": float(price), "timestamp": time.time()}
+
 
 @router.get("/candles")
 def get_candles(market: str, count: int = 200, interval: str = "minutes/5", to: Optional[str] = None):
@@ -362,11 +470,11 @@ def get_portfolio():
         if current_time - accounts_cache['timestamp'] < 10 and accounts_cache['data']:
             accounts_raw = accounts_cache['data']
         else:
-             accounts_raw = exchange._request('GET', '/v1/accounts') if hasattr(exchange, '_request') else []
-             accounts_cache['data'] = accounts_raw
-             accounts_cache['timestamp'] = current_time
-    except Exception:
-        pass
+            accounts_raw = exchange_service.get_accounts() or []
+            accounts_cache['data'] = accounts_raw
+            accounts_cache['timestamp'] = current_time
+    except Exception as e:
+        logging.debug(f"Portfolio accounts refresh skipped: {e}")
 
     return calculate_portfolio(prices=shared_prices, accounts_raw=accounts_raw)
 
@@ -415,6 +523,28 @@ def stop_live_simulation(session_id: str):
     except Exception as e:
         logging.error(f"Live simulation stop failed: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/simulations/live/{session_id}/pause-buying")
+def pause_live_buying(session_id: str):
+    try:
+        return simulation_service.pause_live_buying(session_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logging.error(f"Live simulation pause failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/simulations/live/{session_id}/resume-buying")
+def resume_live_buying(session_id: str):
+    try:
+        return simulation_service.resume_live_buying(session_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logging.error(f"Live simulation resume failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/simulations/live/{session_id}")

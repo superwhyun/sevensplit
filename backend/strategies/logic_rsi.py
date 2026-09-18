@@ -108,7 +108,28 @@ class RSIStrategyLogic:
         if sell_plan is not None:
             actions.append(sell_plan)
 
+        self._log_signal_check(buy_plan, sell_plan)
         return actions
+
+    def _log_signal_check(self, buy_plan, sell_plan):
+        """Once per confirmed daily candle, record what the strategy saw and decided."""
+        if not hasattr(self.strategy, "log_event"):
+            return
+        cfg = self.strategy.config
+        verdict = []
+        if buy_plan:
+            verdict.append(f"매수 신호 ({buy_plan.get('count', 1)}분할)")
+        if sell_plan:
+            verdict.append(f"매도 신호 ({len(sell_plan.get('splits', []))}분할)")
+        if not verdict:
+            verdict.append("신호 없음")
+        self.strategy.log_event(
+            "INFO",
+            "RSI_SIGNAL",
+            f"일봉 RSI({cfg.rsi_period}) 전전날 {self.prev_prev_rsi:.1f} → 전날 {self.prev_rsi:.1f} | "
+            f"매수 기준 {cfg.rsi_buy_max:.0f} 상향 돌파 / 매도 기준 {cfg.rsi_sell_min:.0f} 하향 돌파 | "
+            + ", ".join(verdict),
+        )
 
     def _execute_rsi_action_plan(self, actions: list, current_price: float, current_date_str: str):
         for action in actions:
@@ -122,11 +143,25 @@ class RSIStrategyLogic:
                 if success:
                     self.strategy.last_buy_date = current_date_str
                     self.strategy.save_state()
+                    if hasattr(self.strategy, "log_event"):
+                        self.strategy.log_event(
+                            "INFO", "BUY_EXEC",
+                            f"RSI 매수 실행: {action.get('count', 1)}분할 @ {current_price:,.0f} "
+                            f"(전날 RSI {self.prev_rsi:.1f})",
+                        )
             elif action_type == "sell":
                 self.strategy.last_sell_date = current_date_str
                 self.strategy.save_state()
+                sold = 0
                 for split in action.get("splits", []):
-                    self._execute_market_sell(split)
+                    if self._execute_market_sell(split):
+                        sold += 1
+                if hasattr(self.strategy, "log_event"):
+                    self.strategy.log_event(
+                        "INFO", "SELL_EXEC",
+                        f"RSI 매도 실행: {sold}/{len(action.get('splits', []))}분할 @ {current_price:,.0f} "
+                        f"(전날 RSI {self.prev_rsi:.1f})",
+                    )
 
     def _update_daily_rsi(self, current_price: float, market_context: dict = None):
         """Update daily RSI indicators from candle data (completed daily candles only)."""
@@ -166,14 +201,16 @@ class RSIStrategyLogic:
             if not candle_points:
                 return
 
-            # Determine whether latest daily candle is still in-progress for current KST date.
-            latest_ts = candle_points[-1][0]
-            kst = timezone(timedelta(hours=9))
-            latest_kst_date = datetime.fromtimestamp(latest_ts, tz=timezone.utc).astimezone(kst).date()
-            current_kst_date = self.strategy.get_current_time_kst().date()
-            has_in_progress_today = latest_kst_date == current_kst_date
-
-            closed_points = candle_points[:-1] if has_in_progress_today else candle_points
+            # A daily candle stamped T (UTC midnight) is open until T + 1 day, i.e. 09:00 KST
+            # the next morning. Only candles whose full day has elapsed count as closed; using
+            # the KST calendar date here would treat the still-open candle as closed between
+            # 00:00 and 09:00 KST and fire signals on an unfinished close.
+            now_utc = self.strategy.get_now_utc()
+            if now_utc.tzinfo is None:
+                now_utc = now_utc.replace(tzinfo=timezone.utc)
+            now_ts = now_utc.timestamp()
+            closed_points = [pt for pt in candle_points if pt[0] + 86400 <= now_ts]
+            has_in_progress_today = len(closed_points) < len(candle_points)
             closed_closes = [p for _, p in closed_points]
             if not closed_closes:
                 return
@@ -185,6 +222,8 @@ class RSIStrategyLogic:
                 self._last_evaluated_candle_ts = latest_closed_ts
                 self._signal_rsi_now = calculate_rsi(closed_closes, self.strategy.config.rsi_period)
                 self._signal_rsi_prev = calculate_rsi(closed_closes[:-1], self.strategy.config.rsi_period)
+                # Remember which candle was evaluated so a restart cannot re-fire today's signal.
+                self.strategy.save_state()
 
             # D-1 = latest closed candle RSI, D-2 = one candle before that.
             period = self.strategy.config.rsi_period
@@ -373,7 +412,7 @@ class RSIStrategyLogic:
                     self.strategy.order_manager.check_sell_order(self.strategy, split)
                 except Exception as sync_err:
                     logging.debug(f"RSI Logic: sell order reconcile skipped: {sync_err}")
-                return
+                return False
         try:
             res = self.strategy.exchange.sell_market_order(self.strategy.ticker, split.buy_volume)
             if res:
@@ -386,7 +425,10 @@ class RSIStrategyLogic:
                     self.strategy.order_manager.check_sell_order(self.strategy, split)
                 except Exception as sync_err:
                     logging.debug(f"RSI Logic: immediate sell fill sync skipped: {sync_err}")
-            else:
-                logging.warning(f"RSI Logic: sell_market_order returned no result for split {split.id}")
+                return True
+            logging.warning(f"RSI Logic: sell_market_order returned no result for split {split.id}")
         except Exception as e:
             logging.warning(f"RSI Logic: sell_market_order failed for split {split.id}: {e}")
+            if hasattr(self.strategy, "log_event"):
+                self.strategy.log_event("WARNING", "SELL_FAILED", f"분할 #{split.id} 시장가 매도 실패: {e}")
+        return False

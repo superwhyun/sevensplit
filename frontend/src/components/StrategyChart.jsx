@@ -529,13 +529,18 @@ const StrategyChart = ({
         });
         rsiSellLineRef.current = rsiSellLine;
 
+        // PRICE mode: this line is the watch-mode entry threshold on the 5m RSI panel.
+        // RSI mode: it is the strategy's buy-cross threshold.
+        const initialBuyLine = configRef.current?.strategy_mode === 'RSI'
+            ? (configRef.current?.rsi_buy_max || 30.0)
+            : (configRef.current?.watch_rsi_threshold || 30.0);
         const rsiBuyLine = rsiSeries14.createPriceLine({
-            price: configRef.current?.rsi_buy_max || 30.0,
+            price: initialBuyLine,
             color: '#10b981',
             lineWidth: 2,
             lineStyle: 2,
             axisLabelVisible: true,
-            title: `${configRef.current?.rsi_buy_max ?? 30}`,
+            title: `${initialBuyLine}`,
         });
         rsiBuyLineRef.current = rsiBuyLine;
 
@@ -1018,7 +1023,9 @@ const StrategyChart = ({
     useEffect(() => {
         if (!config) return;
 
-        const buyMax = config.rsi_buy_max ?? 30.0;
+        const buyMax = config.strategy_mode === 'RSI'
+            ? (config.rsi_buy_max ?? 30.0)
+            : (config.watch_rsi_threshold ?? 30.0);
         const sellMin = config.rsi_sell_min ?? 70.0;
 
         if (rsiBuyLineRef.current) {
@@ -1044,16 +1051,16 @@ const StrategyChart = ({
             borderRadius: '0.5rem',
             border: '1px solid #334155'
         }}>
-            <h3 style={{ margin: '0 0 1rem 0', color: '#f8fafc' }}>Price Chart</h3>
+            <h3 style={{ margin: '0 0 1rem 0', color: '#f8fafc' }}>가격 차트</h3>
             <div style={{ marginBottom: '0.5rem', display: 'flex', gap: '0.4rem', flexWrap: 'wrap', fontSize: '0.72rem' }}>
-                <span style={{ color: '#94a3b8' }}>Buy Gate:</span>
-                <span style={{ background: 'rgba(234, 179, 8, 0.55)', color: '#f8fafc', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>WATCH</span>
-                <span style={{ background: 'rgba(14, 165, 233, 0.5)', color: '#f8fafc', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>Price Wait</span>
-                <span style={{ background: 'rgba(168, 85, 247, 0.6)', color: '#f8fafc', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>Segment Wait</span>
-                <span style={{ background: 'rgba(249, 115, 22, 0.6)', color: '#f8fafc', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>Budget Wait</span>
-                <span style={{ background: 'rgba(239, 68, 68, 0.6)', color: '#f8fafc', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>Trade Limit</span>
-                <span style={{ background: 'rgba(148, 163, 184, 0.42)', color: '#f8fafc', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>Buy Ready</span>
-                <span style={{ background: 'rgba(34, 211, 238, 0.25)', color: '#67e8f9', border: '1px solid rgba(34, 211, 238, 0.65)', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>Next Target</span>
+                <span style={{ color: '#94a3b8' }}>매수 게이트:</span>
+                <span style={{ background: 'rgba(234, 179, 8, 0.55)', color: '#f8fafc', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>감시</span>
+                <span style={{ background: 'rgba(14, 165, 233, 0.5)', color: '#f8fafc', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>가격 대기</span>
+                <span style={{ background: 'rgba(168, 85, 247, 0.6)', color: '#f8fafc', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>구간 밖</span>
+                <span style={{ background: 'rgba(249, 115, 22, 0.6)', color: '#f8fafc', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>예산 부족</span>
+                <span style={{ background: 'rgba(239, 68, 68, 0.6)', color: '#f8fafc', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>거래 한도</span>
+                <span style={{ background: 'rgba(148, 163, 184, 0.42)', color: '#f8fafc', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>매수 가능</span>
+                <span style={{ background: 'rgba(34, 211, 238, 0.25)', color: '#67e8f9', border: '1px solid rgba(34, 211, 238, 0.65)', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>다음 목표</span>
                 {showAdaptivePressure && (
                     <span style={{ background: 'rgba(245, 158, 11, 0.2)', color: '#fbbf24', border: '1px solid rgba(245, 158, 11, 0.5)', padding: '0.1rem 0.35rem', borderRadius: '0.25rem' }}>
                         {`Stress ${Number(adaptiveState?.pressure ?? 0).toFixed(2)} / ${Number(config?.adaptive_pressure_cap ?? 4).toFixed(2)}`}

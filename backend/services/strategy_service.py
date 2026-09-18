@@ -9,21 +9,27 @@ class StrategyService:
         self.db = db
         self.exchange_service = exchange_service
         self.strategies: Dict[int, SevenSplitStrategy] = {}
+        # Execution mode the loaded strategies belong to (REAL / DEV).
+        self.current_mode: Optional[str] = None
+        # Strategies that were running before a restart but were held (not resumed) on boot.
+        self.held_on_boot_ids: set = set()
 
-    def load_strategies(self):
-        """Load strategies from DB."""
+    def load_strategies(self, mode: Optional[str] = None):
+        """Load strategies from DB. With a mode, only strategies of that mode are loaded."""
         self.strategies = {}
-        db_strategies = self.db.get_all_strategies()
-        
+        self.current_mode = mode
+        self.held_on_boot_ids = set()
+        db_strategies = self.db.get_all_strategies(mode=mode) if mode is not None else self.db.get_all_strategies()
+
         if not db_strategies:
-            logging.info("No strategies found in DB.")
+            logging.info(f"No strategies found in DB (mode={mode}).")
         else:
-            logging.info(f"Loading {len(db_strategies)} strategies from DB.")
+            logging.info(f"Loading {len(db_strategies)} strategies from DB (mode={mode}).")
             for s in db_strategies:
                 self.strategies[s.id] = SevenSplitStrategy(
-                    self.exchange_service, 
-                    s.id, 
-                    s.ticker, 
+                    self.exchange_service,
+                    s.id,
+                    s.ticker,
                     s.budget
                 )
 
@@ -39,12 +45,13 @@ class StrategyService:
                 name=name,
                 ticker=ticker,
                 budget=budget,
-                config=config
+                config=config,
+                mode=self.current_mode,
             )
             self.strategies[s.id] = SevenSplitStrategy(
-                self.exchange_service, 
-                s.id, 
-                s.ticker, 
+                self.exchange_service,
+                s.id,
+                s.ticker,
                 s.budget
             )
             return s.id
@@ -55,34 +62,55 @@ class StrategyService:
     def delete_strategy(self, strategy_id: int):
         if strategy_id not in self.strategies:
             raise ValueError("Strategy not found")
-        
+
         try:
             strategy = self.strategies[strategy_id]
             # Delete must be a full teardown regardless of running state.
             strategy.hard_stop()
-                
+
             # Remove from memory
             del self.strategies[strategy_id]
-            
+
             # Remove from DB
             self.db.delete_strategy(strategy_id)
         except Exception as e:
             logging.error(f"Failed to delete strategy: {e}")
             raise
 
+    def hold_running_strategies(self, reason: str) -> int:
+        """Flip every running strategy to stopped without touching its orders.
+        Fills keep being reconciled by the engine; only the buy logic is disabled."""
+        held = 0
+        for strategy in self.strategies.values():
+            if not strategy.is_running:
+                continue
+            with strategy.lock:
+                strategy.is_running = False
+                strategy.save_state()
+            self.held_on_boot_ids.add(strategy.strategy_id)
+            try:
+                strategy.log_event("WARNING", "HELD_ON_BOOT", reason)
+            except Exception:
+                pass
+            held += 1
+        if held:
+            logging.warning(f"Held {held} running strategies on boot: {reason}")
+        return held
+
     def start_strategy(self, strategy_id: int):
         if strategy_id not in self.strategies:
             raise ValueError("Strategy not found")
-        
+
         strategy = self.strategies[strategy_id]
-        
+        self.held_on_boot_ids.discard(strategy_id)
+
         # Fetch current price
         try:
             current_price = self.exchange_service.get_current_price(strategy.ticker)
         except Exception as e:
             logging.error(f"Failed to fetch price for {strategy.ticker}: {e}")
             current_price = None
-        
+
         strategy.start(current_price=current_price)
 
     def stop_strategy(self, strategy_id: int):
@@ -145,7 +173,7 @@ class StrategyService:
             # Clear DB data
             self.db.delete_all_splits(strategy_id)
             self.db.delete_all_trades(strategy_id)
-            
+
             # Reset state
             self.db.update_strategy_state(
                 strategy_id,
@@ -159,9 +187,9 @@ class StrategyService:
             # Recreate instance
             s_rec = self.db.get_strategy(strategy_id)
             self.strategies[strategy_id] = SevenSplitStrategy(
-                self.exchange_service, 
-                strategy_id, 
-                s_rec.ticker, 
+                self.exchange_service,
+                strategy_id,
+                s_rec.ticker,
                 s_rec.budget
             )
             if getattr(self.strategies[strategy_id].config, "use_adaptive_buy_control", False):

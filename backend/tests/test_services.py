@@ -16,9 +16,9 @@ class StubExchange:
         pass
 
 class StubDB:
-    def get_all_strategies(self):
+    def get_all_strategies(self, mode=None):
         return []
-    def create_strategy(self, name, ticker, budget, config):
+    def create_strategy(self, name, ticker, budget, config, mode=None):
         class StrategyRecord:
             pass
         rec = StrategyRecord()

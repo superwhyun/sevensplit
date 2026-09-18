@@ -1,8 +1,25 @@
 import logging
+import threading
+
 
 class ExchangeService:
-    def __init__(self, exchange):
+    """Thin wrapper every strategy talks to.
+
+    Holding the concrete exchange behind this wrapper lets the runtime swap between the
+    paper exchange (DEV) and live Upbit (REAL) without recreating strategy objects.
+    """
+
+    def __init__(self, exchange, mode: str = "DEV"):
+        self._lock = threading.RLock()
         self.exchange = exchange
+        self.mode = mode
+
+    def set_exchange(self, exchange, mode: str) -> None:
+        with self._lock:
+            previous = type(self.exchange).__name__ if self.exchange is not None else None
+            self.exchange = exchange
+            self.mode = mode
+            logging.info(f"ExchangeService switched to {type(exchange).__name__} (mode={mode}, was {previous})")
 
     def get_current_price(self, ticker):
         return self.exchange.get_current_price(ticker)
@@ -15,6 +32,11 @@ class ExchangeService:
 
     def get_balance(self, currency):
         return self.exchange.get_balance(currency)
+
+    def get_accounts(self):
+        if hasattr(self.exchange, "get_accounts"):
+            return self.exchange.get_accounts()
+        return []
 
     def get_order(self, uuid):
         return self.exchange.get_order(uuid)

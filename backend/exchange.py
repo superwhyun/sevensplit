@@ -104,6 +104,21 @@ class UpbitExchange(Exchange):
         else:
             return float(normalized)
 
+    def get_markets(self):
+        """KRW markets with display names, e.g. [{market, korean_name, english_name}]."""
+        resp = self._request('GET', '/v1/market/all', params={'isDetails': 'false'}, auth=False)
+        markets = []
+        for m in resp or []:
+            market = m.get('market') or ''
+            if not market.startswith('KRW-'):
+                continue
+            markets.append({
+                'market': market,
+                'korean_name': m.get('korean_name') or market,
+                'english_name': m.get('english_name') or market,
+            })
+        return markets
+
     def _get_valid_markets(self):
         """Fetch and cache valid KRW markets to avoid 404s on delisted coins"""
         current_time = self.time.time()
@@ -206,6 +221,40 @@ class UpbitExchange(Exchange):
         if value == int(value):
             return str(int(value))
         return f"{value:.8f}".rstrip('0').rstrip('.')
+
+    def verify_credentials(self) -> dict:
+        """Check the API keys against Upbit. Raises on rejection; returns balances and expiry."""
+        accounts = self._request('GET', '/v1/accounts')
+        krw_balance = 0.0
+        held = []
+        for account in accounts or []:
+            currency = account.get('currency')
+            balance = float(account.get('balance', 0) or 0)
+            locked = float(account.get('locked', 0) or 0)
+            if currency == 'KRW':
+                krw_balance = balance + locked
+            elif balance + locked > 0:
+                held.append(currency)
+
+        expire_at = None
+        try:
+            keys = self._request('GET', '/v1/api_keys')
+            for entry in keys or []:
+                if entry.get('access_key') == self.access_key:
+                    expire_at = entry.get('expire_at')
+                    break
+            if expire_at is None and keys:
+                expire_at = keys[0].get('expire_at')
+        except Exception as e:
+            # Expiry is informational only; a failure here must not fail validation.
+            logging.debug(f"api_keys lookup skipped: {e}")
+
+        return {
+            "valid": True,
+            "krw_balance": krw_balance,
+            "held_currencies": held,
+            "expire_at": expire_at,
+        }
 
     def get_balance(self, ticker="KRW"):
         try:
@@ -392,6 +441,8 @@ class PaperExchange(Exchange):
     """Paper trading exchange: public market data + in-memory simulated orders/fills."""
 
     _LOCK_EPSILON = 1e-12
+    # Upbit KRW-market fee. Reported on orders as paid_fee so P/L uses the same field as live.
+    FEE_RATE = 0.0005
 
     def __init__(self, public_client: UpbitExchange, initial_krw: float = 10_000_000.0):
         self.public_client = public_client
@@ -405,6 +456,12 @@ class PaperExchange(Exchange):
     def _new_order_id(self) -> str:
         self.order_seq += 1
         return f"paper-{self.order_seq}"
+
+    def _now(self) -> datetime:
+        """Clock used to stamp orders/trades. Real-time by default; a replay/backtest
+        exchange overrides this to return the simulated timestamp, so historical fills
+        are recorded at their historical time instead of the moment the replay runs."""
+        return datetime.now(timezone.utc)
 
     def get_tick_size(self, price):
         return self.public_client.get_tick_size(price)
@@ -505,9 +562,14 @@ class PaperExchange(Exchange):
             return
 
         base_currency = self._currency_from_ticker(ticker)
+        # Stamp the fill at the moment it actually crosses, not when the limit order was
+        # placed — a resting order can wait several ticks (or, during replay, several
+        # simulated days) before price reaches it.
+        fill_iso = self._now().isoformat()
         order["state"] = "done"
         order["executed_volume"] = volume
-        order["trades"] = [{"price": price, "volume": volume, "funds": price * volume}]
+        order["paid_fee"] = price * volume * self.FEE_RATE
+        order["trades"] = [{"price": price, "volume": volume, "funds": price * volume, "created_at": fill_iso}]
 
         if side == "bid":
             locked_krw = price * volume
@@ -554,7 +616,7 @@ class PaperExchange(Exchange):
             "volume": volume,
             "executed_volume": 0.0,
             "state": "wait",
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": self._now().isoformat(),
             "trades": [],
         }
         return {"uuid": uuid}
@@ -576,7 +638,7 @@ class PaperExchange(Exchange):
             "volume": volume,
             "executed_volume": 0.0,
             "state": "wait",
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": self._now().isoformat(),
             "trades": [],
         }
         return {"uuid": uuid}
@@ -601,6 +663,7 @@ class PaperExchange(Exchange):
         self.balances[base_currency]["balance"] = new_qty
 
         uuid = self._new_order_id()
+        now_iso = self._now().isoformat()
         self.orders[uuid] = {
             "uuid": uuid,
             "market": ticker,
@@ -610,24 +673,32 @@ class PaperExchange(Exchange):
             "volume": volume,
             "executed_volume": volume,
             "state": "done",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "trades": [{"price": price, "volume": volume, "funds": amount}],
+            "created_at": now_iso,
+            "paid_fee": amount * self.FEE_RATE,
+            "trades": [{"price": price, "volume": volume, "funds": amount, "created_at": now_iso}],
         }
         return {"uuid": uuid}
 
     def sell_market_order(self, ticker, volume):
         volume = float(volume)
         base_currency = self._currency_from_ticker(ticker)
-        if self._available(base_currency) < volume:
+        available = self._available(base_currency)
+        # Same rounding tolerance as _lock: a split that sells its exact recorded volume can be
+        # a few 1e-18 above the float balance after earlier buys/sells were summed.
+        epsilon = max(self._LOCK_EPSILON, abs(volume) * self._LOCK_EPSILON)
+        if available + epsilon < volume:
             raise Exception("insufficient asset for paper sell market order")
+        volume = min(volume, available)
         price = float(self.get_current_price(ticker))
         if not price:
             raise Exception("current price unavailable for paper sell market order")
 
-        self.balances[base_currency]["balance"] -= volume
+        remaining = self.balances[base_currency]["balance"] - volume
+        self.balances[base_currency]["balance"] = 0.0 if abs(remaining) <= epsilon else remaining
         self.balances["KRW"]["balance"] += (price * volume)
 
         uuid = self._new_order_id()
+        now_iso = self._now().isoformat()
         self.orders[uuid] = {
             "uuid": uuid,
             "market": ticker,
@@ -637,8 +708,9 @@ class PaperExchange(Exchange):
             "volume": volume,
             "executed_volume": volume,
             "state": "done",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "trades": [{"price": price, "volume": volume, "funds": price * volume}],
+            "created_at": now_iso,
+            "paid_fee": price * volume * self.FEE_RATE,
+            "trades": [{"price": price, "volume": volume, "funds": price * volume, "created_at": now_iso}],
         }
         return {"uuid": uuid}
 

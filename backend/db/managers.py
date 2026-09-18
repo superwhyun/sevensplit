@@ -14,6 +14,7 @@ from .models import (
     CandleMinutes60,
     Split,
     Strategy,
+    SystemConfig,
     SystemEvent,
     Trade,
 )
@@ -409,12 +410,118 @@ class DatabaseManager:
                 except Exception as e:
                     print(f"Migration warning ({table}): {e}")
 
+            # 8. Execution mode per strategy + runtime settings columns
+            try:
+                result = conn.execute(text("PRAGMA table_info(strategies)"))
+                columns = [row[1] for row in result.fetchall()]
+                if 'mode' not in columns:
+                    print("Migrating: Adding mode to strategies table")
+                    conn.execute(text("ALTER TABLE strategies ADD COLUMN mode VARCHAR(10)"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_strategies_mode ON strategies (mode)"))
+                    conn.commit()
+                if 'watch_rsi_threshold' not in columns:
+                    # Watch-mode threshold used to share rsi_buy_max with the RSI strategy.
+                    # Split them, seeding the new column from the old shared value so PRICE-mode
+                    # strategies keep the threshold they were actually running with.
+                    print("Migrating: Adding watch_rsi_threshold to strategies table (seeded from rsi_buy_max)")
+                    conn.execute(text("ALTER TABLE strategies ADD COLUMN watch_rsi_threshold FLOAT DEFAULT 30.0 NOT NULL"))
+                    if 'rsi_buy_max' in columns:
+                        conn.execute(text("UPDATE strategies SET watch_rsi_threshold = rsi_buy_max WHERE rsi_buy_max IS NOT NULL"))
+                    conn.commit()
+            except Exception as e:
+                print(f"Migration warning (strategies mode/watch threshold): {e}")
+
+            try:
+                result = conn.execute(text("PRAGMA table_info(strategies)"))
+                columns = [row[1] for row in result.fetchall()]
+                rsi_guard_columns = [
+                    ('rsi_last_buy_date', "VARCHAR(10)"),
+                    ('rsi_last_sell_date', "VARCHAR(10)"),
+                    ('rsi_last_evaluated_candle_ts', "FLOAT"),
+                ]
+                added = False
+                for col_name, col_def in rsi_guard_columns:
+                    if col_name not in columns:
+                        print(f"Migrating: Adding {col_name} to strategies table")
+                        conn.execute(text(f"ALTER TABLE strategies ADD COLUMN {col_name} {col_def}"))
+                        added = True
+                if added:
+                    conn.commit()
+            except Exception as e:
+                print(f"Migration warning (strategies RSI guards): {e}")
+
+            try:
+                result = conn.execute(text("PRAGMA table_info(splits)"))
+                columns = [row[1] for row in result.fetchall()]
+                if columns and 'buy_fee' not in columns:
+                    print("Migrating: Adding buy_fee to splits table")
+                    conn.execute(text("ALTER TABLE splits ADD COLUMN buy_fee FLOAT"))
+                    conn.commit()
+            except Exception as e:
+                print(f"Migration warning (splits buy_fee): {e}")
+
+            try:
+                result = conn.execute(text("PRAGMA table_info(system_config)"))
+                columns = [row[1] for row in result.fetchall()]
+                if columns:
+                    settings_columns = [
+                        ('paper_initial_krw', "FLOAT DEFAULT 10000000.0 NOT NULL"),
+                        ('key_valid', "BOOLEAN"),
+                        ('key_last_validated_at', "DATETIME"),
+                        ('key_expire_at', "VARCHAR(40)"),
+                        ('resume_strategies_on_boot', "BOOLEAN DEFAULT 1 NOT NULL"),
+                    ]
+                    for col_name, col_def in settings_columns:
+                        if col_name not in columns:
+                            print(f"Migrating: Adding {col_name} to system_config table")
+                            conn.execute(text(f"ALTER TABLE system_config ADD COLUMN {col_name} {col_def}"))
+                    conn.commit()
+            except Exception as e:
+                print(f"Migration warning (system_config): {e}")
+
     def get_session(self) -> Session:
         """Get a new database session"""
         return self.SessionLocal()
 
+    # System configuration (singleton row)
+    def get_system_config(self) -> SystemConfig:
+        """Return the singleton runtime settings row, or None if never saved."""
+        session = self.get_session()
+        try:
+            return session.query(SystemConfig).order_by(SystemConfig.id.asc()).first()
+        finally:
+            session.close()
+
+    def save_system_config(self, **fields) -> SystemConfig:
+        """Create or update the singleton runtime settings row."""
+        session = self.get_session()
+        try:
+            config = session.query(SystemConfig).order_by(SystemConfig.id.asc()).first()
+            if config is None:
+                config = SystemConfig()
+                session.add(config)
+            for key, value in fields.items():
+                if hasattr(config, key):
+                    setattr(config, key, value)
+            session.commit()
+            session.refresh(config)
+            return config
+        except Exception as e:
+            session.rollback()
+            logging.error(f"❌ [DATABASE] Failed to save system config: {e}")
+            raise
+        finally:
+            session.close()
+
     # Strategy operations
-    def create_strategy(self, name: str, ticker: str, config: dict, budget: float = 1000000.0) -> Strategy:
+    def create_strategy(
+        self,
+        name: str,
+        ticker: str,
+        config: dict,
+        budget: float = 1000000.0,
+        mode: str = None,
+    ) -> Strategy:
         """Create a new strategy"""
         session = self.get_session()
         try:
@@ -422,6 +529,7 @@ class DatabaseManager:
                 name=name,
                 ticker=ticker,
                 budget=budget,
+                mode=mode,
                 **config,
                 # max_trades_per_day=100, # Removed to avoid duplicate argument error
                 is_running=False,
@@ -443,11 +551,38 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def get_all_strategies(self):
-        """Get all strategies"""
+    def get_all_strategies(self, mode: str = None):
+        """Get all strategies, optionally only those belonging to one execution mode."""
         session = self.get_session()
         try:
-            return session.query(Strategy).all()
+            query = session.query(Strategy)
+            if mode is not None:
+                query = query.filter(Strategy.mode == mode)
+            return query.all()
+        finally:
+            session.close()
+
+    def assign_missing_strategy_mode(self, mode: str) -> int:
+        """Stamp legacy rows (created before the mode column existed) with the given mode."""
+        session = self.get_session()
+        try:
+            updated = (
+                session.query(Strategy)
+                .filter(Strategy.mode.is_(None))
+                .update({Strategy.mode: mode}, synchronize_session=False)
+            )
+            session.commit()
+            return int(updated or 0)
+        finally:
+            session.close()
+
+    def count_running_strategies(self, mode: str = None) -> int:
+        session = self.get_session()
+        try:
+            query = session.query(Strategy).filter(Strategy.is_running.is_(True))
+            if mode is not None:
+                query = query.filter(Strategy.mode == mode)
+            return query.count()
         finally:
             session.close()
 

@@ -66,6 +66,18 @@ class _ReplayPaperExchange(PaperExchange):
         self._candle_db = candle_db
         self._current_sim_ts: Optional[float] = None
 
+    def _now(self) -> datetime:
+        """Overrides PaperExchange's wall clock: while replaying, orders/fills must be
+        stamped with the simulated timestamp, not the real time the replay happens to run at."""
+        if self._current_sim_ts:
+            return datetime.fromtimestamp(self._current_sim_ts, tz=timezone.utc)
+        return super()._now()
+
+    def set_sim_time(self, ts: Optional[float]) -> None:
+        """Advance the simulated clock. Call this alongside strategy._sim_now_utc so the
+        exchange and the strategy always agree on 'now'."""
+        self._current_sim_ts = float(ts) if ts else None
+
     def set_price(self, ticker: str, price: float):
         self._price_map[ticker] = float(price)
 
@@ -160,6 +172,8 @@ class LiveSession:
     started_at: float
     replay_days: int = 0
     status: str = "running"
+    # Buying paused: the session keeps ticking so resting sells can fill, but no new buys.
+    buying_paused: bool = False
     last_candle_ts: float = 0.0
     last_tick_price: float = 0.0
     last_error: Optional[str] = None
@@ -187,18 +201,15 @@ class SimulationService:
             max_trades_per_day=getattr(strategy_rec, "max_trades_per_day", 100),
             strategy_mode=getattr(strategy_rec, "strategy_mode", "PRICE"),
             rsi_period=getattr(strategy_rec, "rsi_period", 14),
-            rsi_timeframe=getattr(strategy_rec, "rsi_timeframe", "minutes/60"),
             rsi_buy_max=getattr(strategy_rec, "rsi_buy_max", 30.0),
             rsi_buy_cross_threshold=getattr(strategy_rec, "rsi_buy_cross_threshold", 0.0),
             rsi_buy_first_amount=getattr(strategy_rec, "rsi_buy_first_amount", 1),
-            rsi_buy_next_amount=getattr(strategy_rec, "rsi_buy_next_amount", 1),
             rsi_sell_min=getattr(strategy_rec, "rsi_sell_min", 70.0),
             rsi_sell_cross_threshold=getattr(strategy_rec, "rsi_sell_cross_threshold", 0.0),
             rsi_sell_first_amount=getattr(strategy_rec, "rsi_sell_first_amount", 1),
-            rsi_sell_next_amount=getattr(strategy_rec, "rsi_sell_next_amount", 1),
-            stop_loss=getattr(strategy_rec, "stop_loss", -10.0),
             max_holdings=getattr(strategy_rec, "max_holdings", 20),
             use_trailing_buy=getattr(strategy_rec, "use_trailing_buy", False),
+            watch_rsi_threshold=getattr(strategy_rec, "watch_rsi_threshold", None) or getattr(strategy_rec, "rsi_buy_max", 30.0),
             trailing_buy_rebound_percent=getattr(strategy_rec, "trailing_buy_rebound_percent", 0.2),
             trailing_buy_batch=getattr(strategy_rec, "trailing_buy_batch", True),
             use_adaptive_buy_control=getattr(strategy_rec, "use_adaptive_buy_control", False),
@@ -435,6 +446,7 @@ class SimulationService:
 
         if first_ts > 0:
             sim_strategy._sim_now_utc = datetime.fromtimestamp(first_ts, tz=timezone.utc)
+            sim_exchange.set_sim_time(first_ts)
         first_high = float(candles[0].get("high_price") or candles[0].get("high") or first_price)
         first_low = float(candles[0].get("low_price") or candles[0].get("low") or first_price)
         sim_exchange.set_tick(strategy_rec.ticker, first_price, high_price=first_high, low_price=first_low)
@@ -448,6 +460,7 @@ class SimulationService:
             if ts <= 0 or price <= 0:
                 continue
             sim_strategy._sim_now_utc = datetime.fromtimestamp(ts, tz=timezone.utc)
+            sim_exchange.set_sim_time(ts)
             sim_exchange.set_tick(strategy_rec.ticker, price, high_price=high, low_price=low)
             market_context = self._get_market_context(strategy_rec.ticker, ts)
             sim_strategy.tick(current_price=price, market_context=market_context)
@@ -539,6 +552,7 @@ class SimulationService:
                 if first_price > 0:
                     if first_ts > 0:
                         sim_strategy._sim_now_utc = datetime.fromtimestamp(first_ts, tz=timezone.utc)
+                        sim_exchange.set_sim_time(first_ts)
                     sim_exchange.set_tick(strategy_rec.ticker, first_price, high_price=first_high, low_price=first_low)
                     sim_strategy.start(current_price=first_price)
 
@@ -550,7 +564,7 @@ class SimulationService:
                         if ts <= 0 or price <= 0:
                             continue
                         sim_strategy._sim_now_utc = datetime.fromtimestamp(ts, tz=timezone.utc)
-                        sim_exchange._current_sim_ts = ts
+                        sim_exchange.set_sim_time(ts)
                         sim_exchange.set_tick(strategy_rec.ticker, price, high_price=high, low_price=low)
                         market_context = self._get_market_context(strategy_rec.ticker, ts)
                         sim_strategy.tick(current_price=price, market_context=market_context)
@@ -632,6 +646,9 @@ class SimulationService:
         eff_low = min(latest_low, live_price)
         exchange.set_tick(ticker, live_price, high_price=eff_high, low_price=eff_low)
         strategy._sim_now_utc = datetime.fromtimestamp(now, tz=timezone.utc)
+        # Real-time phase: track actual wall-clock time so the exchange clock doesn't stay
+        # pinned at the last historical warm-up timestamp once replay has finished.
+        exchange.set_sim_time(now)
         if not runtime["bootstrapped"]:
             strategy.start(current_price=live_price)
             runtime["bootstrapped"] = True
@@ -662,6 +679,43 @@ class SimulationService:
                 except Exception:
                     pass
         return {"session_id": session_id, "status": "stopped"}
+
+    def pause_live_buying(self, session_id: str):
+        """Stop new buys but keep the session ticking so sell orders still get filled."""
+        with self._lock:
+            session = self.live_sessions.get(session_id)
+            runtime = self._live_runtime.get(session_id)
+        if not session or not runtime:
+            raise ValueError("Live simulation session not found")
+        if session.status != "running":
+            raise ValueError("Session is not running")
+        strategy = runtime.get("strategy")
+        if strategy is not None:
+            strategy.stop()  # is_running=False → tick still reconciles sells, skips buy logic
+            strategy.log_event("INFO", "BUY_PAUSED", "매수 일시정지. 걸어둔 매도 주문은 계속 감시합니다.")
+        session.buying_paused = True
+        return {"session_id": session_id, "status": session.status, "buying_paused": True}
+
+    def resume_live_buying(self, session_id: str):
+        with self._lock:
+            session = self.live_sessions.get(session_id)
+            runtime = self._live_runtime.get(session_id)
+        if not session or not runtime:
+            raise ValueError("Live simulation session not found")
+        if session.status != "running":
+            raise ValueError("Session is not running")
+        strategy = runtime.get("strategy")
+        exchange = runtime.get("exchange")
+        if strategy is not None:
+            price = None
+            try:
+                price = exchange.get_current_price(session.ticker) if exchange else None
+            except Exception:
+                price = None
+            strategy.start(current_price=price)
+            strategy.log_event("INFO", "BUY_RESUMED", "매수 재개.")
+        session.buying_paused = False
+        return {"session_id": session_id, "status": session.status, "buying_paused": False}
 
     def stop_all_live_by_strategy(self, strategy_id: int):
         """Stop all active live simulation sessions for a specific strategy."""
@@ -697,6 +751,7 @@ class SimulationService:
         return {
             "session_id": session.id,
             "status": session.status,
+            "buying_paused": session.buying_paused,
             "mode": "live",
             "strategy_id": session.strategy_id,
             "ticker": session.ticker,
@@ -723,6 +778,7 @@ class SimulationService:
                 "strategy_id": s.strategy_id,
                 "ticker": s.ticker,
                 "status": s.status,
+                "buying_paused": s.buying_paused,
                 "exec_interval": s.exec_interval,
                 "started_at": s.started_at,
                 "replay_days": s.replay_days,

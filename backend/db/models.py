@@ -17,6 +17,9 @@ class Strategy(Base):
     name = Column(String(50), nullable=False, default="Default Strategy")
     ticker = Column(String(20), nullable=False, index=True) # Not unique anymore
     budget = Column(Float, nullable=False, default=1000000.0)
+    # Execution mode this strategy belongs to: "REAL" (live Upbit) or "DEV" (paper).
+    # Paper and live strategies share one DB; the dashboard shows only the active mode.
+    mode = Column(String(10), nullable=True, index=True)
 
     # Configuration
     investment_per_split = Column(Float, nullable=False)
@@ -43,7 +46,7 @@ class Strategy(Base):
     # RSI Selling (Distribution)
     rsi_sell_min = Column(Float, nullable=False, default=70.0)
     rsi_sell_cross_threshold = Column(Float, nullable=False, default=0.0)
-    rsi_sell_first_amount = Column(Integer, nullable=False, default=1)
+    rsi_sell_first_amount = Column(Integer, nullable=False, default=100)
     rsi_sell_next_amount = Column(Integer, nullable=False, default=1)
 
     # Risk Management
@@ -58,6 +61,7 @@ class Strategy(Base):
     
     # Trailing Buy Configuration
     use_trailing_buy = Column(Boolean, default=False, nullable=False)
+    watch_rsi_threshold = Column(Float, default=30.0, nullable=False)
     trailing_buy_rebound_percent = Column(Float, default=0.2, nullable=False)
     trailing_buy_batch = Column(Boolean, default=True, nullable=False)
     use_adaptive_buy_control = Column(Boolean, default=False, nullable=False)
@@ -79,6 +83,10 @@ class Strategy(Base):
     watch_lowest_price = Column(Float, nullable=True)
     pending_buy_units = Column(Integer, default=0, nullable=False)    # Accumulated buy units
     adaptive_reentry_pressure = Column(Float, default=0.0, nullable=False)
+    # RSI strategy runtime guards (persisted so a restart cannot re-fire a daily signal)
+    rsi_last_buy_date = Column(String(10), nullable=True)
+    rsi_last_sell_date = Column(String(10), nullable=True)
+    rsi_last_evaluated_candle_ts = Column(Float, nullable=True)
     next_buy_target_price = Column(Float, nullable=True)  # Next buy target (user-set/auto-updated)
 
     # Timestamps
@@ -106,6 +114,7 @@ class Split(Base):
     coin_volume = Column(Float, nullable=True)
     is_accumulated = Column(Boolean, default=False, nullable=False)
     buy_rsi = Column(Float, nullable=True)
+    buy_fee = Column(Float, nullable=True)  # actual fee paid on the buy, from the exchange
 
     # Order IDs
     buy_order_id = Column(String(100), nullable=True)
@@ -165,6 +174,15 @@ class SystemConfig(Base):
     mode = Column(String(10), nullable=False, default='REAL')
     upbit_access_key = Column(String(100), nullable=True)
     upbit_secret_key = Column(String(100), nullable=True)
+    # Starting KRW balance for the paper exchange (DEV mode).
+    paper_initial_krw = Column(Float, nullable=False, default=10000000.0)
+    # When false, every strategy boots in the stopped state (orders are still reconciled)
+    # and must be started manually from the dashboard — the safe way to roll out an update.
+    resume_strategies_on_boot = Column(Boolean, nullable=False, default=True)
+    # Result of the most recent key validation against Upbit.
+    key_valid = Column(Boolean, nullable=True)
+    key_last_validated_at = Column(DateTime, nullable=True)
+    key_expire_at = Column(String(40), nullable=True)
 
     # Timestamps
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

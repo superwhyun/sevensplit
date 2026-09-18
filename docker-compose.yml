@@ -10,10 +10,18 @@ services:
     ports:
       - "8001:8000"
     environment:
-      TRADING_MODE: ${USER1_TRADING_MODE:-REAL}
-      UPBIT_ACCESS_KEY: ${USER1_ACCESS_KEY}
-      UPBIT_SECRET_KEY: ${USER1_SECRET_KEY}
+      # TRADING_MODE / UPBIT_* only seed the very first boot. After that the mode and keys
+      # are managed from the web UI (설정) and stored in the DB volume below.
+      TRADING_MODE: ${USER1_TRADING_MODE:-DEV}
+      UPBIT_ACCESS_KEY: ${USER1_ACCESS_KEY:-}
+      UPBIT_SECRET_KEY: ${USER1_SECRET_KEY:-}
       UPBIT_OPEN_API_SERVER_URL: ${USER1_UPBIT_OPEN_API_SERVER_URL:-https://api.upbit.com}
+      # Optional: protect state-changing requests and the settings page.
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # One-off: HOLD_STRATEGIES_ON_BOOT=1 boots every strategy stopped for this start only.
+      # The persistent switch lives in the web settings (재기동 시 자동 재개).
+      HOLD_STRATEGIES_ON_BOOT: ${HOLD_STRATEGIES_ON_BOOT:-}
       DB_PATH: /app/backend/database/sevensplit.db
       CANDLE_DB_PATH: /app/backend/database/market_data.db
       TZ: ${TZ:-Asia/Seoul}

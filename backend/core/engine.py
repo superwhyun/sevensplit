@@ -7,9 +7,9 @@ from database import get_candle_db
 from core.config import (
     accounts_cache,
     candle_cache,
-    current_mode,
     db,
-    exchange,
+    engine_lock,
+    exchange_service,
     shared_prices,
     strategy_service,
 )
@@ -20,10 +20,14 @@ CANDLE_INTERVALS: tuple[str, ...] = ("minutes/5", "days")
 
 
 class PortfolioCalculator:
-    def __init__(self, exchange_client, db_manager, mode: str):
+    def __init__(self, exchange_client, db_manager):
+        # exchange_client is the ExchangeService wrapper, so mode swaps are picked up live.
         self.exchange = exchange_client
         self.db = db_manager
-        self.mode = mode
+
+    @property
+    def mode(self) -> str:
+        return getattr(self.exchange, "mode", "DEV")
 
     def calculate(self, prices: Optional[Dict[str, float]] = None, accounts_raw: Optional[list] = None) -> dict:
         prices = prices or {}
@@ -61,11 +65,7 @@ class PortfolioCalculator:
         if accounts_raw is not None:
             return self._attach_price_fields(accounts_raw, prices)
 
-        if prices and hasattr(self.exchange, "_request"):
-            raw = self.exchange._request("GET", "/v1/accounts")
-            return self._attach_price_fields(raw or [], prices)
-
-        return self.exchange.get_accounts() or []
+        return self._attach_price_fields(self.exchange.get_accounts() or [], prices)
 
     def _attach_price_fields(self, accounts_raw: list, prices: Dict[str, float]) -> list:
         accounts = []
@@ -182,6 +182,10 @@ class StrategyEngine:
             time.sleep(max(0.1, self.loop_interval - elapsed))
 
     def run_iteration(self):
+        with engine_lock:
+            self._run_iteration_locked()
+
+    def _run_iteration_locked(self):
         strategies = self.strategy_service.strategies
         strategy_ids = list(strategies.keys())
         tickers = self._collect_tickers(strategy_ids, strategies)
@@ -310,8 +314,8 @@ class StrategyEngine:
             self.last_tick_time[strategy_id] = now
 
 
-_portfolio_calculator = PortfolioCalculator(exchange, db, current_mode)
-_engine = StrategyEngine(strategy_service, exchange, shared_prices, accounts_cache, candle_cache)
+_portfolio_calculator = PortfolioCalculator(exchange_service, db)
+_engine = StrategyEngine(strategy_service, exchange_service, shared_prices, accounts_cache, candle_cache)
 
 
 def calculate_portfolio(prices: Optional[Dict[str, float]] = None, accounts_raw: Optional[list] = None):
