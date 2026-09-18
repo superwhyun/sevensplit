@@ -55,3 +55,4 @@ backend/sevensplit_mock.db
 backend/sevensplit_real.db
 mock-exchange/sevensplit.db
 mock-exchange/__pycache__/
+.claude/

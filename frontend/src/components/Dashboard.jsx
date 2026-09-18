@@ -4,7 +4,9 @@ import StrategyChart from './StrategyChart';
 import Config from './Config';
 import EventLog from './EventLog';
 import StrategyStatusPanel from './StrategyStatusPanel';
+import BotStatusStrip from './strategy/BotStatusStrip';
 import './Dashboard.css';
+import './strategy/strategy.css';
 
 const AddStrategyModal = ({ isOpen, onClose, onAdd }) => {
     const [name, setName] = useState('');
@@ -51,21 +53,21 @@ const AddStrategyModal = ({ isOpen, onClose, onAdd }) => {
                 backgroundColor: '#1e293b', padding: '2rem', borderRadius: '0.5rem', width: '400px',
                 border: '1px solid #334155', boxShadow: '0 10px 25px rgba(0,0,0,0.5)'
             }}>
-                <h2 style={{ marginTop: 0, color: '#f8fafc' }}>Add New Strategy</h2>
+                <h2 style={{ marginTop: 0, color: '#f8fafc' }}>새 전략 만들기</h2>
                 <form onSubmit={handleSubmit}>
                     <div style={{ marginBottom: '1rem' }}>
-                        <label style={{ display: 'block', color: '#94a3b8', marginBottom: '0.5rem' }}>Strategy Name</label>
+                        <label style={{ display: 'block', color: '#94a3b8', marginBottom: '0.5rem' }}>전략 이름</label>
                         <input
                             type="text"
                             value={name}
                             onChange={(e) => setName(e.target.value)}
-                            placeholder="e.g. BTC Aggressive"
+                            placeholder="예: BTC 공격형"
                             required
                             style={{ width: '100%', padding: '0.5rem', borderRadius: '0.25rem', border: '1px solid #475569', backgroundColor: '#0f172a', color: 'white' }}
                         />
                     </div>
                     <div style={{ marginBottom: '1rem' }}>
-                        <label style={{ display: 'block', color: '#94a3b8', marginBottom: '0.5rem' }}>Ticker</label>
+                        <label style={{ display: 'block', color: '#94a3b8', marginBottom: '0.5rem' }}>코인</label>
                         <select
                             value={ticker}
                             onChange={(e) => setTicker(e.target.value)}
@@ -79,7 +81,7 @@ const AddStrategyModal = ({ isOpen, onClose, onAdd }) => {
                         </select>
                     </div>
                     <div style={{ marginBottom: '1.5rem' }}>
-                        <label style={{ display: 'block', color: '#94a3b8', marginBottom: '0.5rem' }}>Budget (KRW)</label>
+                        <label style={{ display: 'block', color: '#94a3b8', marginBottom: '0.5rem' }}>예산 (KRW)</label>
                         <input
                             type="text"
                             value={budget}
@@ -89,8 +91,8 @@ const AddStrategyModal = ({ isOpen, onClose, onAdd }) => {
                         />
                     </div>
                     <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
-                        <button type="button" onClick={onClose} style={{ padding: '0.5rem 1rem', borderRadius: '0.25rem', border: 'none', backgroundColor: '#475569', color: 'white', cursor: 'pointer' }}>Cancel</button>
-                        <button type="submit" style={{ padding: '0.5rem 1rem', borderRadius: '0.25rem', border: 'none', backgroundColor: '#3b82f6', color: 'white', cursor: 'pointer' }}>Create</button>
+                        <button type="button" onClick={onClose} style={{ padding: '0.5rem 1rem', borderRadius: '0.25rem', border: 'none', backgroundColor: '#475569', color: 'white', cursor: 'pointer' }}>취소</button>
+                        <button type="submit" style={{ padding: '0.5rem 1rem', borderRadius: '0.25rem', border: 'none', backgroundColor: '#3b82f6', color: 'white', cursor: 'pointer' }}>만들기</button>
                     </div>
                 </form>
             </div>
@@ -127,14 +129,14 @@ const ManualTargetModal = ({ isOpen, onClose, onSave, currentTarget }) => {
                 backgroundColor: '#1e293b', padding: '2rem', borderRadius: '0.5rem', width: '400px',
                 border: '1px solid #334155', boxShadow: '0 10px 25px rgba(0,0,0,0.5)'
             }}>
-                <h2 style={{ marginTop: 0, color: '#f8fafc' }}>Set Manual Buy Target</h2>
+                <h2 style={{ marginTop: 0, color: '#f8fafc' }}>다음 매수 목표가 직접 지정</h2>
                 <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
-                    The bot will ignore grid logic and buy exactly at this price.
-                    (Leave empty to resume automatic grid logic)
+                    봇이 그리드 계산 대신 이 가격에서 다음 분할을 삽니다.
+                    (비워두면 다시 자동 계산으로 돌아갑니다)
                 </p>
                 <form onSubmit={handleSubmit}>
                     <div style={{ marginBottom: '1.5rem' }}>
-                        <label style={{ display: 'block', color: '#94a3b8', marginBottom: '0.5rem' }}>Next Buy Target (KRW)</label>
+                        <label style={{ display: 'block', color: '#94a3b8', marginBottom: '0.5rem' }}>다음 매수 목표가 (KRW)</label>
                         <input
                             type="text"
                             value={price}
@@ -145,8 +147,8 @@ const ManualTargetModal = ({ isOpen, onClose, onSave, currentTarget }) => {
                         />
                     </div>
                     <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
-                        <button type="button" onClick={onClose} style={{ padding: '0.5rem 1rem', borderRadius: '0.25rem', border: 'none', backgroundColor: '#475569', color: 'white', cursor: 'pointer' }}>Cancel</button>
-                        <button type="submit" style={{ padding: '0.5rem 1rem', borderRadius: '0.25rem', border: 'none', backgroundColor: '#3b82f6', color: 'white', cursor: 'pointer' }}>Save Target</button>
+                        <button type="button" onClick={onClose} style={{ padding: '0.5rem 1rem', borderRadius: '0.25rem', border: 'none', backgroundColor: '#475569', color: 'white', cursor: 'pointer' }}>취소</button>
+                        <button type="submit" style={{ padding: '0.5rem 1rem', borderRadius: '0.25rem', border: 'none', backgroundColor: '#3b82f6', color: 'white', cursor: 'pointer' }}>저장</button>
                     </div>
                 </form>
             </div>
@@ -178,10 +180,10 @@ const RenameStrategyModal = ({ isOpen, onClose, onRename, currentName }) => {
                 backgroundColor: '#1e293b', padding: '2rem', borderRadius: '0.5rem', width: '400px',
                 border: '1px solid #334155', boxShadow: '0 10px 25px rgba(0,0,0,0.5)'
             }}>
-                <h2 style={{ marginTop: 0, color: '#f8fafc' }}>Rename Strategy</h2>
+                <h2 style={{ marginTop: 0, color: '#f8fafc' }}>전략 이름 바꾸기</h2>
                 <form onSubmit={handleSubmit}>
                     <div style={{ marginBottom: '1rem' }}>
-                        <label style={{ display: 'block', color: '#94a3b8', marginBottom: '0.5rem' }}>New Name</label>
+                        <label style={{ display: 'block', color: '#94a3b8', marginBottom: '0.5rem' }}>새 이름</label>
                         <input
                             type="text"
                             value={name}
@@ -192,8 +194,8 @@ const RenameStrategyModal = ({ isOpen, onClose, onRename, currentName }) => {
                         />
                     </div>
                     <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
-                        <button type="button" onClick={onClose} style={{ padding: '0.5rem 1rem', borderRadius: '0.25rem', border: 'none', backgroundColor: '#475569', color: 'white', cursor: 'pointer' }}>Cancel</button>
-                        <button type="submit" style={{ padding: '0.5rem 1rem', borderRadius: '0.25rem', border: 'none', backgroundColor: '#3b82f6', color: 'white', cursor: 'pointer' }}>Save</button>
+                        <button type="button" onClick={onClose} style={{ padding: '0.5rem 1rem', borderRadius: '0.25rem', border: 'none', backgroundColor: '#475569', color: 'white', cursor: 'pointer' }}>취소</button>
+                        <button type="submit" style={{ padding: '0.5rem 1rem', borderRadius: '0.25rem', border: 'none', backgroundColor: '#3b82f6', color: 'white', cursor: 'pointer' }}>저장</button>
                     </div>
                 </form>
             </div>
@@ -213,7 +215,7 @@ const StatusPeekModal = ({ isOpen, onClose, statusMsg, ticker }) => {
                 border: '1px solid #334155', boxShadow: '0 10px 25px rgba(0,0,0,0.5)'
             }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                    <h3 style={{ margin: 0, color: '#f8fafc' }}>{ticker} Bot Status Peek</h3>
+                    <h3 style={{ margin: 0, color: '#f8fafc' }}>{ticker} 봇 상태 메모</h3>
                     <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
                 </div>
                 <div style={{
@@ -221,88 +223,90 @@ const StatusPeekModal = ({ isOpen, onClose, statusMsg, ticker }) => {
                     border: '1px solid #334155', color: '#e2e8f0', minHeight: '80px',
                     fontFamily: 'monospace', fontSize: '0.9rem', whiteSpace: 'pre-wrap'
                 }}>
-                    {statusMsg || "No status information available yet."}
+                    {statusMsg || "아직 상태 정보가 없습니다."}
                 </div>
                 <div style={{ marginTop: '1.5rem', display: 'flex', justifyContent: 'flex-end' }}>
-                    <button onClick={onClose} style={{ padding: '0.5rem 1.5rem', borderRadius: '0.25rem', border: 'none', backgroundColor: '#3b82f6', color: 'white', cursor: 'pointer' }}>Close</button>
+                    <button onClick={onClose} style={{ padding: '0.5rem 1.5rem', borderRadius: '0.25rem', border: 'none', backgroundColor: '#3b82f6', color: 'white', cursor: 'pointer' }}>닫기</button>
                 </div>
             </div>
         </div>
     );
 };
 
-const StartBotModal = ({ isOpen, onClose, onStart, loading, strategyMode }) => {
+const DEV_REPLAY_OPTIONS_PRICE = [
+    { key: '1d', label: '1일', desc: '1일 전 캔들부터 재생' },
+    { key: '3d', label: '3일', desc: '3일 전 캔들부터 재생' },
+    { key: '7d', label: '7일', desc: '7일 전 캔들부터 재생' },
+];
+const DEV_REPLAY_OPTIONS_RSI = [1, 3, 6, 9, 12, 15, 18, 21].map((m) => ({
+    key: `${m}m`, label: `${m}개월`, desc: `약 ${m * 30}개 일봉 재생`,
+}));
+
+const devReplayOptionsFor = (isRSI) => (isRSI ? DEV_REPLAY_OPTIONS_RSI : DEV_REPLAY_OPTIONS_PRICE);
+
+const describeDevStartOption = (opt) => {
+    if (!opt || opt === 'live') return '지금부터 실시간';
+    if (opt.endsWith('m')) return `${parseInt(opt, 10)}개월 리플레이 후 실시간`;
+    return `${parseInt(opt, 10)}일 리플레이 후 실시간`;
+};
+
+const isValidDevStartOption = (opt, isRSI) =>
+    opt === 'live' || devReplayOptionsFor(isRSI).some((o) => o.key === opt);
+
+const StartBotModal = ({ isOpen, onClose, onStart, loading, strategyMode, lastOption }) => {
     if (!isOpen) return null;
 
     const isRSI = strategyMode === 'RSI';
-
-    const priceOptions = [
-        { key: 'live', label: 'Live (Now)', desc: 'Start from current market and run continuously' },
-        { key: '1d', label: 'Replay 1d', desc: 'Replay from 1 day ago to now' },
-        { key: '3d', label: 'Replay 3d', desc: 'Replay from 3 days ago to now' },
-        { key: '7d', label: 'Replay 7d', desc: 'Replay from 7 days ago to now' },
-    ];
-
-    const rsiOptions = [
-        { key: 'live', label: 'Live (Now)', desc: 'Start from current market and run continuously' },
-        { key: '1m', label: 'Replay 1 Month', desc: 'Replay ~30 daily candles, then continue live' },
-        { key: '3m', label: 'Replay 3 Months', desc: 'Replay ~90 daily candles, then continue live' },
-        { key: '6m', label: 'Replay 6 Months', desc: 'Replay ~180 daily candles, then continue live' },
-        { key: '9m', label: 'Replay 9 Months', desc: 'Replay ~270 daily candles, then continue live' },
-        { key: '12m', label: 'Replay 12 Months', desc: 'Replay ~365 daily candles, then continue live' },
-        { key: '15m', label: 'Replay 15 Months', desc: 'Replay ~455 daily candles, then continue live' },
-        { key: '18m', label: 'Replay 18 Months', desc: 'Replay ~548 daily candles, then continue live' },
-        { key: '21m', label: 'Replay 21 Months', desc: 'Replay ~638 daily candles, then continue live' },
-    ];
-
-    const options = isRSI ? rsiOptions : priceOptions;
+    const replayOptions = devReplayOptionsFor(isRSI);
+    const last = isValidDevStartOption(lastOption, isRSI) ? lastOption : null;
 
     return (
-        <div style={{
-            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-            backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000
-        }}>
-            <div style={{
-                backgroundColor: '#1e293b', padding: '1.5rem', borderRadius: '0.5rem', width: '460px',
-                maxHeight: '85vh', overflowY: 'auto',
-                border: '1px solid #334155', boxShadow: '0 10px 25px rgba(0,0,0,0.5)'
-            }}>
-                <h2 style={{ marginTop: 0, color: '#f8fafc', marginBottom: '0.4rem' }}>Start Dev Bot</h2>
-                <p style={{ marginTop: 0, color: '#94a3b8', fontSize: '0.85rem' }}>
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="start-modal-title">
+            <div className="modal-card start-modal">
+                <h2 id="start-modal-title" className="modal-title">모의 투자 어떻게 시작할까요?</h2>
+                <p className="modal-lead">
                     {isRSI
-                        ? 'RSI Mode: Choose a replay window. Longer periods provide more signal history.'
-                        : 'Choose where to start from. Replay starts from past candles, then continues with live ticks.'}
+                        ? 'RSI 전략은 일봉 기준이라 신호가 드뭅니다. 과거 구간을 먼저 돌려보면 신호 이력을 빨리 볼 수 있습니다.'
+                        : '실시간으로 바로 돌리거나, 과거 구간을 먼저 재생해 결과를 본 뒤 실시간으로 이어갈 수 있습니다.'}
                 </p>
-                <div style={{ display: 'grid', gap: '0.6rem', marginTop: '1rem' }}>
-                    {options.map((opt) => (
-                        <button
-                            key={opt.key}
-                            onClick={() => onStart(opt.key)}
-                            disabled={loading}
-                            style={{
-                                textAlign: 'left',
-                                padding: '0.75rem 0.9rem',
-                                borderRadius: '0.45rem',
-                                border: '1px solid #334155',
-                                backgroundColor: '#0f172a',
-                                color: '#e2e8f0',
-                                cursor: loading ? 'not-allowed' : 'pointer'
-                            }}
-                        >
-                            <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{opt.label}</div>
-                            <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: '0.15rem' }}>{opt.desc}</div>
-                        </button>
-                    ))}
+
+                <button
+                    type="button"
+                    className={`start-option-card ${last === 'live' || !last ? 'recommended' : ''}`}
+                    onClick={() => onStart('live')}
+                    disabled={loading}
+                >
+                    <span className="start-option-head">
+                        <span className="start-option-title">▶ 지금부터 실시간</span>
+                        {(!last || last === 'live') && <span className="badge badge-accent">기본</span>}
+                    </span>
+                    <span className="start-option-desc">현재 시세부터 실시간으로 돌립니다. 결과는 시간이 지나야 쌓입니다.</span>
+                </button>
+
+                <div className="start-option-group">
+                    <div className="start-option-group-title">과거 구간을 먼저 재생한 뒤 실시간으로 이어가기</div>
+                    <div className="start-option-chips">
+                        {replayOptions.map((opt) => (
+                            <button
+                                key={opt.key}
+                                type="button"
+                                className={`start-option-chip ${last === opt.key ? 'active' : ''}`}
+                                onClick={() => onStart(opt.key)}
+                                disabled={loading}
+                                title={opt.desc}
+                            >
+                                {opt.label}
+                                {last === opt.key && <small>최근</small>}
+                            </button>
+                        ))}
+                    </div>
+                    <div className="start-option-note">
+                        재생이 끝날 때까지 몇 초에서 수십 초가 걸리고, 끝나면 자동으로 실시간 모드로 넘어갑니다.
+                    </div>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
-                    <button
-                        type="button"
-                        onClick={onClose}
-                        disabled={loading}
-                        style={{ padding: '0.5rem 1rem', borderRadius: '0.25rem', border: 'none', backgroundColor: '#475569', color: 'white', cursor: loading ? 'not-allowed' : 'pointer' }}
-                    >
-                        Close
-                    </button>
+
+                <div className="modal-actions">
+                    <button type="button" className="btn-ghost" onClick={onClose} disabled={loading}>닫기</button>
                 </div>
             </div>
         </div>
@@ -422,7 +426,7 @@ const DailyProfitChart = ({ data }) => {
     );
 };
 
-const Dashboard = () => {
+const Dashboard = ({ onOpenSettings, onStartSetup, heldOnBootIds = [] }) => {
     const [status, setStatus] = useState(null);
     const [portfolio, setPortfolio] = useState(null);
     const [strategies, setStrategies] = useState([]);
@@ -435,7 +439,18 @@ const Dashboard = () => {
     const [isStatusPeekModalOpen, setIsStatusPeekModalOpen] = useState(false);
     const [isStartBotModalOpen, setIsStartBotModalOpen] = useState(false);
     const [tradesPage, setTradesPage] = useState(1);
+    const [activeSection, setActiveSection] = useState(() => {
+        try { return localStorage.getItem('sevensplit.section') || 'overview'; } catch { return 'overview'; }
+    });
+    const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
+    const selectSection = (key) => {
+        setActiveSection(key);
+        setIsMoreMenuOpen(false);
+        try { localStorage.setItem('sevensplit.section', key); } catch { /* ignore */ }
+    };
     const [simActionLoading, setSimActionLoading] = useState(false);
+    const [lastDevStartOption, setLastDevStartOption] = useState(null);
+    const devStartOptionKey = (strategyId) => `sevensplit.devStartOption:${strategyId}`;
     const [liveSessionId, setLiveSessionId] = useState(null);
     const [liveSessionState, setLiveSessionState] = useState(null);
     const [liveError, setLiveError] = useState('');
@@ -716,7 +731,7 @@ const Dashboard = () => {
                 await axios.post(`${API_BASE_URL}/bot/stop`, { strategy_id: selectedStrategyId });
             } catch (error) {
                 console.error('Error stopping dev runtime:', error);
-                alert(`Stop failed: ${error.response?.data?.detail || error.message}`);
+                alert(`정지 실패: ${error.response?.data?.detail || error.message}`);
             } finally {
                 setLiveError('');
                 setSimActionLoading(false);
@@ -729,12 +744,38 @@ const Dashboard = () => {
             fetchStatus();
         } catch (error) {
             console.error('Error stopping bot:', error);
-            alert(`Stop failed: ${error.response?.data?.detail || error.message}`);
+            alert(`정지 실패: ${error.response?.data?.detail || error.message}`);
+        }
+    };
+
+    const handlePauseBuying = async () => {
+        if (!liveSessionId) return;
+        setSimActionLoading(true);
+        try {
+            await axios.post(`${API_BASE_URL}/simulations/live/${liveSessionId}/pause-buying`);
+            await fetchLiveSessionStatus(liveSessionId);
+        } catch (error) {
+            alert(`매수 일시정지 실패: ${error.response?.data?.detail || error.message}`);
+        } finally {
+            setSimActionLoading(false);
+        }
+    };
+
+    const handleResumeBuying = async () => {
+        if (!liveSessionId) return;
+        setSimActionLoading(true);
+        try {
+            await axios.post(`${API_BASE_URL}/simulations/live/${liveSessionId}/resume-buying`);
+            await fetchLiveSessionStatus(liveSessionId);
+        } catch (error) {
+            alert(`매수 재개 실패: ${error.response?.data?.detail || error.message}`);
+        } finally {
+            setSimActionLoading(false);
         }
     };
 
     const handleHardStop = async () => {
-        if (!window.confirm('Stop Trading will cancel both pending BUY and SELL orders. Continue?')) {
+        if (!window.confirm('전량 정지는 걸어둔 매수·매도 주문을 모두 취소합니다. 코인은 지갑에 남습니다. 계속할까요?')) {
             return;
         }
 
@@ -753,7 +794,7 @@ const Dashboard = () => {
                 await axios.post(`${API_BASE_URL}/bot/hard-stop`, { strategy_id: selectedStrategyId });
             } catch (error) {
                 console.error('Error hard-stopping dev runtime:', error);
-                alert(`Stop Trading failed: ${error.response?.data?.detail || error.message}`);
+                alert(`전량 정지 실패: ${error.response?.data?.detail || error.message}`);
             } finally {
                 setLiveError('');
                 setSimActionLoading(false);
@@ -767,12 +808,12 @@ const Dashboard = () => {
             fetchStatus();
         } catch (error) {
             console.error('Error hard-stopping bot:', error);
-            alert(`Stop Trading failed: ${error.response?.data?.detail || error.message}`);
+            alert(`전량 정지 실패: ${error.response?.data?.detail || error.message}`);
         }
     };
 
     const handleReset = async () => {
-        if (!window.confirm(`Are you sure you want to reset this strategy?\n\nThis will:\n- Cancel all active orders for this strategy\n- Clear active splits (positions)\n- DELETE all trade history\n\n(Your wallet balance will NOT be reset)`)) {
+        if (!window.confirm(`이 전략을 초기화할까요?\n\n- 이 전략의 모든 주문을 취소합니다\n- 포지션(분할)을 비웁니다\n- 거래 기록을 전부 삭제합니다\n\n(지갑 잔고는 그대로입니다)`)) {
             return;
         }
         try {
@@ -799,7 +840,7 @@ const Dashboard = () => {
             fetchPortfolio();
         } catch (error) {
             console.error('Error resetting bot:', error);
-            alert(`Reset failed: ${error.response?.data?.detail || error.message}`);
+            alert(`초기화 실패: ${error.response?.data?.detail || error.message}`);
         }
     };
 
@@ -810,12 +851,12 @@ const Dashboard = () => {
             setSelectedStrategyId(response.data.strategy_id);
         } catch (error) {
             console.error('Error creating strategy:', error);
-            alert('Failed to create strategy');
+            alert('전략을 만들지 못했습니다');
         }
     };
 
     const handleDeleteStrategy = async () => {
-        if (!window.confirm(`Are you sure you want to DELETE this strategy? This cannot be undone.`)) {
+        if (!window.confirm(`이 전략을 삭제할까요? 되돌릴 수 없습니다.`)) {
             return;
         }
         try {
@@ -830,7 +871,7 @@ const Dashboard = () => {
             }
         } catch (error) {
             console.error('Error deleting strategy:', error);
-            alert('Failed to delete strategy');
+            alert('전략을 삭제하지 못했습니다');
         }
     };
 
@@ -843,7 +884,7 @@ const Dashboard = () => {
 
         const trades = displayedStatus?.trade_history || [];
         if (!trades.length) {
-            alert('No simulation trades to export.');
+            alert('내보낼 거래가 없습니다.');
             return;
         }
 
@@ -912,7 +953,7 @@ const Dashboard = () => {
                 fetchStrategies(); // Refresh tab list
             } catch (error) {
                 console.error("Failed to rename strategy:", error);
-                alert("Failed to rename strategy");
+                alert("이름을 바꾸지 못했습니다");
             }
         }
     };
@@ -928,7 +969,7 @@ const Dashboard = () => {
             }
         } catch (error) {
             console.error('Error setting manual target:', error);
-            alert('Failed to set manual target price');
+            alert('목표가를 설정하지 못했습니다');
         }
     };
 
@@ -950,15 +991,21 @@ const Dashboard = () => {
         if (!sessionId) return;
         try {
             const response = await axios.get(`${API_BASE_URL}/simulations/live/${sessionId}`);
+            const running = response.data?.status === 'running';
             setLiveSessionState(response.data);
             if (response.data?.final_state) {
+                // A stopped session keeps its results on screen, but must never look "running":
+                // that is what left the Stop button stuck and the Start button hidden.
+                const paused = running && !!response.data?.buying_paused;
                 setSimOverlayState({
                     ...response.data.final_state,
-                    is_running: true,
-                    status: 'Simulation (Live)',
+                    is_running: running,
+                    status: !running ? 'Simulation (Stopped)' : paused ? 'Simulation (Paused)' : 'Simulation (Live)',
                 });
                 setSimMeta({
                     mode: response.data?.replay_days ? `replay+live-${response.data.replay_days}d` : 'live',
+                    replay_days: response.data?.replay_days || 0,
+                    status: response.data?.status,
                     trades: response.data?.trades ?? 0,
                     realized_profit: response.data?.realized_profit ?? 0,
                     cumulative_buy_amount: response.data?.cumulative_buy_amount ?? 0,
@@ -967,6 +1014,10 @@ const Dashboard = () => {
                     source: 'live'
                 });
                 setSimSystemEvents(response.data?.sim_events || []);
+            }
+            if (!running) {
+                // Stop polling a finished session; the overlay above stays for viewing.
+                setLiveSessionId(null);
             }
             setLiveError('');
         } catch (error) {
@@ -1006,8 +1057,12 @@ const Dashboard = () => {
             });
             const sessionId = response.data?.session_id;
             setLiveSessionId(sessionId || null);
+            setLastDevStartOption(startOption);
+            try { localStorage.setItem(devStartOptionKey(selectedStrategyId), startOption); } catch { /* ignore */ }
             setSimMeta({
                 mode: replayDays > 0 ? `replay+live-${replayDays}d` : 'live',
+                replay_days: replayDays,
+                status: 'running',
                 trades: 0,
                 realized_profit: 0,
                 cumulative_buy_amount: 0,
@@ -1058,8 +1113,13 @@ const Dashboard = () => {
     const resolvedConfig = strategyConfig ?? displayedStatus?.config ?? {};
     const isDevMode = portfolio?.mode === 'DEV';
     const isDevSimulationActive = isDevMode && (liveSessionState?.status === 'running');
-    const isDevBotRunning = isDevMode && !!displayedStatus?.is_running;
+    // The engine-run paper bot is reported by the real strategy status; the simulation
+    // overlay must not be able to keep this true after its session has stopped.
+    const isDevBotRunning = isDevMode && !!status?.is_running;
     const canStartInDev = isDevMode && !isDevSimulationActive && !isDevBotRunning;
+    const hasSimResults = isDevMode && !!simOverlayState && !isDevSimulationActive;
+    const isRSIStrategy = (resolvedConfig?.strategy_mode || 'PRICE') === 'RSI';
+    const quickDevStartOption = isValidDevStartOption(lastDevStartOption, isRSIStrategy) ? lastDevStartOption : null;
     const gateEventTypes = new Set(['BUY_GATE', 'WATCH_START', 'WATCH_END']);
     const simEventsForLog = (simSystemEvents || []).filter((e) => gateEventTypes.has(e?.event_type));
 
@@ -1111,6 +1171,15 @@ const Dashboard = () => {
     }, [liveSessionId]);
 
     useEffect(() => {
+        if (!selectedStrategyId) { setLastDevStartOption(null); return; }
+        try {
+            setLastDevStartOption(localStorage.getItem(devStartOptionKey(selectedStrategyId)));
+        } catch {
+            setLastDevStartOption(null);
+        }
+    }, [selectedStrategyId]);
+
+    useEffect(() => {
         if (!selectedStrategyId) return;
         const timer = setInterval(() => {
             if (!simOverlayState) {
@@ -1120,8 +1189,8 @@ const Dashboard = () => {
         return () => clearInterval(timer);
     }, [selectedStrategyId, simOverlayState]);
 
-    if (!displayedStatus && strategies.length > 0) return <div style={{ padding: '2rem', color: 'white' }}>Loading Strategy...</div>;
-    if (!portfolio) return <div style={{ padding: '2rem', color: 'white' }}>Loading Portfolio...</div>;
+    if (!displayedStatus && strategies.length > 0) return <div style={{ padding: '2rem', color: 'white' }}>전략 불러오는 중…</div>;
+    if (!portfolio) return <div style={{ padding: '2rem', color: 'white' }}>포트폴리오 불러오는 중…</div>;
 
     return (
         <div className="dashboard-container" style={{ position: 'relative' }}>
@@ -1153,6 +1222,7 @@ const Dashboard = () => {
                 onStart={handleStartDevBot}
                 loading={simActionLoading}
                 strategyMode={resolvedConfig?.strategy_mode || 'PRICE'}
+                lastOption={lastDevStartOption}
             />
 
             {/* Global Portfolio Header */}
@@ -1162,36 +1232,24 @@ const Dashboard = () => {
                 backgroundColor: 'rgba(15, 23, 42, 0.9)',
                 borderBottom: '2px solid #334155'
             }}>
-                <div className="header-top-row">
-                    <h1 className="logo" style={{ margin: 0, fontSize: '1.75rem' }}>Seven Split Bot</h1>
-
-                    {/* Mode Indicator */}
-                    <div className="mode-indicator" style={{
-                        backgroundColor: portfolio?.mode === 'REAL' ? '#ef4444' : '#0ea5e9',
-                    }}>
-                        <div className="mode-dot" />
-                        {portfolio?.mode === 'REAL' ? 'REAL TRADING' : 'DEV SIMULATION'}
-                    </div>
-                </div>
-
                 {/* Overall Portfolio Stats - Compact Card */}
                 <div className="portfolio-summary-card">
                     <div className="portfolio-main-stats">
                         <div className="total-value-section">
-                            <span className="label">Total Assets</span>
+                            <span className="label">총 자산</span>
                             <span className="value">₩{Math.round(portfolio.total_value)?.toLocaleString()}</span>
                         </div>
                         <DailyProfitChart data={dailyProfits} />
                         <div className="profit-section">
-                            <span className="label">REALIZED PROFIT</span>
+                            <span className="label">실현 수익</span>
                             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'baseline', justifyContent: 'flex-end' }}>
-                                <span style={{ fontSize: '0.7rem', color: '#94a3b8', letterSpacing: '0.04em' }}>ALL</span>
+                                <span style={{ fontSize: '0.7rem', color: '#94a3b8', letterSpacing: '0.04em' }}>누적</span>
                                 <span className="value" style={{ color: totalRealizedProfit >= 0 ? '#10b981' : '#ef4444' }}>
                                     {new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(totalRealizedProfit)}
                                 </span>
                             </div>
                             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'baseline', justifyContent: 'flex-end', marginTop: '0.2rem' }}>
-                                <span style={{ fontSize: '0.7rem', color: '#94a3b8', letterSpacing: '0.04em' }}>TODAY</span>
+                                <span style={{ fontSize: '0.7rem', color: '#94a3b8', letterSpacing: '0.04em' }}>오늘</span>
                                 <span style={{ fontSize: '0.95rem', color: aggregateProfit.realized_profit_24h >= 0 ? '#10b981' : '#ef4444' }}>
                                     {(aggregateProfit.realized_profit_24h >= 0 ? '+' : '')}
                                     {new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(aggregateProfit.realized_profit_24h)}
@@ -1205,7 +1263,7 @@ const Dashboard = () => {
                         <div className="asset-chip krw">
                             <span className="asset-name">🇰🇷 KRW</span>
                             <span className="asset-value">₩{Math.round(portfolio.balance_krw || 0).toLocaleString()}</span>
-                            <span className="asset-amount">Cash</span>
+                            <span className="asset-amount">현금</span>
                         </div>
 
                         {/* Coin Chips */}
@@ -1274,7 +1332,7 @@ const Dashboard = () => {
                                         padding: '0 0.2rem',
                                         color: 'white'
                                     }}
-                                    title="Rename Strategy"
+                                    title="전략 이름 바꾸기"
                                 >
                                     ✎
                                 </span>
@@ -1306,9 +1364,40 @@ const Dashboard = () => {
                         fontSize: '0.9rem'
                     }}
                 >
-                    + New
+                    + 새 전략
                 </button>
             </div>
+
+            {heldOnBootIds.length > 0 && (
+                <div className="held-banner" role="status">
+                    <strong>재기동 후 정지 상태로 시작한 전략이 {heldOnBootIds.length}개 있습니다.</strong>
+                    {' '}매도 체결은 계속 동기화되고 있습니다. 각 전략의 상태를 확인한 뒤 시작을 누르세요.
+                    <span className="held-banner-ids">
+                        {strategies.filter((s) => heldOnBootIds.includes(s.id)).map((s) => s.name).join(' · ')}
+                    </span>
+                </div>
+            )}
+            {strategies.length === 0 && (
+                <section className="empty-state" aria-label="전략 없음">
+                    <div className="empty-state-icon" aria-hidden="true">7</div>
+                    <h2 className="empty-state-title">아직 전략이 없습니다</h2>
+                    <p className="empty-state-text">
+                        코인과 예산, 투자 성향만 고르면 3분 안에 첫 전략이 돌아갑니다.
+                        {portfolio?.mode === 'REAL' ? ' 지금은 실거래 모드이니 소액으로 시작해 보세요.' : ' 모의 투자 모드라 실제 돈은 나가지 않습니다.'}
+                    </p>
+                    <div className="empty-state-actions">
+                        <button type="button" className="btn-primary-lg" onClick={() => onStartSetup?.()}>
+                            첫 전략 만들기
+                        </button>
+                        <button type="button" className="btn-ghost" onClick={() => setIsModalOpen(true)}>
+                            직접 설정해서 만들기
+                        </button>
+                        <button type="button" className="btn-ghost" onClick={() => onOpenSettings?.()}>
+                            설정 열기
+                        </button>
+                    </div>
+                </section>
+            )}
 
             {displayedStatus && (
                 <>
@@ -1326,7 +1415,7 @@ const Dashboard = () => {
                                 border: '1px solid rgba(59, 130, 246, 0.3)'
                             }}>
                                 <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <span>Current Price</span>
+                                    <span>현재가</span>
                                 </div>
                                 <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#3b82f6' }}>
                                     ₩{displayedStatus?.current_price?.toLocaleString()}
@@ -1381,7 +1470,7 @@ const Dashboard = () => {
                                 borderRadius: '0.5rem',
                                 border: '1px solid rgba(139, 92, 246, 0.3)'
                             }}>
-                                <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>Coin Holdings</div>
+                                <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>보유 수량</div>
                                 <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#a78bfa' }}>
                                     {(displayedStatus.total_coin_volume || 0).toFixed(8)}
                                 </div>
@@ -1396,12 +1485,12 @@ const Dashboard = () => {
                                 borderRadius: '0.5rem',
                                 border: '1px solid rgba(16, 185, 129, 0.3)'
                             }}>
-                                <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>Market Value</div>
+                                <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>평가 금액</div>
                                 <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#10b981' }}>
                                     ₩{Math.round(displayedStatus.total_valuation || 0).toLocaleString()}
                                 </div>
                                 <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '0.25rem' }}>
-                                    {`Invested Amount: ₩${Math.round(displayedStatus.total_invested || 0).toLocaleString()}`}
+                                    {`투자 금액: ₩${Math.round(displayedStatus.total_invested || 0).toLocaleString()}`}
                                 </div>
                             </div>
 
@@ -1416,7 +1505,7 @@ const Dashboard = () => {
                                     ? '1px solid rgba(16, 185, 129, 0.3)'
                                     : '1px solid rgba(239, 68, 68, 0.3)'
                             }}>
-                                <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>Unrealized P/L</div>
+                                <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>평가 손익</div>
                                 <div style={{
                                     fontSize: '1.25rem',
                                     fontWeight: 'bold',
@@ -1443,7 +1532,7 @@ const Dashboard = () => {
                                     ? '1px solid rgba(16, 185, 129, 0.3)'
                                     : '1px solid rgba(239, 68, 68, 0.3)'
                             }}>
-                                <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>Profit</div>
+                                <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem' }}>실현 수익</div>
                                 <div style={{
                                     fontSize: '1.25rem',
                                     fontWeight: 'bold',
@@ -1457,180 +1546,161 @@ const Dashboard = () => {
                                     color: selectedStrategyProfit.realized_profit_24h >= 0 ? '#10b981' : '#ef4444',
                                     marginTop: '0.25rem'
                                 }}>
-                                    Today: {(selectedStrategyProfit.realized_profit_24h >= 0 ? '+' : '')}
+                                    오늘: {(selectedStrategyProfit.realized_profit_24h >= 0 ? '+' : '')}
                                     ₩{Math.round(selectedStrategyProfit.realized_profit_24h).toLocaleString()}
                                 </div>
                             </div>
                         </div>
                     </div>
                     <div className="dashboard-layout">
-                        {/* Right Content: Controls, Chart, Tables */}
                         <main className="dashboard-main">
-                            <div className="strategy-config-container">
-                                <Config
-                                    config={strategyConfig}
-                                    onUpdate={() => {
-                                        fetchStatus();
-                                        fetchStrategies();
-                                    }}
-                                    strategyId={selectedStrategyId}
-                                    currentPrice={displayedStatus?.current_price}
-                                />
-                            </div>
-                            {/* Control Panel */}
-                            {/* Control Panel */}
-                            <div style={{
-                                padding: '1rem',
-                                backgroundColor: 'rgba(30, 41, 59, 0.5)',
-                                borderRadius: '0.5rem',
-                                border: '1px solid #334155'
-                            }}>
-                                <div className="controls-container" style={{
-                                    display: 'grid',
-                                    gridTemplateColumns: 'repeat(5, 1fr)',
-                                    gap: '0.75rem',
-                                    alignItems: 'stretch'
-                                }}>
-                                    {/* 1. Start/Stop Bot */}
-                                    {((isDevMode && canStartInDev) || (!isDevMode && !displayedStatus.is_running)) ? (
-                                        <button className="btn btn-primary" onClick={handleStart} style={{
-                                            padding: '0',
-                                            height: '60px',
-                                            fontSize: '0.95rem',
-                                            width: '100%',
-                                            display: 'flex',
-                                            flexDirection: 'column',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            gap: '0.25rem'
-                                        }}>
-                                            <span style={{ fontSize: '1.2rem' }}>▶</span>
-                                            <span>{isDevMode ? 'Start Simulation' : 'Start Bot'}</span>
-                                        </button>
-                                    ) : (
-                                        <button className="btn btn-danger" onClick={handleStop} style={{
-                                            padding: '0',
-                                            height: '60px',
-                                            fontSize: '0.95rem',
-                                            width: '100%',
-                                            display: 'flex',
-                                            flexDirection: 'column',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            gap: '0.25rem'
-                                        }}>
-                                            <span style={{ fontSize: '1.2rem' }}>⏸</span>
-                                            <span>{isDevMode ? (isDevSimulationActive ? 'Stop Simulation' : 'Stop Buying') : 'Stop Buying'}</span>
-                                        </button>
-                                    )}
+                            <nav className="section-tabs" aria-label="전략 화면">
+                                {[
+                                    { key: 'overview', label: '현황' },
+                                    { key: 'settings', label: '전략 설정' },
+                                    { key: 'trades', label: '거래 내역', count: (displayedStatus?.trade_history || []).length },
+                                    { key: 'events', label: '이벤트' },
+                                ].map((tab) => (
+                                    <button
+                                        key={tab.key}
+                                        type="button"
+                                        className={`section-tab ${activeSection === tab.key ? 'active' : ''}`}
+                                        onClick={() => selectSection(tab.key)}
+                                    >
+                                        {tab.label}
+                                        {tab.count > 0 && <span className="count">{tab.count}</span>}
+                                    </button>
+                                ))}
+                            </nav>
 
-                                    {/* 2. Hard Stop */}
-                                    <button className="btn btn-danger" onClick={handleHardStop} style={{
-                                        padding: '0',
-                                        height: '60px',
-                                        fontSize: '0.95rem',
-                                        width: '100%',
-                                        display: 'flex',
-                                        flexDirection: 'column',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        gap: '0.25rem',
-                                        backgroundColor: '#b91c1c',
-                                        borderColor: '#b91c1c',
-                                        color: 'white'
-                                    }}>
-                                        <span style={{ fontSize: '1.2rem' }}>⛔</span>
-                                        <span>Stop Trading</span>
-                                    </button>
-
-                                    {/* 3. Reset */}
-                                    <button className="btn btn-secondary" onClick={handleReset} style={{
-                                        padding: '0',
-                                        height: '60px',
-                                        fontSize: '0.95rem',
-                                        width: '100%',
-                                        display: 'flex',
-                                        flexDirection: 'column',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        gap: '0.25rem',
-                                        backgroundColor: '#f1f5f9',
-                                        color: '#334155',
-                                        border: '1px solid #cbd5e1'
-                                    }}>
-                                        <span style={{ fontSize: '1.2rem' }}>🔄</span>
-                                        <span>Reset</span>
-                                    </button>
-                                    {/* 4. Export CSV */}
-                                    <button className="btn btn-secondary" onClick={handleExport} style={{
-                                        padding: '0',
-                                        height: '60px',
-                                        fontSize: '0.95rem',
-                                        width: '100%',
-                                        display: 'flex',
-                                        flexDirection: 'column',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        gap: '0.25rem',
-                                        backgroundColor: '#0f766e',
-                                        borderColor: '#0f766e',
-                                        color: 'white'
-                                    }}>
-                                        <span style={{ fontSize: '1.2rem' }}>⬇</span>
-                                        <span>Export CSV</span>
-                                    </button>
-
-                                    {/* 5. Delete Strategy (Always Last) */}
-                                    <button onClick={handleDeleteStrategy} style={{
-                                        padding: '0',
-                                        height: '60px',
-                                        fontSize: '0.9rem',
-                                        width: '100%',
-                                        display: 'flex',
-                                        flexDirection: 'column',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        gap: '0.25rem',
-                                        backgroundColor: 'transparent',
-                                        border: '1px solid #ef4444',
-                                        color: '#ef4444',
-                                        borderRadius: '0.375rem',
-                                        cursor: 'pointer'
-                                    }}>
-                                        <span style={{ fontSize: '1.2rem' }}>🗑</span>
-                                        <span>Delete</span>
-                                    </button>
-                                </div>
-                                {(portfolio?.mode === 'DEV' && (simMeta || liveError)) && (
-                                    <div style={{
-                                        marginTop: '0.75rem',
-                                        padding: '0.75rem',
-                                        borderRadius: '0.5rem',
-                                        border: '1px solid #334155',
-                                        backgroundColor: 'rgba(2, 132, 199, 0.08)',
-                                        fontSize: '0.8rem',
-                                        color: '#e2e8f0'
-                                    }}>
-                                        {simMeta && (
-                                            <div style={{ display: 'flex', gap: '0.9rem', flexWrap: 'wrap' }}>
-                                                <span>{`Mode: ${simMeta.mode}`}</span>
-                                                <span>{`Trades: ${simMeta.trades}`}</span>
-                                                <span style={{ color: (simMeta.realized_profit || 0) >= 0 ? '#10b981' : '#ef4444' }}>
-                                                    {`P/L: ${(simMeta.realized_profit || 0) >= 0 ? '+' : ''}₩${Math.round(simMeta.realized_profit || 0).toLocaleString()}`}
-                                                </span>
-                                                <span>{`누적 매수: ₩${Math.round(simMeta.cumulative_buy_amount || 0).toLocaleString()}`}</span>
-                                                <span>{`누적 매도: ₩${Math.round(simMeta.cumulative_sell_amount || 0).toLocaleString()}`}</span>
-                                                <span>{`최대 투자금액: ₩${Math.round(simMeta.max_invested_amount || 0).toLocaleString()}`}</span>
-                                                {simMeta.candles ? <span>{`Candles: ${simMeta.candles}`}</span> : null}
-                                                {liveSessionState?.status ? <span>{`Live: ${liveSessionState.status}`}</span> : null}
-                                            </div>
-                                        )}
-                                        {liveError && (
-                                            <div style={{ marginTop: simMeta ? '0.35rem' : 0, fontSize: '0.76rem', color: '#f87171' }}>{liveError}</div>
-                                        )}
+                            {activeSection === 'overview' && (
+                                <>
+                                    <BotStatusStrip
+                                        status={displayedStatus}
+                                        config={resolvedConfig}
+                                        mode={portfolio?.mode}
+                                        nextBuyTarget={getNextBuyTarget(displayedStatus)}
+                                        runLabel={isDevMode && simMeta ? describeDevStartOption(simMeta.replay_days ? `${simMeta.replay_days}d` : 'live') : null}
+                                    />
+                            {(() => {
+                                // Open orders come from the real strategy status. A stopped simulation's
+                                // overlay still lists its in-memory orders, which no longer exist anywhere.
+                                const counts = (isDevMode ? status?.status_counts : displayedStatus?.status_counts) || {};
+                                const hasOpenOrders = (counts.pending_sell || 0) + (counts.pending_buy || 0) > 0;
+                                const realRunning = !isDevMode && !!displayedStatus?.is_running;
+                                const canStart = isDevMode ? canStartInDev : !realRunning;
+                                const isRunningAny = isDevSimulationActive || isDevBotRunning || realRunning;
+                                const busy = simActionLoading;
+                                const showHardStop = !isDevSimulationActive && (realRunning || isDevBotRunning || hasOpenOrders);
+                                const runLabel = describeDevStartOption(simMeta?.replay_days ? `${simMeta.replay_days}d` : 'live');
+                                const onRealStart = () => {
+                                    if (!window.confirm(`실거래를 시작합니다.\n${displayedStatus?.ticker}을(를) 현재가에 첫 분할만큼 즉시 시장가 매수합니다. 계속할까요?`)) return;
+                                    handleStart();
+                                };
+                                const onDevQuickStart = () => {
+                                    if (quickDevStartOption) handleStartDevBot(quickDevStartOption);
+                                    else setIsStartBotModalOpen(true);
+                                };
+                                let hint;
+                                if (isDevMode && isDevSimulationActive && liveSessionState?.buying_paused) hint = '매수 일시정지 중. 매도 주문은 계속 감시하고, 재개하면 다시 삽니다.';
+                                else if (isDevMode && isDevSimulationActive) hint = `${runLabel} 진행 중. 매수만 잠시 멈추거나 완전히 정지할 수 있습니다.`;
+                                else if (isDevMode && isDevBotRunning) hint = '모의 투자 봇이 실행 중입니다.';
+                                else if (isDevMode && quickDevStartOption) hint = `최근 방식: ${describeDevStartOption(quickDevStartOption)}. 버튼을 누르면 이 방식으로 바로 시작하고, ▾에서 바꿀 수 있습니다.`;
+                                else if (isDevMode) hint = '시작 방식(실시간 / 과거 리플레이)을 고르는 창이 뜹니다.';
+                                else if (realRunning) hint = '매수 중단은 새 매수만 멈추고, 걸어둔 매도 주문은 그대로 둡니다.';
+                                else hint = '시작하면 현재가에 첫 분할을 바로 삽니다.';
+                                if (hasSimResults && canStart) hint = `마지막 시뮬레이션 결과를 표시 중입니다. ${hint}`;
+                                return (
+                                    <div className="action-bar">
+                                        <div className="action-bar-primary">
+                                            {canStart ? (
+                                                isDevMode ? (
+                                                    <div className="btn-split">
+                                                        <button type="button" className="btn-primary-lg" onClick={onDevQuickStart} disabled={busy}>
+                                                            {busy ? '시작하는 중…' : '▶ 모의 투자 시작'}
+                                                        </button>
+                                                        <button type="button" className="btn-primary-lg btn-split-caret" onClick={() => setIsStartBotModalOpen(true)} disabled={busy} aria-label="시작 방식 선택" title="시작 방식 선택">
+                                                            ▾
+                                                        </button>
+                                                    </div>
+                                                ) : (
+                                                    <button type="button" className="btn-primary-lg danger" onClick={onRealStart}>
+                                                        ▶ 실거래 시작
+                                                    </button>
+                                                )
+                                            ) : isDevMode ? (
+                                                <>
+                                                    {isDevSimulationActive && (
+                                                        liveSessionState?.buying_paused ? (
+                                                            <button type="button" className="btn-primary-lg" onClick={handleResumeBuying} disabled={busy} title="새 매수를 다시 시작합니다.">
+                                                                ▶ 매수 재개
+                                                            </button>
+                                                        ) : (
+                                                            <button type="button" className="btn-pause" onClick={handlePauseBuying} disabled={busy} title="새 매수만 멈춥니다. 걸어둔 매도 주문은 계속 체결을 기다립니다.">
+                                                                ⏸ 매수 일시정지
+                                                            </button>
+                                                        )
+                                                    )}
+                                                    <button type="button" className="btn-stop" onClick={handleStop} disabled={busy} title="시뮬레이션을 완전히 끝냅니다.">
+                                                        {busy ? '처리 중…' : '■ 시뮬레이션 정지'}
+                                                    </button>
+                                                </>
+                                            ) : (
+                                                <button type="button" className="btn-stop" onClick={handleStop} title="새 매수만 멈춥니다. 걸어둔 매도 주문은 그대로 체결을 기다립니다.">
+                                                    ⏸ 매수 중단
+                                                </button>
+                                            )}
+                                            {showHardStop && (
+                                                <button type="button" className="btn-hardstop" onClick={handleHardStop} disabled={busy} title="매수·매도 주문을 모두 취소하고 멈춥니다. 코인은 지갑에 남습니다.">
+                                                    ⛔ 전량 정지
+                                                </button>
+                                            )}
+                                            <span className="action-bar-hint">{hint}</span>
+                                        </div>
+                                        <div className="action-bar-more">
+                                            <button type="button" className="btn-ghost" onClick={() => setIsMoreMenuOpen((v) => !v)} aria-haspopup="menu" aria-expanded={isMoreMenuOpen}>
+                                                관리 ▾
+                                            </button>
+                                            {isMoreMenuOpen && (
+                                                <div className="more-menu" role="menu" onMouseLeave={() => setIsMoreMenuOpen(false)}>
+                                                    <button type="button" role="menuitem" onClick={() => { setIsMoreMenuOpen(false); handleExport(); }}>
+                                                        ⬇ 거래 내역 CSV 내보내기
+                                                    </button>
+                                                    <button type="button" role="menuitem" disabled={isRunningAny} onClick={() => { setIsMoreMenuOpen(false); handleReset(); }}>
+                                                        🔄 상태 초기화
+                                                        <small>{isRunningAny ? '먼저 정지한 뒤 할 수 있습니다.' : '주문 취소, 포지션과 거래 기록 삭제. 지갑 잔고는 유지됩니다.'}</small>
+                                                    </button>
+                                                    <div className="more-menu-divider" role="separator" />
+                                                    <button type="button" role="menuitem" className="danger" disabled={isRunningAny} onClick={() => { setIsMoreMenuOpen(false); handleDeleteStrategy(); }}>
+                                                        🗑 전략 삭제
+                                                        <small>{isRunningAny ? '먼저 정지한 뒤 할 수 있습니다.' : '되돌릴 수 없습니다.'}</small>
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
-                                )}
-                            </div>
+                                );
+                            })()}
+                            {(isDevMode && (simMeta || liveError)) && (
+                                <div className={`sim-info ${simMeta?.status === 'running' ? 'running' : 'stopped'}`}>
+                                    {simMeta && (
+                                        <div className="sim-info-row">
+                                            <span className={`sim-info-state ${simMeta.status === 'running' ? 'running' : ''}`}>
+                                                {simMeta.status !== 'running' ? '■ 정지됨' : liveSessionState?.buying_paused ? '⏸ 매수 일시정지' : '● 진행 중'}
+                                            </span>
+                                            <span>{describeDevStartOption(simMeta.replay_days ? `${simMeta.replay_days}d` : 'live')}</span>
+                                            <span>거래 {simMeta.trades}건</span>
+                                            <span style={{ color: (simMeta.realized_profit || 0) >= 0 ? '#10b981' : '#ef4444' }}>
+                                                손익 {(simMeta.realized_profit || 0) >= 0 ? '+' : ''}₩{Math.round(simMeta.realized_profit || 0).toLocaleString()}
+                                            </span>
+                                            <span>누적 매수 ₩{Math.round(simMeta.cumulative_buy_amount || 0).toLocaleString()}</span>
+                                            <span>누적 매도 ₩{Math.round(simMeta.cumulative_sell_amount || 0).toLocaleString()}</span>
+                                            <span>최대 투자 ₩{Math.round(simMeta.max_invested_amount || 0).toLocaleString()}</span>
+                                        </div>
+                                    )}
+                                    {liveError && <div className="sim-info-error">{liveError}</div>}
+                                </div>
+                            )}
 
                             {/* Price Chart */}
                             <div style={{ position: 'relative', zIndex: 1 }}>
@@ -1656,11 +1726,12 @@ const Dashboard = () => {
                                 />
                             </div>
 
+                            
                             {/* Segment Summary (PRICE mode only) */}
                             {(resolvedConfig?.strategy_mode || 'PRICE') !== 'RSI' && strategyConfig?.price_segments?.length > 0 && (
                                 <div className="card segment-status-card" style={{ marginBottom: '1rem' }}>
                                     <div className="card-header">
-                                        <span className="card-title">Segment Status</span>
+                                        <span className="card-title">구간 현황</span>
                                     </div>
                                     <div style={{ padding: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '0.75rem' }}>
                                         {strategyConfig?.price_segments?.map((segment, index) => {
@@ -1681,14 +1752,14 @@ const Dashboard = () => {
                                                     borderLeft: `4px solid hsl(${210 + index * 30}, 70%, 50%)`
                                                 }}>
                                                     <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.25rem' }}>
-                                                        Segment {index + 1}
+                                                        구간 {index + 1}
                                                     </div>
                                                     <div style={{ fontSize: '0.85rem', color: '#e2e8f0', marginBottom: '0.5rem', fontWeight: 'bold' }}>
                                                         ₩{segment.min_price.toLocaleString()} - ₩{segment.max_price.toLocaleString()}
                                                     </div>
                                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', fontSize: '0.75rem' }}>
                                                         <div>
-                                                            <div style={{ color: '#94a3b8' }}>Active Splits</div>
+                                                            <div style={{ color: '#94a3b8' }}>사용 분할</div>
                                                             <div style={{ fontWeight: 'bold' }}>
                                                                 <span style={{ color: segmentSplits.length > segment.max_splits ? '#ef4444' : '#e2e8f0' }}>
                                                                     {segmentSplits.length}
@@ -1697,7 +1768,7 @@ const Dashboard = () => {
                                                             </div>
                                                         </div>
                                                         <div>
-                                                            <div style={{ color: '#94a3b8' }}>Invested Amount</div>
+                                                            <div style={{ color: '#94a3b8' }}>투자금</div>
                                                             <div style={{ color: '#10b981', fontWeight: 'bold' }}>
                                                                 ₩{Math.round(totalInvested).toLocaleString()}
                                                             </div>
@@ -1726,20 +1797,20 @@ const Dashboard = () => {
                                                     borderLeft: `4px solid #ef4444`
                                                 }}>
                                                     <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.25rem' }}>
-                                                        Out of Range
+                                                        범위 밖
                                                     </div>
                                                     <div style={{ fontSize: '0.85rem', color: '#ef4444', marginBottom: '0.5rem', fontWeight: 'bold' }}>
-                                                        Positions outside defined segments
+                                                        설정한 구간 밖의 포지션
                                                     </div>
                                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', fontSize: '0.75rem' }}>
                                                         <div>
-                                                            <div style={{ color: '#94a3b8' }}>Count</div>
+                                                            <div style={{ color: '#94a3b8' }}>개수</div>
                                                             <div style={{ fontWeight: 'bold', color: '#e2e8f0' }}>
                                                                 {outOfRangeSplits.length}
                                                             </div>
                                                         </div>
                                                         <div>
-                                                            <div style={{ color: '#94a3b8' }}>Invested Amount</div>
+                                                            <div style={{ color: '#94a3b8' }}>투자금</div>
                                                             <div style={{ color: '#ef4444', fontWeight: 'bold' }}>
                                                                 ₩{Math.round(outOfRangeInvested).toLocaleString()}
                                                             </div>
@@ -1752,6 +1823,7 @@ const Dashboard = () => {
                                 </div>
                             )}
 
+                            
                             <StrategyStatusPanel
                                 strategyMode={resolvedConfig?.strategy_mode || 'PRICE'}
                                 status={displayedStatus}
@@ -1760,13 +1832,34 @@ const Dashboard = () => {
                                 onPeekClick={() => setIsStatusPeekModalOpen(true)}
                             />
 
+                            
+                                </>
+                            )}
+
+                            {activeSection === 'settings' && (
+                            <div className="strategy-config-container">
+                                <Config
+                                    config={strategyConfig}
+                                    onUpdate={() => {
+                                        fetchStatus();
+                                        fetchStrategies();
+                                    }}
+                                    strategyId={selectedStrategyId}
+                                    currentPrice={displayedStatus?.current_price}
+                                />
+                            </div>
+                            
+                            )}
+
+                            {activeSection === 'trades' && (
+                                <>
                             {/* Recent Trades Section */}
                             {displayedStatus?.trade_history && displayedStatus?.trade_history.length > 0 && (
                                 <div className="trades-container">
                                     <div className="card">
                                         <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                             <span className="card-title">
-                                                {`Recent Trades (${displayedStatus?.name})`}
+                                                {`거래 내역 (${displayedStatus?.name})`}
                                             </span>
                                             <div className="pagination" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                                                 <button
@@ -1781,7 +1874,7 @@ const Dashboard = () => {
                                                     &lt;
                                                 </button>
                                                 <span style={{ fontSize: '0.85rem', color: '#cbd5e1' }}>
-                                                    Page {tradesPage} / {Math.ceil((displayedStatus?.trade_history || []).length / TRADES_PER_PAGE) || 1}
+                                                    {tradesPage} / {Math.ceil((displayedStatus?.trade_history || []).length / TRADES_PER_PAGE) || 1}
                                                 </span>
                                                 <button
                                                     onClick={() => setTradesPage(p => Math.min(Math.ceil((displayedStatus?.trade_history || []).length / TRADES_PER_PAGE), p + 1))}
@@ -1800,16 +1893,16 @@ const Dashboard = () => {
                                             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                                                 <thead>
                                                     <tr style={{ borderBottom: '2px solid #334155', color: '#94a3b8' }}>
-                                                        <th style={{ padding: '1rem' }}>Buy Time</th>
-                                                        <th style={{ padding: '1rem' }}>Sell Time</th>
-                                                        <th style={{ padding: '1rem' }}>Split</th>
-                                                        <th style={{ padding: '1rem' }}>Info</th>
-                                                        <th style={{ padding: '1rem', textAlign: 'right' }}>Buy Amount</th>
-                                                        <th style={{ padding: '1rem', textAlign: 'right' }}>Sell Amount</th>
-                                                        <th style={{ padding: '1rem', textAlign: 'right' }}>Gross Profit</th>
-                                                        <th style={{ padding: '1rem', textAlign: 'right' }}>Total Fee</th>
-                                                        <th style={{ padding: '1rem', textAlign: 'right' }}>Net Profit</th>
-                                                        <th style={{ padding: '1rem', textAlign: 'right' }}>Rate</th>
+                                                        <th style={{ padding: '1rem' }}>매수 시각</th>
+                                                        <th style={{ padding: '1rem' }}>매도 시각</th>
+                                                        <th style={{ padding: '1rem' }}>분할</th>
+                                                        <th style={{ padding: '1rem' }}>정보</th>
+                                                        <th style={{ padding: '1rem', textAlign: 'right' }}>매수 금액</th>
+                                                        <th style={{ padding: '1rem', textAlign: 'right' }}>매도 금액</th>
+                                                        <th style={{ padding: '1rem', textAlign: 'right' }}>총 수익</th>
+                                                        <th style={{ padding: '1rem', textAlign: 'right' }}>수수료</th>
+                                                        <th style={{ padding: '1rem', textAlign: 'right' }}>순수익</th>
+                                                        <th style={{ padding: '1rem', textAlign: 'right' }}>수익률</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody>
@@ -1946,6 +2039,15 @@ const Dashboard = () => {
                                 </div>
                             )}
 
+                            
+                                    {!(displayedStatus?.trade_history?.length > 0) && (
+                                        <div className="card section-empty">아직 완료된 거래가 없습니다. 매수 후 목표가에 팔리면 여기에 쌓입니다.</div>
+                                    )}
+                                </>
+                            )}
+
+                            {activeSection === 'events' && (
+                                <>
                             {/* System Event Log */}
                             <div className="event-log-container">
                                 <EventLog
@@ -1955,6 +2057,9 @@ const Dashboard = () => {
                                     simulationEvents={simOverlayState ? simEventsForLog : null}
                                 />
                             </div>
+                        
+                                </>
+                            )}
                         </main>
                     </div>
                 </>

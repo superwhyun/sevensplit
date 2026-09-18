@@ -129,14 +129,14 @@ const EventLog = ({ strategyId, apiBaseUrl, status, simulationEvents = null }) =
         }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <h3 style={{ margin: 0, fontSize: '1rem', color: '#f8fafc' }}>System Events</h3>
+                    <h3 style={{ margin: 0, fontSize: '1rem', color: '#f8fafc' }}>이벤트 로그</h3>
                     {status && (
                         <span style={getStatusBadgeStyle(status)}>{status}</span>
                     )}
                     {!useSimulationEvents && (
                         <button
                             onClick={handleClearEvents}
-                            title="Clear All Events"
+                            title="전체 삭제"
                             style={{
                                 background: 'none', border: 'none', color: '#64748b', cursor: 'pointer',
                                 fontSize: '1rem', display: 'flex', alignItems: 'center', padding: '4px',
@@ -170,7 +170,7 @@ const EventLog = ({ strategyId, apiBaseUrl, status, simulationEvents = null }) =
 
             <div style={{ display: 'flex', flexDirection: 'column' }}>
                 {displayEvents.length === 0 ? (
-                    <div style={{ padding: '1rem', textAlign: 'center', color: '#64748b' }}>No recent events</div>
+                    <div style={{ padding: '1rem', textAlign: 'center', color: '#64748b' }}>최근 이벤트가 없습니다</div>
                 ) : (
                     displayEvents.map(event => (
                         <div key={event.id} style={getRowStyle(event)}>

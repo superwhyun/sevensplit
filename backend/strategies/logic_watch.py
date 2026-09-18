@@ -79,7 +79,7 @@ class WatchModeLogic:
             self._clear_watch_state_if_active()
             return (True, False)
 
-        rsi_threshold = self.strategy.config.rsi_buy_max
+        rsi_threshold = self.strategy.config.watch_rsi_threshold
         rebound_threshold_pct = self.strategy.config.trailing_buy_rebound_percent / 100.0
         is_rsi_low = (rsi_5m is None or rsi_5m < rsi_threshold)
 

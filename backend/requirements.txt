@@ -5,5 +5,4 @@ python-dotenv
 fastapi
 uvicorn
 websockets
-ts
 sqlalchemy

@@ -60,6 +60,12 @@ class StrategyStateManager:
                 "watch_lowest_price": strategy.watch_lowest_price,
                 "pending_buy_units": strategy.pending_buy_units,
                 "adaptive_reentry_pressure": strategy.adaptive_reentry_pressure,
+                "rsi_last_buy_date": getattr(strategy, "last_buy_date", None),
+                "rsi_last_sell_date": getattr(strategy, "last_sell_date", None),
+                "rsi_last_evaluated_candle_ts": (
+                    float(getattr(strategy.rsi_logic, "_last_evaluated_candle_ts", 0.0) or 0.0)
+                    if hasattr(strategy, "rsi_logic") else 0.0
+                ),
             }
         )
         return payload
@@ -93,6 +99,7 @@ class StrategyStateManager:
             "buy_filled_at": datetime.fromisoformat(split.bought_at) if split.bought_at else None,
             "is_accumulated": split.is_accumulated,
             "buy_rsi": split.buy_rsi,
+            "buy_fee": split.buy_fee,
         }
 
     def _build_config_from_state(self, state) -> StrategyConfig:
@@ -112,18 +119,15 @@ class StrategyStateManager:
             max_trades_per_day=getattr(state, "max_trades_per_day", 100),
             strategy_mode=normalized_mode,
             rsi_period=getattr(state, "rsi_period", 14),
-            rsi_timeframe=getattr(state, "rsi_timeframe", "minutes/60"),
             rsi_buy_max=getattr(state, "rsi_buy_max", 30.0),
             rsi_buy_cross_threshold=getattr(state, "rsi_buy_cross_threshold", 0.0),
             rsi_buy_first_amount=getattr(state, "rsi_buy_first_amount", 1),
-            rsi_buy_next_amount=getattr(state, "rsi_buy_next_amount", 1),
             rsi_sell_min=getattr(state, "rsi_sell_min", 70.0),
             rsi_sell_cross_threshold=getattr(state, "rsi_sell_cross_threshold", 0.0),
             rsi_sell_first_amount=getattr(state, "rsi_sell_first_amount", 1),
-            rsi_sell_next_amount=getattr(state, "rsi_sell_next_amount", 1),
-            stop_loss=getattr(state, "stop_loss", -10.0),
             max_holdings=getattr(state, "max_holdings", 20),
             use_trailing_buy=getattr(state, "use_trailing_buy", False),
+            watch_rsi_threshold=getattr(state, "watch_rsi_threshold", None) or getattr(state, "rsi_buy_max", 30.0),
             trailing_buy_rebound_percent=getattr(state, "trailing_buy_rebound_percent", 0.2),
             trailing_buy_batch=getattr(state, "trailing_buy_batch", True),
             use_adaptive_buy_control=getattr(state, "use_adaptive_buy_control", False),
@@ -150,6 +154,13 @@ class StrategyStateManager:
         strategy.watch_lowest_price = getattr(state, "watch_lowest_price", None)
         strategy.pending_buy_units = getattr(state, "pending_buy_units", 0)
         strategy.adaptive_reentry_pressure = getattr(state, "adaptive_reentry_pressure", 0.0) or 0.0
+        # RSI once-per-day guards must survive a restart, or the same daily signal fires twice.
+        strategy.last_buy_date = getattr(state, "rsi_last_buy_date", None) or None
+        strategy.last_sell_date = getattr(state, "rsi_last_sell_date", None) or None
+        if hasattr(strategy, "rsi_logic"):
+            strategy.rsi_logic._last_evaluated_candle_ts = float(
+                getattr(state, "rsi_last_evaluated_candle_ts", 0.0) or 0.0
+            )
         strategy.adaptive_effective_buy_multiplier = 1.0
         strategy.adaptive_fast_drop_active = False
         if hasattr(strategy, "adaptive_buy_controller"):
@@ -174,6 +185,7 @@ class StrategyStateManager:
             bought_at=db_split.buy_filled_at.isoformat() + "Z" if db_split.buy_filled_at else None,
             is_accumulated=db_split.is_accumulated,
             buy_rsi=db_split.buy_rsi,
+            buy_fee=getattr(db_split, "buy_fee", None),
         )
 
     def _restore_last_buy_price(self, strategy) -> None:
@@ -356,6 +368,17 @@ class StrategyOrderManager:
                 f"order not found {count} consecutive times",
             )
 
+    @staticmethod
+    def order_paid_fee(order: dict) -> Optional[float]:
+        """Actual fee the exchange charged for this order, or None when the payload lacks it."""
+        raw = (order or {}).get("paid_fee")
+        if raw is None or raw == "":
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return None
+
     def calculate_execution_metrics(self, order: dict, fallback_price: float) -> tuple[float, float]:
         trades = order.get("trades", [])
         if trades:
@@ -394,7 +417,9 @@ class StrategyOrderManager:
                 if actual_sell_price == 0.0:
                     logging.warning(f"Sell filled but price is 0. Order: {order}")
                 filled_at = self.resolve_fill_time(order, strategy.get_now_utc())
-                self.finalize_sell_trade(strategy, split, actual_sell_price, filled_at=filled_at)
+                self.finalize_sell_trade(
+                    strategy, split, actual_sell_price, filled_at=filled_at, sell_fee=self.order_paid_fee(order),
+                )
             elif state == "cancel":
                 self._handle_cancelled_sell(strategy, split, order)
 
@@ -431,13 +456,15 @@ class StrategyOrderManager:
 
         actual_sell_price, _ = self.calculate_execution_metrics(order, fallback_price=split.target_sell_price)
         filled_at = self.resolve_fill_time(order, strategy.get_now_utc())
+        sell_fee = self.order_paid_fee(order)
 
         if executed_vol + self._VOLUME_EPSILON >= held_vol:
-            self.finalize_sell_trade(strategy, split, actual_sell_price, filled_at=filled_at)
+            self.finalize_sell_trade(strategy, split, actual_sell_price, filled_at=filled_at, sell_fee=sell_fee)
             return
 
         ratio = executed_vol / held_vol if held_vol > 0 else 0.0
         sold_buy_amount = split.buy_amount * ratio
+        sold_buy_fee = split.buy_fee * ratio if split.buy_fee is not None else None
         self._record_sell_trade(
             strategy,
             split,
@@ -445,9 +472,13 @@ class StrategyOrderManager:
             volume=executed_vol,
             buy_amount=sold_buy_amount,
             filled_at=filled_at,
+            buy_fee=sold_buy_fee,
+            sell_fee=sell_fee,
         )
         split.buy_volume = held_vol - executed_vol
         split.buy_amount = split.buy_amount - sold_buy_amount
+        if split.buy_fee is not None and sold_buy_fee is not None:
+            split.buy_fee = split.buy_fee - sold_buy_fee
         split.sell_order_uuid = None
         split.status = "BUY_FILLED"
         strategy.last_sell_price = actual_sell_price
@@ -467,10 +498,16 @@ class StrategyOrderManager:
         volume: float,
         buy_amount: float,
         filled_at: datetime,
+        buy_fee: Optional[float] = None,
+        sell_fee: Optional[float] = None,
     ) -> Dict[str, float]:
-        buy_fee = buy_amount * strategy.config.fee_rate
+        # Prefer the fees the exchange actually charged; fall back to the configured rate
+        # only when the order payload did not report them (older records, stub exchanges).
         sell_total = actual_sell_price * volume
-        sell_fee = sell_total * strategy.config.fee_rate
+        if buy_fee is None:
+            buy_fee = buy_amount * strategy.config.fee_rate
+        if sell_fee is None:
+            sell_fee = sell_total * strategy.config.fee_rate
         total_fee = buy_fee + sell_fee
         net_profit = sell_total - buy_amount - total_fee
         profit_rate = (net_profit / buy_amount) * 100 if buy_amount > 0 else 0.0
@@ -528,6 +565,7 @@ class StrategyOrderManager:
         split: SplitState,
         actual_sell_price: float,
         filled_at: Optional[datetime] = None,
+        sell_fee: Optional[float] = None,
     ) -> None:
         if filled_at is None:
             filled_at = strategy.get_now_utc()
@@ -542,6 +580,8 @@ class StrategyOrderManager:
             volume=split.buy_volume,
             buy_amount=split.buy_amount,
             filled_at=filled_at,
+            buy_fee=split.buy_fee,
+            sell_fee=sell_fee,
         )
 
         split.status = "SELL_FILLED"
@@ -633,6 +673,7 @@ class StrategyOrderManager:
         split.actual_buy_price = actual_price
         split.buy_price = actual_price
         split.buy_volume = volume if volume > 0 else executed_vol
+        split.buy_fee = self.order_paid_fee(order)
         if hasattr(strategy, "adaptive_buy_controller"):
             strategy.adaptive_buy_controller.apply_buy_fill(split.buy_amount, split.actual_buy_price)
 

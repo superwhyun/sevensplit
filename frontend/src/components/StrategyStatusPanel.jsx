@@ -1,5 +1,12 @@
 import React from 'react';
 
+const STATUS_LABELS = {
+    PENDING_BUY: '매수 중',
+    BUY_FILLED: '보유',
+    PENDING_SELL: '매도 대기',
+    SELL_FILLED: '매도 완료',
+};
+
 const SEGMENT_COLORS = [
     '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
     '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#84cc16',
@@ -60,7 +67,7 @@ function InfoCell({ split, priceSegments }) {
                     borderRadius: '0.2rem',
                     width: 'fit-content',
                 }}>
-                    Accumulated
+                    누적
                 </span>
             )}
             {split.buy_rsi != null && (
@@ -94,7 +101,7 @@ function PriceRow({ split, currentPrice, sellRate, priceSegments }) {
                     fontSize: '0.75rem', fontWeight: 'bold',
                     backgroundColor: isBought ? '#10b981' : '#64748b', color: 'white',
                 }}>
-                    {split.status}
+                    {STATUS_LABELS[split.status] || split.status}
                 </span>
             </td>
             <td style={{ padding: '1rem', fontSize: '0.85rem', color: '#cbd5e1' }}>
@@ -138,7 +145,7 @@ function RSIRow({ split, currentPrice }) {
                     fontSize: '0.75rem', fontWeight: 'bold',
                     backgroundColor: isBought ? '#10b981' : '#64748b', color: 'white',
                 }}>
-                    {split.status}
+                    {STATUS_LABELS[split.status] || split.status}
                 </span>
             </td>
             <td style={{ padding: '1rem', fontSize: '0.85rem', color: '#cbd5e1' }}>
@@ -184,7 +191,7 @@ export default function StrategyStatusPanel({
             <div className="card" style={{ maxHeight: '600px', overflowY: 'auto', overflowX: 'auto' }}>
                 <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span className="card-title">
-                        {isRSI ? 'Position Status' : 'Grid Status'} ({splits.length} Lines)
+                        {isRSI ? '포지션 현황' : '분할 현황'} ({splits.length}개)
                     </span>
 
                     {showNextBuyBadge && (
@@ -200,7 +207,7 @@ export default function StrategyStatusPanel({
                                     transition: 'all 0.2s',
                                 }}
                             >
-                                Next Buy Target:
+                                다음 매수 목표:
                                 <span style={{ color: '#3b82f6', fontWeight: 'bold' }}>
                                     {nextBuyTarget !== null ? ` ₩${nextBuyTarget.toLocaleString()}` : ' -'}
                                 </span>
@@ -216,7 +223,7 @@ export default function StrategyStatusPanel({
                                     display: 'flex', alignItems: 'center', gap: '0.25rem',
                                 }}
                             >
-                                🔍 PEEK
+                                🔍 봇 메모
                             </span>
                         </span>
                     )}
@@ -237,7 +244,7 @@ export default function StrategyStatusPanel({
                             backgroundColor: '#0f172a',
                             color: '#cbd5e1',
                         }}>
-                            Pressure: {adaptivePressure.toFixed(2)}
+                            압력 {adaptivePressure.toFixed(2)}
                         </span>
                         <span style={{
                             padding: '0.3rem 0.55rem',
@@ -246,7 +253,7 @@ export default function StrategyStatusPanel({
                             backgroundColor: 'rgba(56, 189, 248, 0.12)',
                             color: '#7dd3fc',
                         }}>
-                            Buy Size: {adaptiveMultiplier.toFixed(2)}x
+                            매수 크기 {adaptiveMultiplier.toFixed(2)}x
                         </span>
                         <span style={{
                             padding: '0.3rem 0.55rem',
@@ -255,7 +262,7 @@ export default function StrategyStatusPanel({
                             backgroundColor: fastDropActive ? 'rgba(245, 158, 11, 0.12)' : '#0f172a',
                             color: fastDropActive ? '#fbbf24' : '#94a3b8',
                         }}>
-                            Fast Drop Brake: {fastDropActive ? 'ON' : 'OFF'}
+                            급락 브레이크 {fastDropActive ? '켜짐' : '꺼짐'}
                         </span>
                     </div>
                 )}
@@ -264,13 +271,13 @@ export default function StrategyStatusPanel({
                     <thead style={{ position: 'sticky', top: 0, backgroundColor: '#1e293b', zIndex: 10 }}>
                         <tr style={{ borderBottom: '1px solid #334155', color: '#94a3b8' }}>
                             <th style={{ padding: '1rem' }}>ID</th>
-                            <th style={{ padding: '1rem' }}>Status</th>
-                            <th style={{ padding: '1rem' }}>Buy Time</th>
-                            <th style={{ padding: '1rem' }}>Info</th>
-                            <th style={{ padding: '1rem' }}>Buy Price (vs Current)</th>
-                            <th style={{ padding: '1rem' }}>Invested</th>
-                            {!isRSI && <th style={{ padding: '1rem' }}>Sell Target (vs Current)</th>}
-                            <th style={{ padding: '1rem' }}>Current P/L</th>
+                            <th style={{ padding: '1rem' }}>상태</th>
+                            <th style={{ padding: '1rem' }}>매수 시각</th>
+                            <th style={{ padding: '1rem' }}>정보</th>
+                            <th style={{ padding: '1rem' }}>매수가 (현재가 대비)</th>
+                            <th style={{ padding: '1rem' }}>투자금</th>
+                            {!isRSI && <th style={{ padding: '1rem' }}>매도 목표 (현재가 대비)</th>}
+                            <th style={{ padding: '1rem' }}>현재 손익</th>
                         </tr>
                     </thead>
                     <tbody>

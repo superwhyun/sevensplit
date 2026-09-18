@@ -45,3 +45,21 @@ class LiveSimulationStartRequest(BaseModel):
     replay_days: Optional[int] = None  # warm-up replay window before live start (1/3/7...)
     poll_seconds: float = 1.0
     initial_krw: float = 10000000.0
+
+
+class SettingsUpdateRequest(BaseModel):
+    access_key: Optional[str] = None
+    secret_key: Optional[str] = None
+    paper_initial_krw: Optional[float] = None
+    resume_strategies_on_boot: Optional[bool] = None
+    # Validate against Upbit before saving keys (recommended). Set False only for offline setups.
+    validate_keys: bool = True
+
+
+class ValidateKeysRequest(BaseModel):
+    access_key: Optional[str] = None
+    secret_key: Optional[str] = None
+
+
+class ModeSwitchRequest(BaseModel):
+    mode: str

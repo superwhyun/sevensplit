@@ -416,3 +416,114 @@
     font-size: 0.85rem !important;
   }
 }
+
+
+/* Empty state (no strategies yet) */
+.empty-state {
+  margin: 2rem auto;
+  max-width: 640px;
+  text-align: center;
+  padding: 3rem 2rem;
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(160deg, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.6));
+}
+
+.empty-state-icon {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 1rem;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  font-weight: 900;
+  font-size: 1.6rem;
+  color: white;
+  background: linear-gradient(135deg, #60a5fa, #2563eb);
+  box-shadow: 0 12px 30px -12px rgba(59, 130, 246, 0.9);
+}
+
+.empty-state-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.4rem;
+}
+
+.empty-state-text {
+  margin: 0 auto 1.5rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  max-width: 44ch;
+}
+
+.empty-state-actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+
+/* Section-based layout (phase 3): one column, sections stacked */
+.dashboard-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.strategy-config-container,
+.strategy-chart-container,
+.segment-status-card,
+.grid-status-container,
+.trades-container,
+.event-log-container {
+  grid-area: auto;
+  min-width: 0;
+}
+
+.strategy-stats-grid {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)) !important;
+}
+
+.grid-status-container .card,
+.trades-container .card {
+  overflow-x: auto;
+}
+
+@media (max-width: 640px) {
+  .dashboard-layout {
+    padding: 1rem 0;
+  }
+  .tabs {
+    padding-inline: 0.5rem;
+  }
+}
+
+/* Tables scroll inside their card instead of wrapping header text letter by letter */
+.grid-status-container table th,
+.grid-status-container table td,
+.trades-container table th,
+.trades-container table td {
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .grid-status-container table th,
+  .grid-status-container table td,
+  .trades-container table th,
+  .trades-container table td {
+    padding: 0.6rem 0.75rem !important;
+    font-size: 0.8rem;
+  }
+}
+
+.held-banner {
+  margin: 1rem 0 0;
+  padding: 0.8rem 1rem;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(245, 158, 11, 0.5);
+  background: rgba(245, 158, 11, 0.12);
+  color: #fde68a;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+.held-banner-ids { display: block; margin-top: 0.3rem; color: var(--text-secondary); font-size: 0.8rem; }

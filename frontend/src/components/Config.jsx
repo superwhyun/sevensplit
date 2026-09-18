@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import axios from 'axios';
 import Slider from 'rc-slider';
 import 'rc-slider/assets/index.css';
+import { API_BASE_URL } from '../lib/api';
 
 const defaultConfig = {
     strategy_mode: 'PRICE',
@@ -208,7 +209,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
         const floatFields = [
             'fee_rate', 'buy_rate', 'sell_rate', 'tick_interval',
             'rsi_buy_max', 'rsi_buy_cross_threshold', 'rsi_sell_min', 'rsi_sell_cross_threshold',
-            'stop_loss',
+            'watch_rsi_threshold',
             'trailing_buy_rebound_percent',
             'adaptive_sell_pressure_step', 'adaptive_buy_relief_step',
             'adaptive_pressure_cap', 'adaptive_probe_multiplier', 'fast_drop_multiplier_cap',
@@ -216,8 +217,8 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
 
         const intFields = [
             'max_trades_per_day', 'rsi_period',
-            'rsi_buy_first_amount', 'rsi_buy_next_amount',
-            'rsi_sell_first_amount', 'rsi_sell_next_amount',
+            'rsi_buy_first_amount',
+            'rsi_sell_first_amount',
             'max_holdings',
             'fast_drop_trigger_levels', 'fast_drop_batch_cap', 'fast_drop_next_gap_levels',
         ];
@@ -231,7 +232,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
             setFormData(prev => ({ ...prev, [name]: parseFloat(value) }));
         } else if (intFields.includes(name)) {
             setFormData(prev => ({ ...prev, [name]: parseInt(value) }));
-        } else if (name === 'strategy_mode' || name === 'rsi_timeframe' || name === 'rebuy_strategy') {
+        } else if (name === 'strategy_mode' || name === 'rebuy_strategy') {
             setFormData(prev => ({ ...prev, [name]: value }));
         } else {
             // Comma separated number fields
@@ -245,9 +246,6 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
     const handleSubmit = async (e) => {
         e.preventDefault();
         try {
-            const API_BASE_URL = window.location.port === '5173'
-                ? `http://${window.location.hostname}:8000`
-                : '';
 
             const { budget: newBudget, ...rawConfigData } = formData;
             const configData = {
@@ -261,18 +259,18 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
             });
             setIsEditing(false);
             onUpdate();
-            alert(`Configuration updated!`);
+            alert('설정을 저장했습니다.');
         } catch (error) {
             console.error('Failed to update config:', error);
             const errorMsg = error.response?.data?.detail || error.message || 'Unknown error';
-            alert(`Failed to update config:\n${errorMsg}`);
+            alert(`설정 저장 실패:\n${errorMsg}`);
         }
     };
 
     const renderClassicConfig = () => (
         <>
             <div className="input-group">
-                <label>Min Price (KRW)</label>
+                <label>매수 하한가 (KRW)</label>
                 <input
                     type="text"
                     name="min_price"
@@ -280,9 +278,10 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                     onChange={handleChange}
                     placeholder="e.g. 50,000,000"
                 />
+                <small className="field-note">이 가격보다 낮으면 새로 사지 않습니다. 0이면 저장 시 현재가 -15%로 자동 설정됩니다.</small>
             </div>
             <div className="input-group">
-                <label>Max Price (KRW)</label>
+                <label>매수 상한가 (KRW)</label>
                 <input
                     type="text"
                     name="max_price"
@@ -290,9 +289,10 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                     onChange={handleChange}
                     placeholder="e.g. 100,000,000"
                 />
+                <small className="field-note">이 가격보다 높으면 새로 사지 않습니다. 0이면 현재가 +15%로 자동 설정됩니다.</small>
             </div>
             <div className="input-group">
-                <label>Buy Rate (% price drop to buy)</label>
+                <label>매수 간격 (비율)</label>
                 <input
                     type="number"
                     step="any"
@@ -301,11 +301,11 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                     onChange={handleChange}
                 />
                 <small style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
-                    {((formData.buy_rate ?? 0.005) * 100).toFixed(2)}% drop triggers buy
+                    마지막 매수가보다 {((formData.buy_rate ?? 0.005) * 100).toFixed(2)}% 떨어지면 다음 분할을 삽니다
                 </small>
             </div>
             <div className="input-group">
-                <label>Sell Rate (% profit to sell)</label>
+                <label>목표 수익률 (비율)</label>
                 <input
                     type="number"
                     step="any"
@@ -314,19 +314,22 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                     onChange={handleChange}
                 />
                 <small style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
-                    {((formData.sell_rate ?? 0.005) * 100).toFixed(2)}% profit triggers sell
+                    각 분할은 매수가보다 {((formData.sell_rate ?? 0.005) * 100).toFixed(2)}% 오르면 팝니다
                 </small>
             </div>
 
+            <details className="config-advanced">
+                <summary>고급 설정 <span>가격 구간별 투자금, 재진입, 추적 매수, 적응형 조절</span></summary>
+                <div className="config-advanced-body">
             {/* Price Segments Editor - Visual Bar Split Mode */}
             <div style={{ marginTop: '1.5rem', marginBottom: '0.5rem', fontWeight: 'bold', color: '#60a5fa', borderTop: '1px solid #334155', paddingTop: '1rem' }}>
-                Price Segments (Advanced Grid)
+                가격 구간별 설정
             </div>
             <div style={{ marginBottom: '1rem', background: '#0f172a', padding: '1rem', borderRadius: '0.5rem', border: '1px solid #334155' }}>
                 {/* Segment Count Selector */}
                 <div style={{ marginBottom: '1.5rem' }}>
                     <label style={{ fontSize: '0.9rem', color: '#e2e8f0', marginBottom: '0.5rem', display: 'block' }}>
-                        Number of Segments: {formData.price_segments?.length || 0}
+                        구간 수: {formData.price_segments?.length || 0}
                     </label>
                     <div style={{ padding: '0 10px', marginBottom: '0.5rem' }}>
                         <Slider
@@ -357,7 +360,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                         />
                     </div>
                     <div style={{ fontSize: '0.75rem', color: '#94a3b8', textAlign: 'center' }}>
-                        Drag to set segment count
+                        드래그해서 구간 수를 정합니다. 구간마다 분할당 금액과 최대 분할 수를 다르게 둘 수 있습니다
                     </div>
                 </div>
 
@@ -366,7 +369,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                         {/* Visual Range Divider */}
                         <div style={{ marginBottom: '1.5rem', padding: '1rem', background: '#1e293b', borderRadius: '0.5rem', border: '1px solid #475569' }}>
                             <label style={{ fontSize: '0.8rem', color: '#94a3b8', marginBottom: '0.75rem', display: 'block' }}>
-                                Price Range Dividers (Drag to adjust boundaries)
+                                구간 경계 (드래그로 조절)
                             </label>
                             <div style={{ padding: '0 10px' }}>
                                 <Slider
@@ -426,18 +429,18 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                         {/* Segment Details */}
                         <div style={{ marginBottom: '1rem' }}>
                             <div style={{ fontSize: '0.9rem', color: '#e2e8f0', marginBottom: '0.75rem', fontWeight: 'bold' }}>
-                                Segment Settings
+                                구간별 설정
                             </div>
                             {formData.price_segments.map((segment, index) => (
                                 <div key={index} style={{ marginBottom: '1rem', padding: '0.75rem', background: '#1e293b', borderRadius: '0.5rem', border: '1px solid #475569' }}>
                                     <div style={{ fontSize: '0.85rem', color: '#cbd5e1', marginBottom: '0.5rem', fontWeight: 'bold' }}>
-                                        Segment {index + 1}: ₩{formatNumber(segment.min_price)} - ₩{formatNumber(segment.max_price)}
+                                        구간 {index + 1}: ₩{formatNumber(segment.min_price)} - ₩{formatNumber(segment.max_price)}
                                     </div>
 
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
                                         <div>
                                             <label style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.25rem', display: 'block' }}>
-                                                Invest per Split
+                                                분할당 투자금
                                             </label>
                                             <div style={{ marginBottom: '0.25rem', padding: '0 5px' }}>
                                                 <Slider
@@ -472,7 +475,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
 
                                         <div>
                                             <label style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.25rem', display: 'block' }}>
-                                                Max Splits
+                                                최대 분할 수
                                             </label>
                                             <div style={{ marginBottom: '0.25rem', padding: '0 5px' }}>
                                                 <Slider
@@ -509,13 +512,13 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                     </>
                 ) : (
                     <div style={{ color: '#94a3b8', fontSize: '0.9rem', textAlign: 'center', padding: '2rem' }}>
-                        No segments defined.<br />
-                        <span style={{ fontSize: '0.8rem' }}>Use slider above to create at least one segment</span>
+                        구간이 없습니다.<br />
+                        <span style={{ fontSize: '0.8rem' }}>위 슬라이더로 구간을 하나 이상 만드세요</span>
                     </div>
                 )}
             </div>
             <div className="input-group">
-                <label>Rebuy Strategy</label>
+                <label>전량 매도 후 재진입 방식</label>
                 <select
                     name="rebuy_strategy"
                     value={formData.rebuy_strategy || 'reset_on_clear'}
@@ -530,15 +533,15 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                         color: '#e2e8f0'
                     }}
                 >
-                    <option value="reset_on_clear">Reset & Start at Current</option>
-                    <option value="last_sell_price">Continue from Last Sell</option>
-                    <option value="last_buy_price">Continue from Last Buy</option>
+                    <option value="reset_on_clear">현재가에서 바로 다시 시작 (추세 추종)</option>
+                    <option value="last_sell_price">마지막 매도가에서 한 칸 떨어지면 매수 (균형)</option>
+                    <option value="last_buy_price">마지막 매수가에서 한 칸 떨어지면 매수 (보수)</option>
                 </select>
             </div>
 
             {/* Trailing Buy Settings */}
             <div style={{ marginTop: '1.5rem', marginBottom: '0.5rem', fontWeight: 'bold', color: '#fbbf24', borderTop: '1px solid #334155', paddingTop: '1rem' }}>
-                Trailing Buy (Low-Risk Entry)
+                추적 매수 (급락 시 반등 확인 후 진입)
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', marginBottom: '1rem' }}>
@@ -551,27 +554,27 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                     style={{ width: '1.25rem', height: '1.25rem', marginRight: '0.75rem', accentColor: '#fbbf24' }}
                 />
                 <label htmlFor="use_trailing_buy" style={{ margin: 0, cursor: 'pointer', color: formData.use_trailing_buy ? '#fbbf24' : '#94a3b8' }}>
-                    Enable Trailing Buy (RSI Filter)
+                    추적 매수 사용 (RSI 필터)
                 </label>
             </div>
 
             {formData.use_trailing_buy && (
                 <div className="input-group" style={{ paddingLeft: '2rem', borderLeft: '2px solid #fbbf24' }}>
                     <div className="input-group">
-                        <label>Watch Mode RSI Threshold (Max)</label>
+                        <label>감시 모드 진입 RSI</label>
                         <input
                             type="number"
-                            name="rsi_buy_max"
-                            value={formData.rsi_buy_max ?? 30}
+                            name="watch_rsi_threshold"
+                            value={formData.watch_rsi_threshold ?? 30}
                             onChange={handleChange}
                             placeholder="30"
                         />
                         <small style={{ color: '#94a3b8', fontSize: '0.75rem', display: 'block', marginTop: '0.25rem' }}>
-                            If RSI(5m) is below this value (default 30), the bot enters <strong>Watch Mode</strong> instead of buying immediately.
+                            5분봉 RSI가 이 값(기본 30) 아래면 바로 사지 않고 <strong>감시 모드</strong>로 들어갑니다.
                         </small>
                     </div>
 
-                    <label>Rebound Threshold (% to trigger buy)</label>
+                    <label>반등 확인 폭 (%)</label>
                     <input
                         type="number"
                         step="any"
@@ -581,7 +584,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                         placeholder="0.2"
                     />
                     <small style={{ color: '#94a3b8', fontSize: '0.75rem', display: 'block', marginTop: '0.25rem' }}>
-                        Buys after price rebounds by <strong>{formData.trailing_buy_rebound_percent ?? 0.2}%</strong> from the lowest point during a drop.
+                        하락 중 최저가에서 <strong>{formData.trailing_buy_rebound_percent ?? 0.2}%</strong> 반등하면 매수합니다.
                     </small>
 
                     <div style={{ display: 'flex', alignItems: 'center', marginTop: '1rem' }}>
@@ -594,17 +597,17 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                             style={{ width: '1.25rem', height: '1.25rem', marginRight: '0.75rem', accentColor: '#fbbf24' }}
                         />
                         <label htmlFor="trailing_buy_batch" style={{ margin: 0, cursor: 'pointer', color: formData.trailing_buy_batch !== false ? '#fbbf24' : '#94a3b8' }}>
-                            Allow Batch Buy (Accumulate Splits)
+                            반등 시 건너뛴 분할을 한꺼번에 매수
                         </label>
                     </div>
                     <small style={{ color: '#94a3b8', fontSize: '0.75rem', display: 'block', marginTop: '0.25rem' }}>
-                        Applied only when Watch Mode ends on rebound. If enabled, catch-up buys multiple splits at once; if disabled, buys one split.
+                        감시 모드가 반등으로 끝날 때만 적용됩니다. 켜면 건너뛴 레벨만큼 여러 분할을 한 번에 사고, 끄면 한 분할만 삽니다.
                     </small>
                 </div>
             )}
 
             <div style={{ marginTop: '1.5rem', marginBottom: '0.5rem', fontWeight: 'bold', color: '#38bdf8', borderTop: '1px solid #334155', paddingTop: '1rem' }}>
-                Adaptive Buy Control
+                적응형 매수 조절
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', marginBottom: '1rem' }}>
@@ -618,14 +621,14 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                     style={{ width: '1.25rem', height: '1.25rem', marginRight: '0.75rem', accentColor: '#38bdf8' }}
                 />
                 <label htmlFor="use_adaptive_buy_control" title={adaptiveTooltips.use_adaptive_buy_control} style={{ margin: 0, cursor: 'pointer', color: formData.use_adaptive_buy_control ? '#38bdf8' : '#94a3b8' }}>
-                    Enable Adaptive Buy Control
+                    적응형 매수 조절 사용
                 </label>
             </div>
 
             {formData.use_adaptive_buy_control && (
                 <div className="input-group" style={{ paddingLeft: '2rem', borderLeft: '2px solid #38bdf8' }}>
                     <div style={{ marginBottom: '1rem' }}>
-                        <div style={{ marginBottom: '0.6rem', fontWeight: 'bold', color: '#e2e8f0' }}>Preset Profiles</div>
+                        <div style={{ marginBottom: '0.6rem', fontWeight: 'bold', color: '#e2e8f0' }}>프리셋</div>
                         <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'nowrap' }}>
                             {adaptivePresets.map((preset) => {
                                 const active = isAdaptivePresetActive(preset.values);
@@ -654,10 +657,10 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                         </div>
                     </div>
 
-                    <div style={{ marginBottom: '1rem', fontWeight: 'bold', color: '#e2e8f0' }}>Reentry Pressure</div>
+                    <div style={{ marginBottom: '1rem', fontWeight: 'bold', color: '#e2e8f0' }}>재진입 압력</div>
 
                     <div className="input-group">
-                        <label title={adaptiveTooltips.adaptive_sell_pressure_step}>Sell Pressure Step</label>
+                        <label title={adaptiveTooltips.adaptive_sell_pressure_step}>매도 시 압력 증가</label>
                         <input
                             type="number"
                             step="any"
@@ -671,7 +674,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                     </div>
 
                     <div className="input-group">
-                        <label title={adaptiveTooltips.adaptive_buy_relief_step}>Buy Relief Step</label>
+                        <label title={adaptiveTooltips.adaptive_buy_relief_step}>매수 시 압력 완화</label>
                         <input
                             type="number"
                             step="any"
@@ -685,7 +688,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                     </div>
 
                     <div className="input-group">
-                        <label title={adaptiveTooltips.adaptive_pressure_cap}>Pressure Cap</label>
+                        <label title={adaptiveTooltips.adaptive_pressure_cap}>압력 상한</label>
                         <input
                             type="number"
                             step="any"
@@ -699,7 +702,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                     </div>
 
                     <div className="input-group">
-                        <label title={adaptiveTooltips.adaptive_probe_multiplier}>Probe Multiplier</label>
+                        <label title={adaptiveTooltips.adaptive_probe_multiplier}>최소 매수 비율</label>
                         <input
                             type="number"
                             step="any"
@@ -715,7 +718,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                         </small>
                     </div>
 
-                    <div style={{ marginTop: '1.25rem', marginBottom: '1rem', fontWeight: 'bold', color: '#e2e8f0' }}>Fast Drop Brake</div>
+                    <div style={{ marginTop: '1.25rem', marginBottom: '1rem', fontWeight: 'bold', color: '#e2e8f0' }}>급락 브레이크</div>
 
                     <div style={{ display: 'flex', alignItems: 'center', marginBottom: '1rem' }}>
                         <input
@@ -728,14 +731,14 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                             style={{ width: '1.25rem', height: '1.25rem', marginRight: '0.75rem', accentColor: '#38bdf8' }}
                         />
                         <label htmlFor="use_fast_drop_brake" title={adaptiveTooltips.use_fast_drop_brake} style={{ margin: 0, cursor: 'pointer', color: formData.use_fast_drop_brake !== false ? '#38bdf8' : '#94a3b8' }}>
-                            Enable Fast Drop Brake
+                            급락 브레이크 사용 (여러 레벨을 한 번에 지나면 매수 억제)
                         </label>
                     </div>
 
                     {formData.use_fast_drop_brake !== false && (
                         <>
                             <div className="input-group">
-                                <label title={adaptiveTooltips.fast_drop_trigger_levels}>Trigger Levels</label>
+                                <label title={adaptiveTooltips.fast_drop_trigger_levels}>발동 레벨 수</label>
                                 <input
                                     type="number"
                                     min="1"
@@ -748,7 +751,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                             </div>
 
                             <div className="input-group">
-                                <label title={adaptiveTooltips.fast_drop_batch_cap}>Batch Cap</label>
+                                <label title={adaptiveTooltips.fast_drop_batch_cap}>한 번에 최대 분할</label>
                                 <input
                                     type="number"
                                     min="1"
@@ -761,7 +764,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                             </div>
 
                             <div className="input-group">
-                                <label title={adaptiveTooltips.fast_drop_next_gap_levels}>Next Gap Levels</label>
+                                <label title={adaptiveTooltips.fast_drop_next_gap_levels}>다음 매수 간격 (레벨)</label>
                                 <input
                                     type="number"
                                     min="1"
@@ -774,7 +777,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                             </div>
 
                             <div className="input-group">
-                                <label title={adaptiveTooltips.fast_drop_multiplier_cap}>Brake Multiplier Cap</label>
+                                <label title={adaptiveTooltips.fast_drop_multiplier_cap}>브레이크 시 최대 매수 비율</label>
                                 <input
                                     type="number"
                                     step="any"
@@ -790,15 +793,17 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                     )}
                 </div>
             )}
+                </div>
+            </details>
         </>
     );
 
     const renderRSIConfig = () => (
         <>
             {/* Indicator Settings */}
-            <div style={{ marginTop: '1rem', marginBottom: '0.5rem', fontWeight: 'bold', color: '#60a5fa' }}>Indicator Settings</div>
+            <div style={{ marginTop: '1rem', marginBottom: '0.5rem', fontWeight: 'bold', color: '#60a5fa' }}>지표 설정</div>
             <div className="input-group">
-                <label>Period</label>
+                <label>RSI 기간</label>
                 <select
                     name="rsi_period"
                     value={formData.rsi_period || 14}
@@ -812,46 +817,46 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
             </div>
 
             {/* Buying Conditions */}
-            <div style={{ marginTop: '1rem', marginBottom: '0.5rem', fontWeight: 'bold', color: '#4ade80' }}>Buying (Accumulation)</div>
+            <div style={{ marginTop: '1rem', marginBottom: '0.5rem', fontWeight: 'bold', color: '#4ade80' }}>매수 조건</div>
             <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginBottom: '0.75rem' }}>
-                * Executed once daily at 9:00 AM KST based on confirmed daily close.
+                * 매일 오전 9시(KST) 확정된 일봉 종가 기준으로 하루 한 번 판단합니다.
             </div>
             <div className="input-group">
-                <label>Max Buy RSI (Underground)</label>
+                <label>매수 RSI 기준 (아래에서 위로 돌파 시)</label>
                 <input type="number" name="rsi_buy_max" value={formData.rsi_buy_max ?? 30} onChange={handleChange} />
             </div>
             <div className="input-group">
-                <label>Buy Cross Threshold (RSI Delta)</label>
+                <label>매수 확인 폭 (RSI 변화량)</label>
                 <input type="number" step="any" name="rsi_buy_cross_threshold" value={formData.rsi_buy_cross_threshold ?? 0} onChange={handleChange} />
                 <small style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
-                    Require (전날 RSI - 전전날 RSI) ≥ this value when buy cross occurs.
+                    (전날 RSI − 전전날 RSI)가 이 값 이상일 때만 매수합니다.
                 </small>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.75rem' }}>
                 <div className="input-group">
-                    <label>Buy Amount (Splits)</label>
+                    <label>매수 분할 수</label>
                     <input type="number" name="rsi_buy_first_amount" value={formData.rsi_buy_first_amount ?? 1} onChange={handleChange} />
                 </div>
             </div>
 
             {/* Selling Conditions */}
-            <div style={{ marginTop: '1rem', marginBottom: '0.5rem', fontWeight: 'bold', color: '#f87171' }}>Selling (Distribution)</div>
+            <div style={{ marginTop: '1rem', marginBottom: '0.5rem', fontWeight: 'bold', color: '#f87171' }}>매도 조건</div>
             <div className="input-group">
-                <label>Min Sell RSI (Overbought)</label>
+                <label>매도 RSI 기준 (위에서 아래로 돌파 시)</label>
                 <input type="number" name="rsi_sell_min" value={formData.rsi_sell_min ?? 70} onChange={handleChange} />
             </div>
             <div className="input-group">
-                <label>Sell Cross Threshold (RSI Delta)</label>
+                <label>매도 확인 폭 (RSI 변화량)</label>
                 <input type="number" step="any" name="rsi_sell_cross_threshold" value={formData.rsi_sell_cross_threshold ?? 0} onChange={handleChange} />
                 <small style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
-                    Require (전전날 RSI - 전날 RSI) ≥ this value when sell cross occurs.
+                    (전전날 RSI − 전날 RSI)가 이 값 이상일 때만 매도합니다.
                 </small>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.75rem' }}>
                 <div className="input-group">
-                    <label>Sell Amount (%)</label>
+                    <label>매도 비율 (%)</label>
                     <input
                         type="number"
                         name="rsi_sell_first_amount"
@@ -865,21 +870,15 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
             </div>
 
             {/* Risk Management */}
-            <div style={{ marginTop: '1rem', marginBottom: '0.5rem', fontWeight: 'bold', color: '#fbbf24' }}>Risk Management</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                <div className="input-group">
-                    <label>Min Profit (%)</label>
-                    <input type="number" step="any" name="sell_rate" value={((formData.sell_rate ?? 0.005) * 100).toFixed(1)}
-                        onChange={(e) => handleChange({ target: { name: 'sell_rate', value: parseFloat(e.target.value) / 100 } })}
-                    />
-                </div>
-                <div className="input-group">
-                    <label>Stop Loss (%)</label>
-                    <input type="number" step="any" name="stop_loss" value={formData.stop_loss ?? -10} onChange={handleChange} />
-                </div>
+            <div style={{ marginTop: '1rem', marginBottom: '0.5rem', fontWeight: 'bold', color: '#fbbf24' }}>위험 관리</div>
+            <div className="input-group">
+                <label>최소 수익률 (%)</label>
+                <input type="number" step="any" name="sell_rate" value={((formData.sell_rate ?? 0.005) * 100).toFixed(1)}
+                    onChange={(e) => handleChange({ target: { name: 'sell_rate', value: parseFloat(e.target.value) / 100 } })}
+                />
             </div>
             <div className="input-group">
-                <label>Max Holdings (Splits)</label>
+                <label>최대 보유 분할 수</label>
                 <input type="number" name="max_holdings" value={formData.max_holdings ?? 20} onChange={handleChange} />
             </div>
         </>
@@ -890,9 +889,9 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
         return (
             <div className="card">
                 <div className="card-header">
-                    <span className="card-title">Strategy Configuration</span>
+                    <span className="card-title">전략 설정</span>
                 </div>
-                <div style={{ padding: '1rem', color: '#94a3b8' }}>Loading configuration...</div>
+                <div style={{ padding: '1rem', color: '#94a3b8' }}>설정 불러오는 중…</div>
             </div>
         );
     }
@@ -900,7 +899,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
     return (
         <div className="card" >
             <div className="card-header">
-                <span className="card-title">Strategy Configuration</span>
+                <span className="card-title">전략 설정</span>
             </div>
             <form onSubmit={handleSubmit}>
                 {/* Strategy Mode Toggle */}
@@ -913,7 +912,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                             checked={(formData.strategy_mode || 'PRICE') !== 'RSI'}
                             onChange={handleChange}
                         />
-                        Classic (Price Grid)
+                        가격 그리드 (기본) — 떨어지면 사고 오르면 판다
                     </label>
                     <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer', color: (formData.strategy_mode || 'PRICE') === 'RSI' ? '#60a5fa' : '#94a3b8' }}>
                         <input
@@ -923,13 +922,13 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                             checked={(formData.strategy_mode || 'PRICE') === 'RSI'}
                             onChange={handleChange}
                         />
-                        RSI Reversal
+                        RSI 반전 — 일봉 RSI 돌파 신호로 매매
                     </label>
                 </div>
 
                 {/* Common Settings */}
                 <div className="input-group">
-                    <label>Total Budget (KRW)</label>
+                    <label>총 예산 (KRW)</label>
                     <input
                         type="text"
                         name="budget"
@@ -940,7 +939,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                 </div>
                 {!(formData.strategy_mode !== 'RSI' && formData.price_segments && formData.price_segments.length > 0) && (
                 <div className="input-group">
-                    <label>Investment per Split (KRW)</label>
+                    <label>분할당 투자금 (KRW)</label>
                     <input
                         type="text"
                         name="investment_per_split"
@@ -955,11 +954,11 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                 {(formData.strategy_mode || 'PRICE') === 'RSI' ? renderRSIConfig() : renderClassicConfig()}
 
                 {/* Common Footer Settings */}
-                <hr style={{ borderColor: '#334155', margin: '1.5rem 0' }} />
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <details className="config-advanced">
+                    <summary>실행 세부 설정 <span>확인 주기, 하루 거래 한도, 수수료</span></summary>
+                    <div className="config-advanced-body" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
                     <div className="input-group">
-                        <label>Tick Interval (s)</label>
+                        <label>확인 주기 (초)</label>
                         <input
                             type="number"
                             step="any"
@@ -969,7 +968,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                         />
                     </div>
                     <div className="input-group">
-                        <label>Max Trades/Day</label>
+                        <label>하루 최대 거래 수</label>
                         <input
                             type="number"
                             name="max_trades_per_day"
@@ -978,7 +977,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                         />
                     </div>
                     <div className="input-group" style={{ gridColumn: 'span 2' }}>
-                        <label>Fee Rate</label>
+                        <label>수수료율</label>
                         <input
                             type="number"
                             step="any"
@@ -988,10 +987,11 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                             placeholder="0.0005"
                         />
                     </div>
-                </div>
+                    </div>
+                </details>
 
                 <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '1rem' }}>
-                    Save Configuration
+                    설정 저장
                 </button>
             </form>
         </div >

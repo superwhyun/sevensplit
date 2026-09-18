@@ -1,0 +1,36 @@
+.app-loading {
+  min-height: 60vh;
+  display: grid;
+  place-items: center;
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+}
+
+.app-error {
+  max-width: 1500px;
+  margin: 1rem auto 0;
+  padding: 0.8rem 1rem;
+  border-radius: var(--radius-md);
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fecaca;
+  font-size: 0.85rem;
+}
+
+/* The dashboard used to own the page padding via #root; the shell now owns the frame. */
+#root {
+  max-width: none;
+  padding: 0;
+}
+
+.dashboard-container {
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: 1rem 1.5rem 3rem;
+}
+
+@media (max-width: 640px) {
+  .dashboard-container {
+    padding-inline: 1rem;
+  }
+}

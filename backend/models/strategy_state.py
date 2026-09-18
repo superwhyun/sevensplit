@@ -22,26 +22,25 @@ class StrategyConfig(BaseModel):
     # RSI Strategy Configuration
     strategy_mode: Literal["PRICE", "RSI"] = "PRICE"
     rsi_period: int = 14
-    rsi_timeframe: str = "minutes/60"
     
     # RSI Buying (Accumulation)
     rsi_buy_max: float = 30.0
     rsi_buy_cross_threshold: float = 0.0
     rsi_buy_first_amount: int = 1
-    rsi_buy_next_amount: int = 1
 
     # RSI Selling (Distribution)
     rsi_sell_min: float = 70.0
     rsi_sell_cross_threshold: float = 0.0
-    rsi_sell_first_amount: int = 1
-    rsi_sell_next_amount: int = 1
+    rsi_sell_first_amount: int = 100  # percent of profitable splits to sell per signal
 
     # Risk Management
-    stop_loss: float = -10.0
     max_holdings: int = 20
 
     # Trailing Buy Configuration
     use_trailing_buy: bool = False
+    # 5m RSI below this enters Watch Mode (PRICE mode). Separate from the RSI strategy's
+    # rsi_buy_max so switching modes never silently changes the other threshold.
+    watch_rsi_threshold: float = 30.0
     trailing_buy_rebound_percent: float = 0.2 # 0.2% Rebound threshold (default)
     trailing_buy_batch: bool = True # Applies on Watch-mode rebound exit: if True, catch-up buy multiple splits; else buy one.
 
@@ -74,3 +73,4 @@ class SplitState(BaseModel):
     bought_at: Optional[str] = None
     is_accumulated: bool = False
     buy_rsi: Optional[float] = None
+    buy_fee: Optional[float] = None # Actual fee paid on the buy (from the exchange), if known
