@@ -54,10 +54,12 @@ services:
   #     - ./data/user2:/app/backend/database
 
   # Development Bot Instance (Mock trading)
+  # No build: block on purpose. This is the same image as bot-user1 (identical
+  # context and Dockerfile), so it just reuses the tag bot-user1 builds. Giving
+  # it its own build: made `docker compose build` produce the same tag twice,
+  # and whichever export finished second failed with "image already exists".
+  # That race only showed up on cold-cache builds, so it looked intermittent.
   bot-dev:
-    build:
-      context: .
-      dockerfile: Dockerfile
     image: sevensplit-v2:${IMAGE_TAG:-latest}
     container_name: sevensplit-dev
     restart: unless-stopped
