@@ -27,7 +27,7 @@ class AdaptiveBuyController:
         config = self.strategy.config
         return bool(
             getattr(config, "strategy_mode", "PRICE") == "PRICE"
-            and getattr(config, "use_fast_drop_brake", True)
+            and getattr(config, "use_fast_drop_brake", False)
         )
 
     def refresh_runtime(self) -> None:
