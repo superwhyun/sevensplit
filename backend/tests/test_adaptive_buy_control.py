@@ -427,3 +427,64 @@ class TestManualTargetLogsEvent(unittest.TestCase):
         instance.set_manual_target(None)
         self.assertEqual(instance.events[-1][1], "TARGET_UPDATE")
         self.assertIn("NONE", instance.events[-1][2])
+
+
+class TestFeatureIndependence(unittest.TestCase):
+    """The pressure sizing (use_adaptive_buy_control) and the fast-drop brake
+    (use_fast_drop_brake) used to share one master switch: the brake was gated by
+    is_enabled(), so it could not run unless pressure sizing was on. They are now
+    independent, since the brake limits how many splits are bought per tick while
+    pressure only scales each split's amount."""
+
+    def _strategy(self, pressure: bool, brake: bool):
+        strategy = _StrategyStub()
+        strategy.config.use_adaptive_buy_control = pressure
+        strategy.config.use_fast_drop_brake = brake
+        strategy.adaptive_reentry_pressure = 4.0  # saturated, so sizing is visible
+        return strategy
+
+    def test_brake_alone_limits_batch_without_pressure_sizing(self):
+        strategy = self._strategy(pressure=False, brake=True)
+
+        controls = strategy.adaptive_buy_controller.resolve_execution_controls(
+            raw_levels_crossed=3, allow_batch_buy=True
+        )
+
+        self.assertTrue(controls["fast_drop_active"])
+        self.assertEqual(controls["batch_cap"], 1)
+        # No pressure sizing, so the only cap is the brake's own multiplier cap.
+        self.assertAlmostEqual(controls["buy_multiplier"], 0.75)
+
+    def test_pressure_alone_shrinks_size_without_capping_the_batch(self):
+        strategy = self._strategy(pressure=True, brake=False)
+
+        controls = strategy.adaptive_buy_controller.resolve_execution_controls(
+            raw_levels_crossed=3, allow_batch_buy=True
+        )
+
+        self.assertFalse(controls["fast_drop_active"])
+        # batch_cap None means the watch-mode catch-up buy stays uncapped.
+        self.assertIsNone(controls["batch_cap"])
+        self.assertAlmostEqual(controls["buy_multiplier"], 0.5)
+
+    def test_both_enabled_take_the_smaller_multiplier(self):
+        strategy = self._strategy(pressure=True, brake=True)
+
+        controls = strategy.adaptive_buy_controller.resolve_execution_controls(
+            raw_levels_crossed=3, allow_batch_buy=True
+        )
+
+        self.assertTrue(controls["fast_drop_active"])
+        self.assertEqual(controls["batch_cap"], 1)
+        self.assertAlmostEqual(controls["buy_multiplier"], 0.5)  # min(0.5, 0.75)
+
+    def test_both_disabled_leaves_execution_untouched(self):
+        strategy = self._strategy(pressure=False, brake=False)
+
+        controls = strategy.adaptive_buy_controller.resolve_execution_controls(
+            raw_levels_crossed=3, allow_batch_buy=True
+        )
+
+        self.assertFalse(controls["fast_drop_active"])
+        self.assertIsNone(controls["batch_cap"])
+        self.assertAlmostEqual(controls["buy_multiplier"], 1.0)

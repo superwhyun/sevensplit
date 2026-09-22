@@ -10,10 +10,24 @@ class AdaptiveBuyController:
         self.strategy = strategy
 
     def is_enabled(self) -> bool:
+        """Pressure-based buy sizing (use_adaptive_buy_control)."""
         config = self.strategy.config
         return bool(
             getattr(config, "strategy_mode", "PRICE") == "PRICE"
             and getattr(config, "use_adaptive_buy_control", False)
+        )
+
+    def is_fast_drop_enabled(self) -> bool:
+        """Fast-drop brake (use_fast_drop_brake).
+
+        Independent of the pressure sizing switch: the brake limits how many splits
+        may be bought in one tick, while pressure only scales each split's amount.
+        Either can be used on its own.
+        """
+        config = self.strategy.config
+        return bool(
+            getattr(config, "strategy_mode", "PRICE") == "PRICE"
+            and getattr(config, "use_fast_drop_brake", True)
         )
 
     def refresh_runtime(self) -> None:
@@ -83,7 +97,7 @@ class AdaptiveBuyController:
         return self._set_pressure(self.strategy.adaptive_reentry_pressure - delta, cause="BUY_FILL")
 
     def _should_activate_fast_drop_brake(self, raw_levels_crossed: int, allow_batch_buy: bool) -> bool:
-        if not self.is_enabled() or not getattr(self.strategy.config, "use_fast_drop_brake", True):
+        if not self.is_fast_drop_enabled():
             return False
 
         trigger_levels = max(
