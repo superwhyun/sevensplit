@@ -3,6 +3,9 @@ import axios from 'axios';
 import Slider from 'rc-slider';
 import 'rc-slider/assets/index.css';
 import { API_BASE_URL } from '../lib/api';
+// field-note / config-grid-2 / config-subsection live here; import so this
+// component never depends on another component having loaded the stylesheet.
+import './strategy/strategy.css';
 
 const defaultConfig = {
     strategy_mode: 'PRICE',
@@ -19,6 +22,8 @@ const defaultConfig = {
 };
 const DEFAULT_PRICE_SEGMENT_MAX_SPLITS = 20;
 
+// Presets only touch the pressure-sizing fields. The fast-drop brake is a separate
+// switch with its own section, so applying a preset here never changes it.
 const adaptivePresets = [
     {
         key: 'balanced',
@@ -30,56 +35,41 @@ const adaptivePresets = [
             adaptive_buy_relief_step: 1.0,
             adaptive_pressure_cap: 3.0,
             adaptive_probe_multiplier: 0.65,
-            use_fast_drop_brake: true,
-            fast_drop_trigger_levels: 3,
-            fast_drop_batch_cap: 1,
-            fast_drop_next_gap_levels: 2,
-            fast_drop_multiplier_cap: 0.8,
         },
     },
     {
         key: 'trend',
         label: '추세추종형',
-        description: '눌림 추종을 더 우선하고 제한은 약하게',
+        description: '눌림 추종을 더 우선하고 매수 축소는 약하게',
         values: {
             use_adaptive_buy_control: true,
             adaptive_sell_pressure_step: 0.6,
             adaptive_buy_relief_step: 1.0,
             adaptive_pressure_cap: 2.5,
             adaptive_probe_multiplier: 0.75,
-            use_fast_drop_brake: true,
-            fast_drop_trigger_levels: 3,
-            fast_drop_batch_cap: 1,
-            fast_drop_next_gap_levels: 2,
-            fast_drop_multiplier_cap: 0.85,
         },
     },
     {
         key: 'defensive',
         label: '방어형',
-        description: '고점 재진입과 급락 다단매수를 더 강하게 억제',
+        description: '고점 재진입 시 매수 금액을 더 강하게 축소',
         values: {
             use_adaptive_buy_control: true,
             adaptive_sell_pressure_step: 1.0,
             adaptive_buy_relief_step: 0.8,
             adaptive_pressure_cap: 4.0,
             adaptive_probe_multiplier: 0.5,
-            use_fast_drop_brake: true,
-            fast_drop_trigger_levels: 2,
-            fast_drop_batch_cap: 1,
-            fast_drop_next_gap_levels: 2,
-            fast_drop_multiplier_cap: 0.75,
         },
     },
 ];
 
 const adaptiveTooltips = {
-    use_adaptive_buy_control: '매도 후 재진입 압력과 급락 브레이크를 사용해 매수 금액과 배치 규모를 자동으로 완화합니다.',
+    use_adaptive_buy_control: '매도가 쌓일수록 재진입 압력이 올라가 다음 매수 금액을 자동으로 줄입니다. 매수 개수는 건드리지 않습니다.',
     adaptive_sell_pressure_step: '매도가 체결될 때 스트레스가 얼마나 빨리 쌓일지 정합니다. 높을수록 몇 번 팔린 뒤 다음 매수를 더 작게 줄입니다.',
     adaptive_buy_relief_step: '매수가 체결될 때 스트레스가 얼마나 빨리 풀릴지 정합니다. 높을수록 다시 사면서 매수 크기가 더 빨리 정상으로 복구됩니다.',
     adaptive_pressure_cap: '스트레스 지수의 최대값입니다. 낮을수록 빨리 포화되고, 높을수록 더 천천히 누적됩니다.',
     adaptive_probe_multiplier: '스트레스가 최대일 때 적용되는 최소 매수 비율입니다. 0.65면 기본 split 금액의 65%만 매수합니다.',
-    use_fast_drop_brake: '급락 중 과도한 연속 매수를 막는 보조 브레이크입니다. 여러 레벨을 한 번에 통과할 때 배치 수와 매수 크기를 추가로 제한합니다.',
+    use_fast_drop_brake: '적응형 매수 조절과는 별개로 동작하는 독립 기능입니다. 여러 레벨을 한 번에 통과할 때 한 틱에 살 수 있는 분할 개수와 매수 크기를 제한합니다. 감시 모드 종료 후 몰아사기도 함께 제한되니 주의하세요.',
     fast_drop_trigger_levels: '현재 가격이 한 번에 몇 개 buy level을 통과하면 급락 브레이크를 켤지 정합니다.',
     fast_drop_batch_cap: '급락 브레이크가 켜졌을 때 한 번에 최대 몇 개 split까지 살지 정합니다.',
     fast_drop_next_gap_levels: '급락 브레이크 매수 후 다음 매수 목표를 몇 레벨 아래로 넓힐지 정합니다.',
@@ -114,7 +104,11 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
     // Helper to format number with commas
     const formatNumber = (num) => {
         if (num === null || num === undefined) return '';
-        return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+        // Group the integer part only. Grouping the whole string also put commas
+        // inside the decimals (115,080,499.99,999,999 for an auto-filled price).
+        const [intPart, decPart] = num.toString().split('.');
+        const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+        return decPart === undefined ? grouped : `${grouped}.${decPart}`;
     };
 
     // Helper to parse number from comma string
@@ -289,7 +283,10 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                     onChange={handleChange}
                     placeholder="e.g. 50,000,000"
                 />
-                <small className="field-note">이 가격보다 낮으면 새로 사지 않습니다. 0이면 저장 시 현재가 -15%로 자동 설정됩니다.</small>
+                <small className="field-note">
+                    현재가가 이 가격보다 낮으면 새로 사지 않습니다. 하락장에서 끝없이 물타는 것을 막는 바닥선입니다.
+                    0으로 두면 저장 시점이 아니라 다음에 봇이 기동될 때 현재가의 -15%로 자동으로 채워집니다.
+                </small>
             </div>
             <div className="input-group">
                 <label>매수 상한가 (KRW)</label>
@@ -300,7 +297,11 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                     onChange={handleChange}
                     placeholder="e.g. 100,000,000"
                 />
-                <small className="field-note">이 가격보다 높으면 새로 사지 않습니다. 0이면 현재가 +15%로 자동 설정됩니다.</small>
+                <small className="field-note">
+                    현재가가 이 가격보다 높으면 새로 사지 않습니다. 너무 오른 가격에 새로 들어가는 것을 막는 천장선입니다.
+                    0으로 두면 상한 없음으로 동작해 가격이 아무리 올라도 매수를 막지 않습니다.
+                    (하한가도 0일 때만 다음 기동 시 현재가 +15%로 함께 채워집니다.)
+                </small>
             </div>
             <div className="input-group">
                 <label>매수 간격 (비율)</label>
@@ -336,6 +337,10 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
             <div style={{ marginTop: '1.5rem', marginBottom: '0.5rem', fontWeight: 'bold', color: '#60a5fa', borderTop: '1px solid #334155', paddingTop: '1rem' }}>
                 가격 구간별 설정
             </div>
+            <small className="field-note" style={{ marginBottom: '0.75rem' }}>
+                매수 하한가~상한가 범위를 여러 구간으로 나눠, 구간마다 분할당 투자금을 다르게 줄 수 있습니다.
+                예를 들어 낮은 가격대에서 더 크게 사고 싶을 때 씁니다. 구간을 나누지 않고 1개로 두면 위에서 입력한 상한가/하한가가 그대로 쓰입니다.
+            </small>
             <div style={{ marginBottom: '1rem', background: '#0f172a', padding: '1rem', borderRadius: '0.5rem', border: '1px solid #334155' }}>
                 {/* Segment Count Selector */}
                 <div style={{ marginBottom: '1.5rem' }}>
@@ -382,6 +387,9 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                             <label style={{ fontSize: '0.8rem', color: '#94a3b8', marginBottom: '0.75rem', display: 'block' }}>
                                 구간 경계 (드래그로 조절)
                             </label>
+                            <small className="field-note" style={{ marginTop: 0, marginBottom: '0.6rem' }}>
+                                손잡이를 끌어 구간을 나누는 가격을 정합니다. 각 구간의 분할당 투자금은 아래에서 따로 입력합니다.
+                            </small>
                             <div style={{ padding: '0 10px' }}>
                                 <Slider
                                     range
@@ -448,7 +456,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                                         구간 {index + 1}: ₩{formatNumber(segment.min_price)} - ₩{formatNumber(segment.max_price)}
                                     </div>
 
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                                    <div className="config-grid-2">
                                         <div>
                                             <label style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.25rem', display: 'block' }}>
                                                 분할당 투자금
@@ -548,6 +556,12 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                     <option value="last_sell_price">마지막 매도가에서 한 칸 떨어지면 매수 (균형)</option>
                     <option value="last_buy_price">마지막 매수가에서 한 칸 떨어지면 매수 (보수)</option>
                 </select>
+                <small className="field-note">
+                    보유 분할을 전부 팔아 현금만 남았을 때, 언제 다시 살지 정합니다.
+                    <b>추세 추종</b>은 기다리지 않고 현재가에서 바로 새로 시작합니다. 상승장에서 유리하지만 고점에서 다시 시작할 위험이 있습니다.
+                    <b>균형</b>은 마지막에 판 가격보다 매수 간격만큼 떨어져야 삽니다.
+                    <b>보수</b>는 마지막에 산 가격 기준으로 떨어져야 사므로 가장 늦게 들어갑니다.
+                </small>
             </div>
 
             {/* Trailing Buy Settings */}
@@ -568,9 +582,13 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                     추적 매수 사용 (RSI 필터)
                 </label>
             </div>
+            <small className="field-note" style={{ marginBottom: '1rem' }}>
+                급락이 시작되면 정해진 가격에 바로 사지 않고, 5분봉 RSI로 과매도 구간에 들어섰는지 확인한 뒤 잠시 매수를 멈춥니다(감시 모드).
+                이후 저점 대비 반등이 확인되면 그때 밀린 구간을 사들입니다. 떨어지는 도중에 계속 받아서 물리는 것을 줄이기 위한 기능입니다.
+            </small>
 
             {formData.use_trailing_buy && (
-                <div className="input-group" style={{ paddingLeft: '2rem', borderLeft: '2px solid #fbbf24' }}>
+                <div className="input-group config-subsection" style={{ borderLeftColor: '#fbbf24' }}>
                     <div className="input-group">
                         <label>감시 모드 진입 RSI</label>
                         <input
@@ -637,10 +655,10 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
             </div>
 
             {formData.use_adaptive_buy_control && (
-                <div className="input-group" style={{ paddingLeft: '2rem', borderLeft: '2px solid #38bdf8' }}>
+                <div className="input-group config-subsection">
                     <div style={{ marginBottom: '1rem' }}>
                         <div style={{ marginBottom: '0.6rem', fontWeight: 'bold', color: '#e2e8f0' }}>프리셋</div>
-                        <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'nowrap' }}>
+                        <div className="config-preset-row">
                             {adaptivePresets.map((preset) => {
                                 const active = isAdaptivePresetActive(preset.values);
                                 return (
@@ -682,6 +700,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                             onChange={handleChange}
                             title={adaptiveTooltips.adaptive_sell_pressure_step}
                         />
+                        <small className="field-note">분할 하나가 팔릴 때마다 경계 수위가 얼마나 오를지 정합니다. 1.0이면 한 번 팔릴 때 1만큼 오릅니다. 클수록 몇 번만 팔려도 다음 매수가 빨리 작아집니다.</small>
                     </div>
 
                     <div className="input-group">
@@ -696,6 +715,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                             onChange={handleChange}
                             title={adaptiveTooltips.adaptive_buy_relief_step}
                         />
+                        <small className="field-note">매수가 체결될 때마다 경계 수위가 얼마나 내려갈지 정합니다. 클수록 매수 금액이 정상 크기로 빨리 돌아옵니다. 작게 잡으면 한동안 계속 작게 삽니다.</small>
                     </div>
 
                     <div className="input-group">
@@ -710,6 +730,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                             onChange={handleChange}
                             title={adaptiveTooltips.adaptive_pressure_cap}
                         />
+                        <small className="field-note">경계 수위의 최대값입니다. 4.0이고 증가폭이 1.0이면 분할 4개가 팔린 시점에 최대 경계에 도달합니다. 낮출수록 더 적게 팔려도 최대 경계에 도달합니다.</small>
                     </div>
 
                     <div className="input-group">
@@ -724,84 +745,98 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                             onChange={handleChange}
                             title={adaptiveTooltips.adaptive_probe_multiplier}
                         />
-                        <small style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
-                            Pressure 0 uses 1.0x. Pressure cap uses this minimum size.
+                        <small className="field-note">
+                            경계가 최대일 때 적용할 매수 금액 비율입니다. 0.5면 분할당 투자금의 50%만 삽니다.
+                            경계가 0이면 100%(정상 크기)로 사고, 경계가 올라갈수록 이 값까지 점점 줄어듭니다.
                         </small>
                     </div>
 
-                    <div style={{ marginTop: '1.25rem', marginBottom: '1rem', fontWeight: 'bold', color: '#e2e8f0' }}>급락 브레이크</div>
+                </div>
+            )}
 
-                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '1rem' }}>
+            <div style={{ marginTop: '1.5rem', marginBottom: '0.5rem', fontWeight: 'bold', color: '#38bdf8', borderTop: '1px solid #334155', paddingTop: '1rem' }}>
+                급락 브레이크
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: '1rem' }}>
+                <input
+                    type="checkbox"
+                    id="use_fast_drop_brake"
+                    name="use_fast_drop_brake"
+                    checked={formData.use_fast_drop_brake !== false}
+                    onChange={handleChange}
+                    title={adaptiveTooltips.use_fast_drop_brake}
+                    style={{ width: '1.25rem', height: '1.25rem', marginRight: '0.75rem', accentColor: '#38bdf8' }}
+                />
+                <label htmlFor="use_fast_drop_brake" title={adaptiveTooltips.use_fast_drop_brake} style={{ margin: 0, cursor: 'pointer', color: formData.use_fast_drop_brake !== false ? '#38bdf8' : '#94a3b8' }}>
+                    급락 브레이크 사용 (여러 레벨을 한 번에 지나면 매수 개수 제한)
+                </label>
+            </div>
+
+            {formData.use_fast_drop_brake !== false && (
+                <div className="input-group config-subsection">
+                    <small style={{ color: '#fbbf24', fontSize: '0.75rem', display: 'block', marginBottom: '1rem' }}>
+                        주의: 이 기능을 켜면 감시 모드 종료 후 밀린 구간을 한 번에 몰아사는 동작이
+                        "한 틱에 최대 N개"로 제한되어 여러 틱에 나눠 사게 됩니다.
+                        몰아사기를 그대로 유지하려면 이 기능을 끄세요.
+                    </small>
+
+                    <div className="input-group">
+                        <label title={adaptiveTooltips.fast_drop_trigger_levels}>발동 레벨 수</label>
                         <input
-                            type="checkbox"
-                            id="use_fast_drop_brake"
-                            name="use_fast_drop_brake"
-                            checked={formData.use_fast_drop_brake !== false}
+                            type="number"
+                            min="1"
+                            max="10"
+                            name="fast_drop_trigger_levels"
+                            value={formData.fast_drop_trigger_levels ?? 2}
                             onChange={handleChange}
-                            title={adaptiveTooltips.use_fast_drop_brake}
-                            style={{ width: '1.25rem', height: '1.25rem', marginRight: '0.75rem', accentColor: '#38bdf8' }}
+                            title={adaptiveTooltips.fast_drop_trigger_levels}
                         />
-                        <label htmlFor="use_fast_drop_brake" title={adaptiveTooltips.use_fast_drop_brake} style={{ margin: 0, cursor: 'pointer', color: formData.use_fast_drop_brake !== false ? '#38bdf8' : '#94a3b8' }}>
-                            급락 브레이크 사용 (여러 레벨을 한 번에 지나면 매수 억제)
-                        </label>
+                        <small className="field-note">마지막 매수가 대비 매수 간격 몇 칸을 한꺼번에 지나쳤을 때 브레이크를 걸지 정합니다. 2면 매수 간격 1%일 때 2% 이상 한 번에 빠지면 발동합니다.</small>
                     </div>
 
-                    {formData.use_fast_drop_brake !== false && (
-                        <>
-                            <div className="input-group">
-                                <label title={adaptiveTooltips.fast_drop_trigger_levels}>발동 레벨 수</label>
-                                <input
-                                    type="number"
-                                    min="1"
-                                    max="10"
-                                    name="fast_drop_trigger_levels"
-                                    value={formData.fast_drop_trigger_levels ?? 2}
-                                    onChange={handleChange}
-                                    title={adaptiveTooltips.fast_drop_trigger_levels}
-                                />
-                            </div>
+                    <div className="input-group">
+                        <label title={adaptiveTooltips.fast_drop_batch_cap}>한 번에 최대 분할</label>
+                        <input
+                            type="number"
+                            min="1"
+                            max="10"
+                            name="fast_drop_batch_cap"
+                            value={formData.fast_drop_batch_cap ?? 1}
+                            onChange={handleChange}
+                            title={adaptiveTooltips.fast_drop_batch_cap}
+                        />
+                        <small className="field-note">브레이크가 걸렸을 때 한 번에 살 수 있는 최대 분할 개수입니다. 1이면 아무리 여러 칸이 밀려 있어도 한 번에 하나씩만 사고 나머지는 다음 확인 때로 넘깁니다.</small>
+                    </div>
 
-                            <div className="input-group">
-                                <label title={adaptiveTooltips.fast_drop_batch_cap}>한 번에 최대 분할</label>
-                                <input
-                                    type="number"
-                                    min="1"
-                                    max="10"
-                                    name="fast_drop_batch_cap"
-                                    value={formData.fast_drop_batch_cap ?? 1}
-                                    onChange={handleChange}
-                                    title={adaptiveTooltips.fast_drop_batch_cap}
-                                />
-                            </div>
+                    <div className="input-group">
+                        <label title={adaptiveTooltips.fast_drop_next_gap_levels}>다음 매수 간격 (레벨)</label>
+                        <input
+                            type="number"
+                            min="1"
+                            max="10"
+                            name="fast_drop_next_gap_levels"
+                            value={formData.fast_drop_next_gap_levels ?? 2}
+                            onChange={handleChange}
+                            title={adaptiveTooltips.fast_drop_next_gap_levels}
+                        />
+                        <small className="field-note">브레이크 상태로 산 뒤, 다음 매수 목표가를 몇 칸 더 아래로 벌릴지 정합니다. 2면 평소보다 두 배 더 떨어져야 다음 분할을 삽니다. 급락 중 촘촘히 받는 것을 막습니다.</small>
+                    </div>
 
-                            <div className="input-group">
-                                <label title={adaptiveTooltips.fast_drop_next_gap_levels}>다음 매수 간격 (레벨)</label>
-                                <input
-                                    type="number"
-                                    min="1"
-                                    max="10"
-                                    name="fast_drop_next_gap_levels"
-                                    value={formData.fast_drop_next_gap_levels ?? 2}
-                                    onChange={handleChange}
-                                    title={adaptiveTooltips.fast_drop_next_gap_levels}
-                                />
-                            </div>
-
-                            <div className="input-group">
-                                <label title={adaptiveTooltips.fast_drop_multiplier_cap}>브레이크 시 최대 매수 비율</label>
-                                <input
-                                    type="number"
-                                    step="any"
-                                    min="0.05"
-                                    max="1"
-                                    name="fast_drop_multiplier_cap"
-                                    value={formData.fast_drop_multiplier_cap ?? 0.75}
-                                    onChange={handleChange}
-                                    title={adaptiveTooltips.fast_drop_multiplier_cap}
-                                />
-                            </div>
-                        </>
-                    )}
+                    <div className="input-group">
+                        <label title={adaptiveTooltips.fast_drop_multiplier_cap}>브레이크 시 최대 매수 비율</label>
+                        <input
+                            type="number"
+                            step="any"
+                            min="0.05"
+                            max="1"
+                            name="fast_drop_multiplier_cap"
+                            value={formData.fast_drop_multiplier_cap ?? 0.75}
+                            onChange={handleChange}
+                            title={adaptiveTooltips.fast_drop_multiplier_cap}
+                        />
+                        <small className="field-note">브레이크가 걸렸을 때 허용할 최대 매수 금액 비율입니다. 0.75면 분할당 투자금의 75%를 넘지 않습니다. 적응형 매수 조절이 이미 더 작게 줄였다면 그 값을 따릅니다.</small>
+                    </div>
                 </div>
             )}
                 </div>
@@ -825,6 +860,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                     <option value={7}>7</option>
                     <option value={4}>4</option>
                 </select>
+                <small className="field-note">RSI를 계산할 때 사용할 일봉 개수입니다. 숫자가 작을수록 신호가 자주, 민감하게 나옵니다. 보통 14를 씁니다.</small>
             </div>
 
             {/* Buying Conditions */}
@@ -835,6 +871,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
             <div className="input-group">
                 <label>매수 RSI 기준 (아래에서 위로 돌파 시)</label>
                 <input type="number" name="rsi_buy_max" value={formData.rsi_buy_max ?? 30} onChange={handleChange} />
+                <small className="field-note">일봉 RSI가 이 값을 아래에서 위로 뚫고 올라올 때 매수합니다. 30이면 과매도 구간에서 벗어나는 순간을 노립니다. 값을 올리면 더 자주, 더 높은 가격에 사게 됩니다.</small>
             </div>
             <div className="input-group">
                 <label>매수 확인 폭 (RSI 변화량)</label>
@@ -848,6 +885,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                 <div className="input-group">
                     <label>매수 분할 수</label>
                     <input type="number" name="rsi_buy_first_amount" value={formData.rsi_buy_first_amount ?? 1} onChange={handleChange} />
+                    <small className="field-note">매수 신호가 나왔을 때 한 번에 몇 개 분할을 살지 정합니다. 1이면 분할당 투자금 한 번치만 삽니다.</small>
                 </div>
             </div>
 
@@ -856,6 +894,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
             <div className="input-group">
                 <label>매도 RSI 기준 (위에서 아래로 돌파 시)</label>
                 <input type="number" name="rsi_sell_min" value={formData.rsi_sell_min ?? 70} onChange={handleChange} />
+                <small className="field-note">일봉 RSI가 이 값을 위에서 아래로 뚫고 내려갈 때 매도합니다. 70이면 과매수 구간이 꺾이는 순간에 팝니다. 값을 내리면 더 일찍 팔게 됩니다.</small>
             </div>
             <div className="input-group">
                 <label>매도 확인 폭 (RSI 변화량)</label>
@@ -877,6 +916,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                         max="100"
                         placeholder="100"
                     />
+                    <small className="field-note">매도 신호가 나왔을 때 보유 수량의 몇 퍼센트를 팔지 정합니다. 100이면 전량 매도, 50이면 절반만 팝니다. 퍼센트 단위이므로 1로 두면 1%만 팔린다는 점에 주의하세요.</small>
                 </div>
             </div>
 
@@ -887,10 +927,12 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                 <input type="number" step="any" name="sell_rate" value={((formData.sell_rate ?? 0.005) * 100).toFixed(1)}
                     onChange={(e) => handleChange({ target: { name: 'sell_rate', value: parseFloat(e.target.value) / 100 } })}
                 />
+                <small className="field-note">매도 신호가 떠도 이 수익률에 못 미치면 팔지 않고 그대로 들고 갑니다. 손실 구간에서 신호만 보고 파는 것을 막는 안전장치입니다.</small>
             </div>
             <div className="input-group">
                 <label>최대 보유 분할 수</label>
                 <input type="number" name="max_holdings" value={formData.max_holdings ?? 20} onChange={handleChange} />
+                <small className="field-note">동시에 들고 있을 수 있는 최대 분할 개수입니다. 이 개수를 채우면 매수 신호가 떠도 더 사지 않습니다.</small>
             </div>
         </>
     );
@@ -935,6 +977,10 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                         />
                         RSI 반전 — 일봉 RSI 돌파 신호로 매매
                     </label>
+                    <small className="field-note">
+                        가격 그리드는 정해둔 비율만큼 떨어질 때마다 나눠 사고, 각각 목표 수익률에 도달하면 파는 방식입니다.
+                        RSI 반전은 하루 한 번 일봉 RSI가 기준선을 돌파할 때만 매매합니다. 대부분 가격 그리드를 사용합니다.
+                    </small>
                 </div>
 
                 {/* Common Settings */}
@@ -947,6 +993,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                         onChange={handleChange}
                         placeholder="e.g. 1,000,000"
                     />
+                    <small className="field-note">이 전략이 쓸 수 있는 전체 금액입니다. 보유 중인 분할 매수 금액의 합이 이 금액을 넘지 않습니다.</small>
                 </div>
                 {!(formData.strategy_mode !== 'RSI' && formData.price_segments && formData.price_segments.length > 0) && (
                 <div className="input-group">
@@ -958,6 +1005,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                         onChange={handleChange}
                         placeholder="e.g. 100,000"
                     />
+                    <small className="field-note">한 번 매수할 때 넣을 금액입니다. 총 예산을 이 금액으로 나눈 횟수만큼 나눠 살 수 있습니다. 예산 100만원, 분할당 10만원이면 최대 10번 나눠 삽니다.</small>
                 </div>
                 )}
 
@@ -967,7 +1015,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                 {/* Common Footer Settings */}
                 <details className="config-advanced">
                     <summary>실행 세부 설정 <span>확인 주기, 하루 거래 한도, 수수료</span></summary>
-                    <div className="config-advanced-body" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                    <div className="config-advanced-body config-grid-2">
                     <div className="input-group">
                         <label>확인 주기 (초)</label>
                         <input
@@ -977,6 +1025,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                             value={formData.tick_interval ?? 1.0}
                             onChange={handleChange}
                         />
+                        <small className="field-note">현재가를 확인하고 매매 조건을 검사하는 주기(초)입니다. 1이면 1초마다 봅니다. 너무 짧게 잡으면 거래소 호출 제한에 걸릴 수 있습니다.</small>
                     </div>
                     <div className="input-group">
                         <label>하루 최대 거래 수</label>
@@ -986,8 +1035,9 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                             value={formData.max_trades_per_day ?? 100}
                             onChange={handleChange}
                         />
+                        <small className="field-note">최근 24시간 동안 허용할 매수 횟수입니다. 이 횟수를 채우면 시간이 지나 여유가 생길 때까지 새로 사지 않습니다. 변동성이 클 때 과도한 매매를 막는 안전장치입니다.</small>
                     </div>
-                    <div className="input-group" style={{ gridColumn: 'span 2' }}>
+                    <div className="input-group config-grid-span">
                         <label>수수료율</label>
                         <input
                             type="number"
@@ -997,6 +1047,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                             onChange={handleChange}
                             placeholder="0.0005"
                         />
+                        <small className="field-note">거래소 수수료율입니다. 업비트 원화 마켓은 0.0005(0.05%)입니다. 목표 수익률을 계산할 때 수수료를 빼고 남는 이익을 기준으로 삼습니다.</small>
                     </div>
                     </div>
                 </details>

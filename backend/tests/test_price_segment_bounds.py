@@ -82,6 +82,26 @@ class TestEffectiveSegmentBounds(unittest.TestCase):
 
         self.assertEqual(effective, [segment])
 
+    def test_zero_ceiling_means_no_upper_bound(self):
+        """A 0 in 매수 상한가 is not "auto-fill +15%" -- the strategy only fills both
+        bounds from the current price when 매수 하한가 is also 0 (strategy.py __init__).
+        With a real floor and a 0 ceiling, buying is simply unbounded above."""
+        segment = PriceSegment(
+            min_price=50_000_000.0,
+            max_price=1_000_000_000.0,
+            investment_per_split=100000.0,
+            max_splits=20,
+        )
+        config = self._config(min_price=50_000_000.0, max_price=0.0, segments=[segment])
+        strategy = _StrategyStub(config)
+
+        effective = strategy.price_logic._effective_segments()
+
+        self.assertEqual(effective[0].min_price, 50_000_000.0)
+        self.assertEqual(effective[0].max_price, float("inf"))
+        self.assertIsNotNone(strategy.price_logic._find_matching_segment(200_000_000.0))
+        self.assertIsNone(strategy.price_logic._find_matching_segment(40_000_000.0))
+
     def test_matching_single_segment_is_returned_as_is(self):
         segment = PriceSegment(
             min_price=50_000_000.0,

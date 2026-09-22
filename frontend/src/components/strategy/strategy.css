@@ -291,8 +291,56 @@
   line-height: 1.45;
 }
 
+.field-note b {
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+
+/* Two-column field rows: collapse to one column on narrow screens. */
+.config-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+/* Indented sub-sections (trailing buy, adaptive control, fast-drop brake). */
+.config-subsection {
+  padding-left: 2rem;
+  border-left: 2px solid var(--accent-primary);
+}
+
+.config-preset-row {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+/* Full-width row inside .config-grid-2. Must reset to auto once the grid
+   collapses, otherwise the span forces an implicit second column back in. */
+.config-grid-span {
+  grid-column: span 2;
+}
+
 /* ── Responsive ───────────────────────────────────────────────── */
 @media (max-width: 760px) {
+  .config-grid-2 {
+    grid-template-columns: 1fr;
+  }
+  .config-grid-span {
+    grid-column: auto;
+  }
+  /* Keep the colour cue but stop the inset from eating the input width. */
+  .config-subsection {
+    padding-left: 0.75rem;
+  }
+  .config-advanced > summary {
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+  .config-advanced-body {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
   .bot-strip {
     grid-template-columns: 1fr;
   }
