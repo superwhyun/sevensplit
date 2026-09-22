@@ -429,6 +429,34 @@ class TestManualTargetLogsEvent(unittest.TestCase):
         self.assertIn("NONE", instance.events[-1][2])
 
 
+class TestDefaults(unittest.TestCase):
+    def test_both_features_default_to_off(self):
+        """The fast-drop brake used to default to on. That was harmless while it was a
+        sub-option of adaptive buy control (it could not fire unless the master switch
+        was on), but now that it is independent an on-by-default brake would silently
+        throttle the watch-mode catch-up buy on every new strategy."""
+        config = StrategyConfig(strategy_mode="PRICE")
+
+        self.assertFalse(config.use_adaptive_buy_control)
+        self.assertFalse(config.use_fast_drop_brake)
+
+    def test_a_default_strategy_applies_no_buy_restrictions(self):
+        strategy = _StrategyStub(StrategyConfig(
+            strategy_mode="PRICE",
+            investment_per_split=100000.0,
+            buy_rate=0.01,
+        ))
+        strategy.adaptive_reentry_pressure = 4.0
+
+        controls = strategy.adaptive_buy_controller.resolve_execution_controls(
+            raw_levels_crossed=5, allow_batch_buy=True
+        )
+
+        self.assertFalse(controls["fast_drop_active"])
+        self.assertIsNone(controls["batch_cap"])
+        self.assertAlmostEqual(controls["buy_multiplier"], 1.0)
+
+
 class TestFeatureIndependence(unittest.TestCase):
     """The pressure sizing (use_adaptive_buy_control) and the fast-drop brake
     (use_fast_drop_brake) used to share one master switch: the brake was gated by

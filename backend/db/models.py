@@ -69,7 +69,7 @@ class Strategy(Base):
     adaptive_buy_relief_step = Column(Float, default=1.0, nullable=False)
     adaptive_pressure_cap = Column(Float, default=4.0, nullable=False)
     adaptive_probe_multiplier = Column(Float, default=0.5, nullable=False)
-    use_fast_drop_brake = Column(Boolean, default=True, nullable=False)
+    use_fast_drop_brake = Column(Boolean, default=False, nullable=False)
     fast_drop_trigger_levels = Column(Integer, default=2, nullable=False)
     fast_drop_batch_cap = Column(Integer, default=1, nullable=False)
     fast_drop_next_gap_levels = Column(Integer, default=2, nullable=False)

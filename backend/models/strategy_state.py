@@ -50,7 +50,7 @@ class StrategyConfig(BaseModel):
     adaptive_buy_relief_step: float = 1.0
     adaptive_pressure_cap: float = 4.0
     adaptive_probe_multiplier: float = 0.5
-    use_fast_drop_brake: bool = True
+    use_fast_drop_brake: bool = False
     fast_drop_trigger_levels: int = 2
     fast_drop_batch_cap: int = 1
     fast_drop_next_gap_levels: int = 2

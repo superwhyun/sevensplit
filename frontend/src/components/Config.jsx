@@ -14,7 +14,7 @@ const defaultConfig = {
     adaptive_buy_relief_step: 1.0,
     adaptive_pressure_cap: 4.0,
     adaptive_probe_multiplier: 0.5,
-    use_fast_drop_brake: true,
+    use_fast_drop_brake: false,
     fast_drop_trigger_levels: 2,
     fast_drop_batch_cap: 1,
     fast_drop_next_gap_levels: 2,
@@ -131,7 +131,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
         adaptive_buy_relief_step: clampNumber(data.adaptive_buy_relief_step, 1.0, 0.1),
         adaptive_pressure_cap: clampNumber(data.adaptive_pressure_cap, 4.0, 0.1),
         adaptive_probe_multiplier: clampNumber(data.adaptive_probe_multiplier, 0.5, 0.05, 1.0),
-        use_fast_drop_brake: data.use_fast_drop_brake !== false,
+        use_fast_drop_brake: !!data.use_fast_drop_brake,
         fast_drop_trigger_levels: Math.max(1, Math.round(clampNumber(data.fast_drop_trigger_levels, 2, 1))),
         fast_drop_batch_cap: Math.max(1, Math.round(clampNumber(data.fast_drop_batch_cap, 1, 1))),
         fast_drop_next_gap_levels: Math.max(1, Math.round(clampNumber(data.fast_drop_next_gap_levels, 2, 1))),
@@ -763,17 +763,17 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                     type="checkbox"
                     id="use_fast_drop_brake"
                     name="use_fast_drop_brake"
-                    checked={formData.use_fast_drop_brake !== false}
+                    checked={!!formData.use_fast_drop_brake}
                     onChange={handleChange}
                     title={adaptiveTooltips.use_fast_drop_brake}
                     style={{ width: '1.25rem', height: '1.25rem', marginRight: '0.75rem', accentColor: '#38bdf8' }}
                 />
-                <label htmlFor="use_fast_drop_brake" title={adaptiveTooltips.use_fast_drop_brake} style={{ margin: 0, cursor: 'pointer', color: formData.use_fast_drop_brake !== false ? '#38bdf8' : '#94a3b8' }}>
+                <label htmlFor="use_fast_drop_brake" title={adaptiveTooltips.use_fast_drop_brake} style={{ margin: 0, cursor: 'pointer', color: formData.use_fast_drop_brake ? '#38bdf8' : '#94a3b8' }}>
                     급락 브레이크 사용 (여러 레벨을 한 번에 지나면 매수 개수 제한)
                 </label>
             </div>
 
-            {formData.use_fast_drop_brake !== false && (
+            {formData.use_fast_drop_brake && (
                 <div className="input-group config-subsection">
                     <small style={{ color: '#fbbf24', fontSize: '0.75rem', display: 'block', marginBottom: '1rem' }}>
                         주의: 이 기능을 켜면 감시 모드 종료 후 밀린 구간을 한 번에 몰아사는 동작이

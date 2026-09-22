@@ -217,7 +217,7 @@ class SimulationService:
             adaptive_buy_relief_step=getattr(strategy_rec, "adaptive_buy_relief_step", 1.0),
             adaptive_pressure_cap=getattr(strategy_rec, "adaptive_pressure_cap", 4.0),
             adaptive_probe_multiplier=getattr(strategy_rec, "adaptive_probe_multiplier", 0.5),
-            use_fast_drop_brake=getattr(strategy_rec, "use_fast_drop_brake", True),
+            use_fast_drop_brake=getattr(strategy_rec, "use_fast_drop_brake", False),
             fast_drop_trigger_levels=getattr(strategy_rec, "fast_drop_trigger_levels", 2),
             fast_drop_batch_cap=getattr(strategy_rec, "fast_drop_batch_cap", 1),
             fast_drop_next_gap_levels=getattr(strategy_rec, "fast_drop_next_gap_levels", 2),
