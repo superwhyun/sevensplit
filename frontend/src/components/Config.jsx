@@ -190,6 +190,19 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
         if (segments.length > 1) {
             return segments;
         }
+        // Only the price bounds are re-synced. Rebuilding the whole segment here
+        // threw away 분할당 투자금 and 최대 분할 수 every time the form was saved,
+        // because buildFallbackSegment() takes investment_per_split from the
+        // top-level field and hardcodes max_splits.
+        const existing = segments[0];
+        if (existing) {
+            const fallback = buildFallbackSegment(data);
+            return [{
+                ...existing,
+                min_price: fallback.min_price,
+                max_price: fallback.max_price,
+            }];
+        }
         return [buildFallbackSegment(data)];
     };
 
