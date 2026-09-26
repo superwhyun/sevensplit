@@ -598,28 +598,14 @@ class PriceStrategyLogic:
         if max_price <= min_price:
             max_price = float("inf")
 
-        top_level_bounds_set = bool(self.strategy.config.min_price or self.strategy.config.max_price)
+        has_floor = bool(self.strategy.config.min_price)
+        has_ceiling = bool(self.strategy.config.max_price)
         if segments:
-            if len(segments) == 1 and top_level_bounds_set:
-                # A single segment plus non-zero top-level bounds means the user is on
-                # the "classic" min/max fields, not the multi-segment ladder editor.
-                # Those top-level fields are the ones shown/edited as 매수 하한가/
-                # 상한가, so they must stay authoritative here too -- otherwise editing
-                # them has no effect once a segment was auto-generated once (it used
-                # to just sit there with whatever bound it was first built with).
-                # (Skipped when both top-level bounds are still 0/unset, so an old
-                # strategy configured purely through the segment ladder isn't clobbered.)
-                only = segments[0]
-                if float(only.min_price or 0.0) != min_price or float(only.max_price or 0.0) != max_price:
-                    return [
-                        SimpleNamespace(
-                            min_price=min_price,
-                            max_price=max_price,
-                            investment_per_split=float(only.investment_per_split),
-                            max_splits=getattr(only, "max_splits", float("inf")),
-                        )
-                    ]
-            return segments
+            if not (has_floor or has_ceiling):
+                # Neither top-level bound is configured, so the segment ladder is the
+                # only source of truth (old strategies set up that way stay untouched).
+                return segments
+            return self._clamp_segments_to_bounds(segments, min_price, max_price, has_floor, has_ceiling)
 
         return [
             SimpleNamespace(
@@ -629,6 +615,42 @@ class PriceStrategyLogic:
                 max_splits=float("inf"),
             )
         ]
+
+    def _clamp_segments_to_bounds(self, segments, min_price, max_price, has_floor, has_ceiling):
+        """Keep 매수 하한가/상한가 as the hard outer limits of the whole ladder.
+
+        Segments only subdivide the configured range: anything sticking out past a
+        bound is trimmed, anything fully outside is dropped, and the outermost edges
+        are pulled onto the bounds so the range stays fully covered when the user
+        widens it. Without this the top-level fields were ignored as soon as a
+        segment existed, and the bot happily bought above 매수 상한가.
+        """
+        ordered = sorted(segments, key=lambda s: float(s.min_price or 0.0))
+        clamped = []
+        for seg in ordered:
+            seg_min = float(seg.min_price or 0.0)
+            seg_max = float(seg.max_price) if seg.max_price else max_price
+            low = max(seg_min, min_price)
+            high = min(seg_max, max_price)
+            if high <= low:
+                continue  # entirely outside the configured range
+            clamped.append(
+                SimpleNamespace(
+                    min_price=low,
+                    max_price=high,
+                    investment_per_split=float(seg.investment_per_split or 0.0),
+                    max_splits=getattr(seg, "max_splits", float("inf")),
+                )
+            )
+
+        if not clamped:
+            return []
+
+        if has_floor:
+            clamped[0].min_price = min_price
+        if has_ceiling:
+            clamped[-1].max_price = max_price
+        return clamped
 
     def _find_matching_segment(self, price: float):
         for segment in self._effective_segments():
