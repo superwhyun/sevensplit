@@ -118,6 +118,17 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
         return parseFloat(val.toString().replace(/,/g, ''));
     };
 
+    // An input the user has cleared is held as '' so the last character can actually
+    // be deleted. Previously a blank box parsed to NaN, which either got skipped
+    // (leaving the old value stuck on screen) or stored NaN and rendered "NaN".
+    const isBlank = (raw) => String(raw ?? '').replace(/[,\s]/g, '') === '';
+
+    // Turn a possibly-blank/NaN field back into a number right before saving.
+    const toNumber = (value, fallback = 0) => {
+        const num = typeof value === 'number' ? value : parseNumber(value);
+        return Number.isFinite(num) ? num : fallback;
+    };
+
     const clampNumber = (value, fallback, min = Number.NEGATIVE_INFINITY, max = Number.POSITIVE_INFINITY) => {
         const num = Number(value);
         if (!Number.isFinite(num)) return fallback;
@@ -160,6 +171,29 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
             }
             return currentValue === targetValue;
         });
+    };
+
+    const restoreBlankFields = (data) => {
+        const settled = { ...data };
+        Object.keys(settled).forEach((key) => {
+            const val = settled[key];
+            if (typeof val === 'string' && val.trim() === '') {
+                settled[key] = toNumber(config?.[key], 0);
+            } else if (typeof val === 'number' && !Number.isFinite(val)) {
+                settled[key] = toNumber(config?.[key], 0);
+            }
+        });
+        if (Array.isArray(settled.price_segments)) {
+            settled.price_segments = settled.price_segments.map((seg, i) => {
+                const saved = config?.price_segments?.[i] || {};
+                return {
+                    ...seg,
+                    investment_per_split: toNumber(seg.investment_per_split, toNumber(saved.investment_per_split, 100000)),
+                    max_splits: toNumber(seg.max_splits, toNumber(saved.max_splits, 1)),
+                };
+            });
+        }
+        return settled;
     };
 
     const buildFallbackSegment = (data) => {
@@ -247,13 +281,17 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
             // Checkbox fallback if type check fails (unlikely in React but safe)
             setFormData(prev => ({ ...prev, [name]: checked }));
         } else if (floatFields.includes(name)) {
-            setFormData(prev => ({ ...prev, [name]: parseFloat(value) }));
+            setFormData(prev => ({ ...prev, [name]: isBlank(value) ? '' : parseFloat(value) }));
         } else if (intFields.includes(name)) {
-            setFormData(prev => ({ ...prev, [name]: parseInt(value) }));
+            setFormData(prev => ({ ...prev, [name]: isBlank(value) ? '' : parseInt(value) }));
         } else if (name === 'strategy_mode' || name === 'rebuy_strategy') {
             setFormData(prev => ({ ...prev, [name]: value }));
         } else {
             // Comma separated number fields
+            if (isBlank(value)) {
+                setFormData(prev => ({ ...prev, [name]: '' }));
+                return;
+            }
             const numValue = parseNumber(value);
             if (!isNaN(numValue)) {
                 setFormData(prev => ({ ...prev, [name]: numValue }));
@@ -265,15 +303,18 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
         e.preventDefault();
         try {
 
-            const { budget: newBudget, ...rawConfigData } = formData;
+            // A field the user cleared and left blank keeps whatever is currently
+            // saved, so blanking a box never silently writes 0 to the strategy.
+            const settled = restoreBlankFields(formData);
+            const { budget: newBudget, ...rawConfigData } = settled;
             const configData = {
                 ...sanitizeAdaptiveConfig(rawConfigData),
                 price_segments: ensureSegments(rawConfigData),
             };
-            const response = await axios.post(`${API_BASE_URL}/strategies/config`, {
+            await axios.post(`${API_BASE_URL}/strategies/config`, {
                 strategy_id: strategyId,
                 config: configData,
-                budget: newBudget
+                budget: toNumber(newBudget, toNumber(config?.budget, 0)),
             });
             setIsEditing(false);
             onUpdate();
@@ -298,6 +339,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                 />
                 <small className="field-note">
                     현재가가 이 가격보다 낮으면 새로 사지 않습니다. 하락장에서 끝없이 물타는 것을 막는 바닥선입니다.
+                    상한가와 함께 매매 범위 전체의 최소치가 되고, 아래 가격 구간은 그 안을 나눕니다.
                     0으로 두면 저장 시점이 아니라 다음에 봇이 기동될 때 현재가의 -15%로 자동으로 채워집니다.
                 </small>
             </div>
@@ -312,8 +354,9 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                 />
                 <small className="field-note">
                     현재가가 이 가격보다 높으면 새로 사지 않습니다. 너무 오른 가격에 새로 들어가는 것을 막는 천장선입니다.
-                    0으로 두면 상한 없음으로 동작해 가격이 아무리 올라도 매수를 막지 않습니다.
-                    (하한가도 0일 때만 다음 기동 시 현재가 +15%로 함께 채워집니다.)
+                    아래에서 가격 구간을 여러 개로 나누더라도 이 값이 전체의 최대치이고, 구간은 그 안을 나눌 뿐입니다.
+                    이 값을 넘는 구간은 잘리거나 제외됩니다.
+                    0으로 두면 이 천장선을 적용하지 않습니다. (하한가도 0일 때만 다음 기동 시 현재가 +15%로 함께 채워집니다.)
                 </small>
             </div>
             <div className="input-group">
@@ -351,8 +394,9 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                 가격 구간별 설정
             </div>
             <small className="field-note" style={{ marginBottom: '0.75rem' }}>
-                매수 하한가~상한가 범위를 여러 구간으로 나눠, 구간마다 분할당 투자금을 다르게 줄 수 있습니다.
-                예를 들어 낮은 가격대에서 더 크게 사고 싶을 때 씁니다. 구간을 나누지 않고 1개로 두면 위에서 입력한 상한가/하한가가 그대로 쓰입니다.
+                매수 하한가~상한가 범위를 여러 구간으로 나눠, 구간마다 분할당 투자금과 최대 분할 수를 다르게 줄 수 있습니다.
+                예를 들어 낮은 가격대에서 더 크게 사고 싶을 때 씁니다.
+                구간은 어디까지나 위에서 정한 하한가~상한가 안을 나누는 것이라, 그 범위를 벗어나는 구간은 매매에 쓰이지 않습니다.
             </small>
             <div style={{ marginBottom: '1rem', background: '#0f172a', padding: '1rem', borderRadius: '0.5rem', border: '1px solid #334155' }}>
                 {/* Segment Count Selector */}
@@ -479,7 +523,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                                                     min={10000}
                                                     max={500000}
                                                     step={10000}
-                                                    value={segment.investment_per_split}
+                                                    value={toNumber(segment.investment_per_split, 10000)}
                                                     onChange={(val) => {
                                                         setIsEditing(true);
                                                         const newSegments = [...formData.price_segments];
@@ -496,7 +540,9 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                                                 value={formatNumber(segment.investment_per_split)}
                                                 onChange={(e) => {
                                                     setIsEditing(true);
-                                                    const val = parseNumber(e.target.value);
+                                                    const raw = e.target.value;
+                                                    const val = isBlank(raw) ? '' : parseNumber(raw);
+                                                    if (val !== '' && isNaN(val)) return;
                                                     const newSegments = [...formData.price_segments];
                                                     newSegments[index] = { ...newSegments[index], investment_per_split: val };
                                                     setFormData(prev => ({ ...prev, price_segments: newSegments }));
@@ -513,7 +559,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                                                 <Slider
                                                     min={1}
                                                     max={20}
-                                                    value={segment.max_splits}
+                                                    value={toNumber(segment.max_splits, 1)}
                                                     onChange={(val) => {
                                                         setIsEditing(true);
                                                         const newSegments = [...formData.price_segments];
@@ -531,7 +577,8 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                                                 onChange={(e) => {
                                                     setIsEditing(true);
                                                     const newSegments = [...formData.price_segments];
-                                                    newSegments[index] = { ...newSegments[index], max_splits: parseInt(e.target.value) || 1 };
+                                                    const raw = e.target.value;
+                                                    newSegments[index] = { ...newSegments[index], max_splits: isBlank(raw) ? '' : (parseInt(raw) || 1) };
                                                     setFormData(prev => ({ ...prev, price_segments: newSegments }));
                                                 }}
                                                 style={{ width: '100%', padding: '0.25rem', background: '#0f172a', border: '1px solid #475569', color: 'white', borderRadius: '0.25rem', fontSize: '0.8rem' }}
@@ -1056,7 +1103,7 @@ const Config = ({ config, onUpdate, strategyId, currentPrice }) => {
                             type="number"
                             step="any"
                             name="fee_rate"
-                            value={formData.fee_rate || 0.0005}
+                            value={formData.fee_rate ?? 0.0005}
                             onChange={handleChange}
                             placeholder="0.0005"
                         />
