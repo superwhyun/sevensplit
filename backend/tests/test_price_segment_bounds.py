@@ -126,6 +126,49 @@ class TestEffectiveSegmentBounds(unittest.TestCase):
         self.assertIsNotNone(strategy.price_logic._find_matching_segment(200_000_000.0))
         self.assertIsNone(strategy.price_logic._find_matching_segment(40_000_000.0))
 
+    def test_inverted_bounds_do_not_remove_the_ceiling(self):
+        """A ceiling typed at or below the floor is a typo, not "unlimited".
+
+        The bounds resolver used to turn max <= min into infinity while still
+        treating the ceiling as configured, so the outermost segment was pulled up
+        to infinity and the strategy could buy at any price at all -- the most
+        dangerous possible reading of a mistyped ceiling.
+        """
+        segments = [
+            PriceSegment(min_price=50_000_000.0, max_price=100_000_000.0, investment_per_split=100000.0, max_splits=5),
+            PriceSegment(min_price=100_000_000.0, max_price=300_000_000.0, investment_per_split=200000.0, max_splits=7),
+        ]
+        config = self._config(min_price=100_000_000.0, max_price=50_000_000.0, segments=segments)
+        strategy = _StrategyStub(config)
+
+        effective = strategy.price_logic._effective_segments()
+
+        self.assertTrue(all(seg.max_price != float("inf") for seg in effective))
+        self.assertEqual(effective[-1].max_price, 300_000_000.0)
+        self.assertIsNone(strategy.price_logic._find_matching_segment(500_000_000.0))
+        self.assertIsNotNone(strategy.price_logic._find_matching_segment(250_000_000.0))
+
+    def test_bounds_moved_off_a_stale_ladder_still_leave_a_tradable_range(self):
+        """When no segment overlaps the configured range any more, the range itself
+        is what the user just asked for. Resolving to an empty list instead would
+        stop the strategy from ever buying again, with an empty range in the gate
+        message and no hint as to why."""
+        segments = [
+            PriceSegment(min_price=50_000_000.0, max_price=100_000_000.0, investment_per_split=100000.0, max_splits=5),
+        ]
+        config = self._config(min_price=400_000_000.0, max_price=500_000_000.0, segments=segments)
+        strategy = _StrategyStub(config)
+
+        effective = strategy.price_logic._effective_segments()
+
+        self.assertEqual(len(effective), 1)
+        self.assertEqual(effective[0].min_price, 400_000_000.0)
+        self.assertEqual(effective[0].max_price, 500_000_000.0)
+        self.assertIsNotNone(strategy.price_logic._find_matching_segment(450_000_000.0))
+        self.assertIsNone(strategy.price_logic._find_matching_segment(350_000_000.0))
+        self.assertIsNone(strategy.price_logic._find_matching_segment(550_000_000.0))
+        self.assertNotEqual(strategy.price_logic._segment_ranges_text(), "")
+
     def test_matching_single_segment_is_returned_as_is(self):
         segment = PriceSegment(
             min_price=50_000_000.0,

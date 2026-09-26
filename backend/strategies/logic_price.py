@@ -591,30 +591,51 @@ class PriceStrategyLogic:
             return False
         return True
 
+    def _resolve_price_bounds(self):
+        """Read 매수 하한가/상한가, reporting which of them is actually configured."""
+        raw_min = float(self.strategy.config.min_price or 0.0)
+        raw_max = float(self.strategy.config.max_price or 0.0)
+        has_floor = raw_min > 0.0
+        # An inverted ceiling (at or below the floor) is a typo, not "unlimited".
+        # Treating it as unset keeps the segments' own upper bound in force; turning
+        # it into infinity here would quietly remove every ceiling the user had.
+        has_ceiling = raw_max > 0.0 and raw_max > raw_min
+        return (
+            raw_min if has_floor else 0.0,
+            raw_max if has_ceiling else float("inf"),
+            has_floor,
+            has_ceiling,
+        )
+
+    def _bounds_as_segment(self, min_price, max_price):
+        return SimpleNamespace(
+            min_price=min_price,
+            max_price=max_price,
+            investment_per_split=float(self.strategy.config.investment_per_split),
+            max_splits=float("inf"),
+        )
+
     def _effective_segments(self):
         segments = self.strategy.config.price_segments or []
-        min_price = float(self.strategy.config.min_price or 0.0)
-        max_price = float(self.strategy.config.max_price or 0.0)
-        if max_price <= min_price:
-            max_price = float("inf")
+        min_price, max_price, has_floor, has_ceiling = self._resolve_price_bounds()
 
-        has_floor = bool(self.strategy.config.min_price)
-        has_ceiling = bool(self.strategy.config.max_price)
         if segments:
             if not (has_floor or has_ceiling):
                 # Neither top-level bound is configured, so the segment ladder is the
                 # only source of truth (old strategies set up that way stay untouched).
                 return segments
-            return self._clamp_segments_to_bounds(segments, min_price, max_price, has_floor, has_ceiling)
-
-        return [
-            SimpleNamespace(
-                min_price=min_price,
-                max_price=max_price,
-                investment_per_split=float(self.strategy.config.investment_per_split),
-                max_splits=float("inf"),
+            clamped = self._clamp_segments_to_bounds(
+                segments, min_price, max_price, has_floor, has_ceiling
             )
-        ]
+            if clamped:
+                return clamped
+            # Every segment sits outside the configured range (e.g. the bounds were
+            # moved far away from a stale ladder). The range the user just configured
+            # is then the only sensible thing to trade in -- returning nothing here
+            # would silently stop the strategy from ever buying again.
+            return [self._bounds_as_segment(min_price, max_price)]
+
+        return [self._bounds_as_segment(min_price, max_price)]
 
     def _clamp_segments_to_bounds(self, segments, min_price, max_price, has_floor, has_ceiling):
         """Keep 매수 하한가/상한가 as the hard outer limits of the whole ladder.
