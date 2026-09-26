@@ -55,18 +55,41 @@ class TestEffectiveSegmentBounds(unittest.TestCase):
         # A price the stale segment would have rejected must now be accepted.
         self.assertIsNotNone(strategy.price_logic._find_matching_segment(80_000_000.0))
 
-    def test_multi_segment_ladder_is_left_untouched(self):
+    def test_ceiling_trims_a_multi_segment_ladder(self):
+        """매수 상한가/하한가 are the outer limits of the whole ladder; segments only
+        subdivide that range. A segment sticking out past the ceiling is trimmed and
+        one entirely above it is dropped, so the bot cannot buy above 매수 상한가."""
         segments = [
-            PriceSegment(min_price=0.0, max_price=50_000_000.0, investment_per_split=100000.0, max_splits=10),
-            PriceSegment(min_price=50_000_000.0, max_price=100_000_000.0, investment_per_split=200000.0, max_splits=10),
+            PriceSegment(min_price=50_000_000.0, max_price=100_000_000.0, investment_per_split=100000.0, max_splits=5),
+            PriceSegment(min_price=100_000_000.0, max_price=300_000_000.0, investment_per_split=200000.0, max_splits=7),
         ]
-        # Deliberately mismatched top-level bounds: must not override a real ladder.
-        config = self._config(min_price=0.0, max_price=10_000_000.0, segments=segments)
+        config = self._config(min_price=50_000_000.0, max_price=100_000_000.0, segments=segments)
         strategy = _StrategyStub(config)
 
         effective = strategy.price_logic._effective_segments()
 
-        self.assertEqual(effective, segments)
+        self.assertEqual(len(effective), 1)
+        self.assertEqual(effective[0].max_price, 100_000_000.0)
+        self.assertIsNone(strategy.price_logic._find_matching_segment(150_000_000.0))
+        self.assertIsNotNone(strategy.price_logic._find_matching_segment(99_000_000.0))
+
+    def test_ladder_keeps_its_own_investment_and_splits_after_trimming(self):
+        segments = [
+            PriceSegment(min_price=50_000_000.0, max_price=100_000_000.0, investment_per_split=100000.0, max_splits=5),
+            PriceSegment(min_price=100_000_000.0, max_price=300_000_000.0, investment_per_split=200000.0, max_splits=7),
+        ]
+        config = self._config(min_price=50_000_000.0, max_price=200_000_000.0, segments=segments)
+        strategy = _StrategyStub(config)
+
+        effective = strategy.price_logic._effective_segments()
+
+        self.assertEqual(len(effective), 2)
+        # Upper segment clipped to the ceiling, its own settings untouched.
+        self.assertEqual(effective[1].max_price, 200_000_000.0)
+        self.assertEqual(effective[1].investment_per_split, 200000.0)
+        self.assertEqual(effective[1].max_splits, 7)
+        self.assertEqual(effective[0].investment_per_split, 100000.0)
+        self.assertEqual(effective[0].max_splits, 5)
 
     def test_unset_top_level_bounds_do_not_clobber_a_segment_only_setup(self):
         segment = PriceSegment(
@@ -97,8 +120,9 @@ class TestEffectiveSegmentBounds(unittest.TestCase):
 
         effective = strategy.price_logic._effective_segments()
 
+        # No top-level ceiling is imposed, so the segment's own upper bound stands.
         self.assertEqual(effective[0].min_price, 50_000_000.0)
-        self.assertEqual(effective[0].max_price, float("inf"))
+        self.assertEqual(effective[0].max_price, 1_000_000_000.0)
         self.assertIsNotNone(strategy.price_logic._find_matching_segment(200_000_000.0))
         self.assertIsNone(strategy.price_logic._find_matching_segment(40_000_000.0))
 
@@ -114,7 +138,11 @@ class TestEffectiveSegmentBounds(unittest.TestCase):
 
         effective = strategy.price_logic._effective_segments()
 
-        self.assertEqual(effective, [segment])
+        self.assertEqual(len(effective), 1)
+        self.assertEqual(effective[0].min_price, 50_000_000.0)
+        self.assertEqual(effective[0].max_price, 90_000_000.0)
+        self.assertEqual(effective[0].investment_per_split, 100000.0)
+        self.assertEqual(effective[0].max_splits, 20)
 
 
 if __name__ == "__main__":
